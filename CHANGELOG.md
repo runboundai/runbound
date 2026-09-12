@@ -1,0 +1,315 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.3.0] - 2026-09-12
+
+First public release, as `runbound` (import `runbound`), by Runbound AI.
+Earlier versions were internal.
+
+### Added
+
+- **Fleet mode — a control plane, so N workers share one truth.** Connect
+  with `token` alone (hosted) or `control_plane_url` plus a `token`
+  (self-hosted — `token=""` if that plane needs no auth; see Wave 31 below
+  for how the two are told apart), and the replicas serving one end-user
+  share a budget, a latch, a strike count, an org action policy and a set of
+  provider circuits. Detection does not move: every detector still runs
+  in-process, on your thread, with no model calls.
+  - **Shared budget.** A session entry carries the fleet's spend and tokens for
+    that key; the SDK folds them in as offsets, so `budget_usd` and
+    `max_total_tokens` trip on the turn a single worker with those numbers
+    would (`details["fleet_spend_offset_usd"]`, `["fleet_tokens_offset"]`).
+  - **Shared latch and strikes.** A critical trip is reported synchronously and
+    the next worker to open that key is refused at the door, with what is left
+    of the fleet's ttl; `clear(key)` clears it fleet-wide.
+  - **Org-wide action policy**, merged with the local `tool_policy`
+    most-restrictive-wins (`policy.merge()`) — bans unioned, allow-lists
+    intersected, `max_calls` the lower of the two, callables never taken off
+    the wire. Org rules report `details["origin"] == "org"`. A `dry_run`
+    version is logged and alerted and never blocks, which is how a rule is
+    rolled out across a fleet; local rules keep blocking.
+  - **Fleet circuits.** The heartbeat can open or close a provider circuit on
+    every worker at once (`circuit.force_open()` / `force_close()`). What an
+    open circuit does is still `on_provider_failure`.
+  - **Fleet kill switch**, with `on_halt="raise"` (refuse every guarded
+    `session()` block, detector `halt`) or `"warn"` (log once a minute, keep
+    serving).
+  - **The plane is contacted at four moments and nowhere else**: an `init()`
+    heartbeat every `control_plane_poll_s` (5 s), a session entry (bounded by
+    `control_plane_timeout_s`, 150 ms, and cached per key for 5 s), a session
+    exit (queued, posted in background batches) and a trip or circuit change.
+    Never per model call, never per tool call.
+  - **Fail-open throughout.** A plane that is down costs one timeout, warns once
+    a minute, degrades after 3 consecutive failures and retries once every 30 s;
+    a rejected key goes local-only; a fleet halt stops being enforced 60 s after
+    the last contact. `plane_status()` reports `"local"` / `"connected"` /
+    `"degraded"`.
+  - **Hashes and counts, never content.** One module, `runbound.plane_types`,
+    defines every outbound record: session keys travel as `sha256(key)` (raw
+    only with `send_session_keys=True`), tool arguments only as `args_hash`,
+    error messages only as `error_class`, detector `details` scrubbed to JSON
+    scalars, tags capped. Prompts and replies have no field to travel in.
+  - New config: `control_plane_url`, `token` (`api_key` is the deprecated
+    alias), `service`, `worker_id`, `control_plane_timeout_s`,
+    `control_plane_poll_s`, `export_events`, `send_session_keys`, `on_halt`.
+    New API: `plane_status()`, `fleet_status(key)`, `key_hash(key)`.
+- **Fleet mode talks to any server that speaks six endpoints, not a bespoke
+  client.** `POST /v1/hello`, `/v1/enter`, `/v1/trip`, `/v1/events`,
+  `GET /v1/policy`, `POST /v1/clear` are the whole wire protocol a connected
+  plane must answer; the SDK's half of fleet mode is free, MIT-licensed, and
+  works against anything that speaks them, ours or not.
+- **Webhook signatures verify the same way after delivery left the SDK.**
+  `runbound.verify_webhook_signature()` is the receiver-side check kept when
+  the SDK's own `WebhookAlerter` retired in Wave 31 (below): a constant-time
+  compare of `X-Runbound-Timestamp` / `X-Runbound-Signature` =
+  `"sha256=" + HMAC_SHA256(secret, f"{timestamp}.{body}")`, with a
+  ±5-minute replay window, `False` rather than an exception for anything
+  malformed. Whatever now sends a webhook uses the same envelope, headers
+  and signing string the retired sender did, so a receiver that only checks
+  the signature needs no changes — but two body fields did change:
+  `session.id` is now the sha256 key hash rather than a per-process id, and
+  `session.key` (what `send_session_keys=True` used to add) does not exist
+  in the body at all; a raw key reaches you only through your own
+  `link_template`.
+- **Instrumentation coverage.** `auto_wrap` (default `True`) patches the OpenAI
+  and Anthropic SDK classes at `init()`, so a client built anywhere — inside a
+  framework, in code written before runbound was installed — is guarded
+  without a `wrap()` call; per-call endpoint labels still come from that
+  client's `base_url`, and `unpatch()` reverses it. `coverage()` reports what is
+  actually instrumented right now (auto-wrapped SDKs, wrapped clients, decorated
+  tools, guarded calls, providers imported but never seen guarded);
+  `assert_guarded()` raises for a startup check or a CI smoke test; and
+  `coverage_check_seconds` (default 60 s) warns once when a provider SDK is
+  imported and no guarded call has ever been recorded.
+- **Customer-set refusal responses.** runbound raises `GuardrailTripped`; it
+  never used to say what the end user should be told. `exc.refusal` now
+  carries the HTTP status and sentence *you* set — `runbound.init(refusals={...})`
+  locally, or set once on a connected control plane, on every plan, never
+  gated. Precedence is checked field by field: a connected plane's
+  per-service profile, then its org-wide profile, then your local
+  per-detector entry, then your local `default`, then a documented
+  `BUILTIN` fallback. Keys are `"default"` or a detector name (`budget`,
+  `loop`, `spike`, `velocity`, `steps`, `error_storm`, `timeout`, `fanout`,
+  `inflight`, `policy`, `circuit`, `halt`, `fleet`) — per-call hard caps
+  report through `spike`, so there is no `cap` key. A message may carry
+  `{retry_after_s}` / `{detector}`, formatted safely, and
+  `exc.refusal.headers` carries a rounded-up `Retry-After` when a latch's
+  remaining time is known. A profile set on a connected plane reaches every
+  worker within `control_plane_poll_s`, no restart, and survives a plane
+  outage like a policy rollout does. `coverage()["refusals"]` reports which
+  tier is answering. New module `runbound.responses` (`Refusal`,
+  `refusal_for`, `BUILTIN`); new config `refusals`; `examples/stress` now
+  answers refusals entirely from a profile instead of a hardcoded status and
+  sentence.
+
+- **Honest promises (Wave 24).** An outside review of the positioning and a
+  few silent gaps in the code, fixed together.
+  - **An unpriced-model policy, `on_unpriced_model`.** `"zero"` (default,
+    unchanged behavior) now warns once per model **by default**, so the
+    blind spot is not a silent one — anyone self-hosting a model with no
+    price set gets one warning, not zero. `"estimate"` prices from a new
+    `unpriced_price_per_1m_usd` fallback pair instead, marking the number
+    `priced="estimated"`. `"refuse"` stops the call at the door, before it
+    goes out, whatever `on_anomaly` says — a choice you stated on purpose.
+  - **Tools that are supposed to repeat.** `@runbound.tool(repeatable=True)`
+    and the new `loop_ignore_tools` config mark a polling tool exempt from
+    the loop window only; it still counts toward `tool_calls()` and any
+    `max_calls` in an action policy.
+  - **The async throttle actually throttles.** `on_loop="throttle"` used to
+    warn-and-skip under a running event loop, silently doing nothing. It now
+    hands the delay through a contextvar and the async wrapper `await
+    asyncio.sleep()`s it, so throttling works the same way under asyncio as
+    it does under threads.
+  - **Argument hashes are salted per process.** `args_hash` now mixes in a
+    random salt generated once at import (kept across `reset()`). It remains
+    an equality token for spotting a repeat inside one process; it is no
+    longer even accidentally usable as a fingerprint to correlate calls
+    across two processes or two workers from the hash alone.
+  - **Abandoned streams are counted, not lost.** A stream that is never
+    exhausted or closed used to vanish — no tokens, no step, ever. It is now
+    recorded as one partial call the moment Python garbage collects it
+    (never at interpreter exit), in the session that opened it, with the
+    time actually streamed and tokens from usage if any chunk carried it,
+    else `ceil(chars/4)` of the streamed text marked `estimated`. Counted as
+    neither a circuit success nor a failure; its in-flight slot is freed.
+  - **`stale_halt` and `on_plane_loss`, two more explicit customer choices.**
+    `stale_halt="release"` (default, today's behavior) lifts an enforced
+    halt 60 s after the last plane contact; `"hold"` keeps it enforced on a
+    dead link until a heartbeat says otherwise.
+    `on_plane_loss="guard_locally"` (default) falls back to local detection
+    when an entry question could not be answered at all; `"refuse"` refuses
+    the entry itself instead, latching nothing. An invalid API key is
+    always a configuration error, guarded locally under both settings.
+  - **The plane's own refusals are now honored at the door.** Before this
+    wave the SDK read only the *facts* a plane decision carried (spend
+    offsets, strikes, a latch) and never its `allow` field, so a plane that
+    refused a session outright — an org daily budget already spent, or an
+    entry refused under `on_plane_loss="refuse"` — was silently overruled
+    and the call went out anyway. It is now refused at the door, with
+    `details["origin"] == "plane"` either way. An entry refused under
+    `on_plane_loss="refuse"` is detector `plane` and resolves against a new
+    `"plane"` key in refusal profiles (built-in: HTTP 503); an org daily
+    budget already spent is detector `budget` (`details["rule"] ==
+    "org_budget"`) — a budget like any other, just decided by the plane —
+    and resolves against the `"budget"` key.
+  - New `INVARIANTS.md`: the budget, latch, circuit, policy-monotonic, halt,
+    plane-loss, abandoned-stream and unpriced-model guarantees, each with
+    its bound and the tests that assert it — or "not yet asserted" where
+    honest.
+  - Positioning: the README leads with "runtime controls for autonomous AI
+    agents," names the buyer (the platform team that owns AI agents in
+    production), and states the fleet budget as a bound (worst case:
+    `workers × one in-flight turn` plus the entry-cache window) rather than
+    calling it a hard limit. A compatibility matrix (provider ×
+    sync/async/stream/tools/usage/live) is filled in only where a named test
+    proves the cell.
+
+### Wave 26
+
+- **`init()`'s heartbeat now reports coverage.** The hello payload the SDK
+  sends the plane carries `coverage: {guarded_calls, decorated_tools,
+  providers_imported, providers_unguarded}` — the same numbers
+  `runbound.coverage()` already exposed locally — so a connected plane's
+  Services page can show, per worker, what is actually guarded; any
+  failure computing it degrades to `{}` rather than breaking the
+  heartbeat. Shown as counts, deliberately not a percentage.
+
+### Wave 31 (delivery leaves the SDK; the token is the connection)
+
+- **`token` replaces `api_key` as the one way to connect.** A dashboard
+  credential is now `token`. `api_key` is the old name for the same secret:
+  it still works, folding into `token` at `validate()` with a one-time
+  `WARNING` — fired whether or not `token` was *also* set, so the two never
+  sit on the object together — and cleared to `None` afterwards so nothing
+  downstream reads it. `token` also reads from the `RUNBOUND_TOKEN`
+  environment variable when unset (blank or whitespace counts as unset).
+- **Two kinds of connected customer, not one setting with a truthiness
+  test.** `token` alone — with no `control_plane_url` set anywhere, and none
+  in `RUNBOUND_PLANE_URL` either — is **hosted**: you are on our server, we
+  resolve the endpoint at `HOSTED_PLANE_URL` (`None` until that plane
+  exists; a bare token then logs one WARNING and the process stays local,
+  rather than the ~45-line urllib traceback a placeholder domain pointing
+  at a parked host used to produce). A `control_plane_url`, from the call or from
+  `RUNBOUND_PLANE_URL`, is **self-hosted** instead: your own cluster, and
+  `token=""` is how you say that plane has no auth. Both facts can also come
+  from the environment
+  (`RUNBOUND_TOKEN`, `RUNBOUND_PLANE_URL`), and a blank value from either
+  source is unset either way — there is no such thing as a plane at the
+  empty url. `GuardrailConfig.plane_mode` (`"off"` / `"hosted"` /
+  `"self_hosted"`) is the one question every internal reader now asks
+  instead of re-deriving its own falsiness test; `shared.build` asks it
+  first. A `control_plane_url` with no token still raises, reworded around
+  the two modes (`'a self-hosted plane needs a token ... token="" if that
+  plane has no auth'`).
+- **Delivery is not in the SDK.** An earlier cut of this wave gated
+  `SlackAlerter`, `PagerDutyAlerter` and `WebhookAlerter` behind a token
+  inside `runbound/`; a review found that could never be made to hold —
+  `control_plane_url=""` passed validation while the gate and `shared.build`
+  read the field differently, and any non-empty token turned delivery on for
+  the life of the process (`Engine.alerters` is fixed at construction), so a
+  revoked or invented token kept posting. A paid feature cannot be enforced
+  by a conditional running inside the customer's own process, so the sending
+  code left instead: those three classes, the PagerDuty constants, the
+  posting helpers and the alert rate limiter are gone from
+  `runbound/alerts.py`, and `Engine._alert` now only notifies observers.
+  `init()` answers the five retired keywords — `slack_webhook`,
+  `pagerduty_routing_key`, `webhook_url`, `webhook_secret`, `link_template`
+  — with a `ValueError` naming where the setting actually lives now (an
+  alert route, or a per-service field, on your runbound dashboard) instead
+  of a bare `TypeError: unexpected keyword`. `verify_webhook_signature` and
+  the outbound-thread draining bookkeeping stay in `runbound/alerts.py` —
+  the receiver's helper, and what `export.py` needs at interpreter exit —
+  and `on_anomaly="callback"` stays free forever, a hook into the customer's
+  own process, not a delivery channel. This changes nothing about detection:
+  every detector, the latch, refusals, tool policy, the provider circuit and
+  the in-flight cap are identical with and without a token, `on_anomaly`'s
+  three reactions (`raise`, `callback`, `warn`) are alternatives — a raise or
+  a callback does not also log — and behave identically with or without one,
+  all asserted directly in `tests/test_token_and_delivery.py` and
+  `tests/test_plane_modes.py`. See the rewritten invariant in
+  `INVARIANTS.md`, "The SDK detects, stops, refuses and reports. The plane
+  routes and delivers."
+
+### Changed
+
+- README: a "Fleet mode" section (when the plane is contacted, what it adds,
+  what goes on the wire, and reading the link), a "What the SDK actually sees —
+  and what it never sees" sensor matrix, five new rows in the reactions table
+  (`on_halt`, fleet budget, remote latch, org policy dry-run, fleet circuit),
+  and (Wave 31) an "Alerting" section pointing delivery at the control plane's
+  own docs, with the receiver-side `verify_webhook_signature` walkthrough kept
+  here.
+
+### Docs
+
+Wave 25 ("freeze and sharpen") — documentation only, no code changes:
+
+- **A formal definition of "turn"** replaces the informal `workers × one
+  in-flight turn` phrasing everywhere it appeared (`INVARIANTS.md`'s Budget
+  section, README's fleet-budget paragraph): a turn is one
+  `runbound.session()` block on one worker, and the fleet-budget bound is
+  stated as a sum over workers of in-flight spend plus spend admitted while
+  stale.
+- README's stream-abandonment text now says plainly that exhausting, closing,
+  or exiting the `with` block reports a stream immediately — garbage
+  collection is the safety net for a forgotten stream, not the mechanism to
+  rely on.
+- README now opens with the problem runbound solves (runaway loops,
+  uncontrolled spend, tool abuse, cascading provider failures, unstoppable
+  fleet-wide execution) before the tagline.
+- A "What it controls" table (README) groups every knob by area — cost,
+  execution, authorization, reliability, governance — instead of by
+  detector name.
+- The provider-compatibility claim is narrowed: OpenAI and Anthropic are
+  tested against the real SDKs; OpenAI-compatible servers are proven live
+  only on Ollama, with vLLM/Groq/OpenRouter/Azure OpenAI/LM Studio sharing
+  the code path untested; Gemini/Bedrock/Mistral/Cohere have no adapter.
+- Quick start gets a fourth, numbered step — "Check what is actually
+  guarded" — putting `runbound.coverage()` and `runbound.assert_guarded()`
+  in the startup path, since an unguarded path looks exactly like a quiet
+  one.
+
+## [0.2.0] - 2026-09-01
+
+### Changed
+
+- Renamed the package to `runbound`; the earlier working name was retired.
+
+### Added
+
+- **LangChain / LangGraph support** — `GuardrailCallbackHandler` in
+  `runbound.integrations.langchain` records framework-driven tool and model
+  calls, so agents with no client to `wrap()` and no function to decorate are
+  guarded too. Requires `langchain-core` (extra: `runbound[langchain]`).
+- **Async clients** — `AsyncOpenAI` and `AsyncAnthropic` are guarded through
+  the same `wrap()` call.
+- **Streamed responses** — a guarded stream yields provider chunks unchanged
+  and records exactly one model call when the stream ends. OpenAI reports
+  stream usage only when the request sets `stream_options={"include_usage":
+  True}`; a stream that is abandoned rather than exhausted or closed records
+  nothing.
+- Packaging metadata (authors, MIT license, classifiers, keywords, project
+  URLs), a `LICENSE` file, this changelog, and a GitHub Actions CI matrix
+  running the test suite on Python 3.10–3.13.
+
+## [0.1.0] - 2026-09-01
+
+### Added
+
+- Core SDK: an in-process session that records every model call and tool call
+  as an immutable event.
+- Four deterministic detectors — `loop`, `budget`, `velocity`, `steps` — all
+  plain counting over in-memory state, no model calls.
+- `wrap()` for OpenAI- and Anthropic-shaped clients (recognized by shape, so
+  Azure OpenAI, Ollama, vLLM, Groq, OpenRouter and other compatible endpoints
+  work too), and the `@tool` decorator for tool functions.
+- Reactions on anomaly: `warn`, `raise` (`GuardrailTripped` on the agent's own
+  thread), or your own `callback`.
+- Slack and PagerDuty alerting, fire-and-forget on a daemon thread.
+- Cost estimation from a static list-price table, overridable via
+  `custom_prices`; token limits for unpriced and local models.
+- Fail-open throughout: every internal failure is logged and swallowed.

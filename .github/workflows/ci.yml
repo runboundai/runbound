@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install
+        run: pip install -e ".[test]"
+      - name: Test
+        run: python -m pytest -q
+
+  # The suite above runs with no provider SDK installed, which is how the SDK
+  # ships: tests/test_real_sdk.py importorskips itself away there. This job is
+  # the one that actually runs it, against genuine openai/anthropic clients on
+  # a mock HTTP transport — so a shape change in someone else's SDK fails here
+  # rather than in a customer's agent.
+  real-sdks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install -e ".[test]" openai anthropic httpx
+      - name: Test against the real SDKs
+        run: python -m pytest -q tests/test_real_sdk.py -p no:cacheprovider
