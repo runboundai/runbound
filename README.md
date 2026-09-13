@@ -640,9 +640,21 @@ a single file.
 | `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`) |
 | `POST /v1/enter` | a `session()` block opens, on a cache miss | `key_hash`, `tags`, `service`, `worker_id`, `budget_usd`, `local_spend_usd`, `local_total_tokens` |
 | `POST /v1/trip` | a critical trip latches a session, and every block refused at the door because a key is latched | `key_hash`, the anomaly (`detector`, `severity`, `message`, scrubbed `details`, `reacted`), `latch_ttl_s`, `strikes`, `generation`, `refused_at_door` |
-| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`kind`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
+| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`kind`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
 | `GET /v1/policy?service=…` | the heartbeat announced a new policy version | nothing but the service name |
 | `POST /v1/clear` | `runbound.clear(key)` | `key_hash` |
+
+An `exits` entry is a delta — what one `session()` block added since this
+worker's last report for that key — and its numbers keep the meaning stated
+elsewhere in this README: `steps_delta` is model turns, `events_delta` the
+raw count of everything recorded (a tool call included), `errors_delta` how
+many `llm_error`/`tool_error` events, `tokens_cached_delta` how many of
+`tokens_delta` were served from a provider's cache. `last_detector`,
+`trigger_message` and `trigger_age_s` describe the anomaly that last stopped
+the session — all three `None` for a session that never tripped, which is
+every session under `on_anomaly="warn"`. `trigger_age_s` is this worker's own
+monotonic clock, in seconds, because its clock and the plane's are not the
+same one; the plane converts it to a timestamp on arrival, on its own clock.
 
 What is **never** on that wire, because there is no field for it to travel in:
 
@@ -665,15 +677,18 @@ What is **never** on that wire, because there is no field for it to travel in:
   wire, is to replace every occurrence of the key with the first 12 characters
   of its hash and an ellipsis: `"3f2a9c1b04d7…"`. Two records about the same
   end user still line up; neither carries the key — as long as
-  `send_session_keys` is off. Turn it on and that redaction is skipped too: a
-  detector's `message` and `details` now travel exactly as it wrote them, and
-  the plane stores the raw key next to its hash. From there the plane's own
-  alert adapters (Slack, PagerDuty, a webhook) do what you told them to: read
-  the raw key into your own `link_template` wherever you wrote `{key}`, and
-  pass a detector's unredacted `message`/`details` straight through like
-  everything else in an alert. That is your choice about your own Slack,
-  your own PagerDuty and your own endpoint — the hash is what ships unless
-  you make it otherwise.
+  `send_session_keys` is off. An `exits` entry's `trigger_message` is the same
+  kind of sentence (it is, verbatim, the `message` of the anomaly that
+  latched the session) and gets the same treatment before it leaves. Turn
+  `send_session_keys` on and that redaction is skipped too: a detector's
+  `message` and `details` — and an exit's `trigger_message` — now travel
+  exactly as it was written, and the plane stores the raw key next to its
+  hash. From there the plane's own alert adapters (Slack, PagerDuty, a
+  webhook) do what you told them to: read the raw key into your own
+  `link_template` wherever you wrote `{key}`, and pass a detector's
+  unredacted `message`/`details` straight through like everything else in an
+  alert. That is your choice about your own Slack, your own PagerDuty and
+  your own endpoint — the hash is what ships unless you make it otherwise.
 
 Your `tags` are the exception, and deliberately so: they are labels you chose,
 so they travel exactly as you wrote them and are never redacted. Don't put a

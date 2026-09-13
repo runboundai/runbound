@@ -52,7 +52,7 @@ from .engine import (
 )
 from .events import Anomaly, Event
 from .exceptions import GuardrailTripped
-from .plane_types import ExitDelta, PlaneStatus, key_hash
+from .plane_types import DETAIL_STRING_MAX, ExitDelta, PlaneStatus, key_hash, redact_key
 from .policy import ToolCall
 from .pricing import price_call
 from .shared import LocalState, build as _build_shared
@@ -86,11 +86,11 @@ _LOOP_IGNORE_TOOLS: tuple[str, ...] = ()
 _SHARED = LocalState()
 
 #: Per-session totals as of that session's last reported exit, keyed by
-#: session id: ``(seq, spend_usd, tokens, steps, tool_calls)``. What makes an
-#: exit a *delta* — two workers on one key each report their own share and the
-#: plane adds them up. Read and written under ``_LOCK``, emptied with the
-#: registry, and capped so a process churning through keys cannot grow it
-#: without bound.
+#: session id: ``(seq, spend_usd, tokens, steps, tool_calls, events, errors,
+#: tokens_cached)`` (T146 adds the last three). What makes an exit a *delta*
+#: — two workers on one key each report their own share and the plane adds
+#: them up. Read and written under ``_LOCK``, emptied with the registry, and
+#: capped so a process churning through keys cannot grow it without bound.
 _EXITS: "OrderedDict[str, tuple]" = OrderedDict()
 _EXIT_MEMO_MAX = 4096
 
@@ -970,29 +970,78 @@ def _exit_delta(key: str, state: SessionState) -> "ExitDelta | None":
 
     ``steps_delta`` carries model turns (T134: an agent step is a turn, not
     every recorded event) — ``state.turns`` here, not ``state.event_count``.
+    ``events_delta``, ``errors_delta`` and ``tokens_cached_delta`` (T146) are
+    diffed the same way, off ``state.event_count``, ``state.total_errors``
+    and ``state.tokens_cached_in``.
+
+    ``last_detector``, ``trigger_message`` and ``trigger_age_s`` (T146) are
+    not diffed — they are a snapshot of ``state.tripped_by``/``tripped_at``,
+    the anomaly that latched this session (``None`` for a session that never
+    tripped, including every ``on_anomaly="warn"`` session, which never
+    latches at all). ``trigger_message`` goes through the same
+    :func:`~runbound.plane_types.redact_key` an exported anomaly's message
+    does, so a key a detector named in its own sentence does not reach the
+    plane unless ``send_session_keys`` is on — everything else in that
+    sentence is already hashes, counts, timing, money, names and error
+    classes, never prompt or tool-argument content.
     """
     with state.lock:
         spend = float(state.total_cost_usd)
         tokens = int(state.total_tokens)
         steps = int(state.turns)
+        events = int(state.event_count)
+        errors = int(state.total_errors)
+        tokens_cached = int(state.tokens_cached_in)
         tools = dict(state.tool_calls)
+        tripped = state.tripped_by
+        tripped_at = state.tripped_at
     session_id = getattr(state, "session_id", "")
     with _LOCK:
-        seq, last_spend, last_tokens, last_steps, last_tools = _EXITS.get(
-            session_id, (0, 0.0, 0, 0, {})
-        )
+        (
+            seq,
+            last_spend,
+            last_tokens,
+            last_steps,
+            last_tools,
+            last_events,
+            last_errors,
+            last_cached,
+        ) = _EXITS.get(session_id, (0, 0.0, 0, 0, {}, 0, 0, 0))
         seq += 1
-        _EXITS[session_id] = (seq, spend, tokens, steps, tools)
+        _EXITS[session_id] = (
+            seq, spend, tokens, steps, tools, events, errors, tokens_cached,
+        )
         _EXITS.move_to_end(session_id)
         while len(_EXITS) > _EXIT_MEMO_MAX:
             _EXITS.popitem(last=False)
+        engine = _ENGINE
+        send_session_keys = bool(engine.config.send_session_keys) if engine else False
+    khash = key_hash(key)
+    last_detector = None
+    trigger_message = None
+    trigger_age_s = None
+    if tripped is not None:
+        last_detector = str(tripped.detector)
+        message: Any = tripped.message
+        if not send_session_keys:
+            message = redact_key(message, key, khash)
+        trigger_message = str(message)[:DETAIL_STRING_MAX]
+        now = _now()
+        if tripped_at is not None and now is not None:
+            trigger_age_s = max(0.0, now - tripped_at)
     return ExitDelta(
-        key_hash=key_hash(key),
+        key_hash=khash,
         seq=seq,
         spend_delta_usd=max(0.0, spend - last_spend),
         tokens_delta=max(0, tokens - last_tokens),
         steps_delta=max(0, steps - last_steps),
         tool_calls=_tool_delta(tools, last_tools),
+        events_delta=max(0, events - last_events),
+        errors_delta=max(0, errors - last_errors),
+        tokens_cached_delta=max(0, tokens_cached - last_cached),
+        last_detector=last_detector,
+        trigger_message=trigger_message,
+        trigger_age_s=trigger_age_s,
     )
 
 

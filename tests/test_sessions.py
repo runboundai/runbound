@@ -588,3 +588,135 @@ def test_exit_delta_steps_delta_carries_turns_not_events():
 
     assert delta is not None
     assert delta.steps_delta == 3
+
+
+# --- _exit_delta carries the T146 fields ------------------------------------
+
+
+def test_exit_delta_events_delta_carries_the_raw_event_count():
+    """Same 3 model calls + 7 tool calls: events_delta is the 10, steps_delta
+    the 3 -- one field per concept, per the EM ruling that settled T134/T146."""
+    state = SessionState("s1", key="user:2")
+    for i in range(1, 4):
+        state.record(Event(kind="llm_call", ts=float(i), step=i, tokens_out=1))
+    for i in range(4, 11):
+        state.record(Event(kind="tool_call", ts=float(i), step=i, tool_name="search"))
+
+    delta = api._exit_delta("user:2", state)
+
+    assert delta is not None
+    assert delta.events_delta == 10
+    assert delta.steps_delta == 3
+
+
+def test_exit_delta_errors_delta_diffs_the_running_total_not_the_window():
+    """errors_delta is a lifetime running-total diff, the same shape as
+    tokens_delta -- not the trailing-minute storm window, which does not
+    survive being read twice."""
+    state = SessionState("s1", key="user:3")
+    state.record(Event(kind="llm_error", ts=1.0, step=1, error="RateLimitError: slow down"))
+    state.record(Event(kind="tool_error", ts=2.0, step=2, error="boom"))
+    state.record(Event(kind="llm_call", ts=3.0, step=3, tokens_out=1))
+
+    first = api._exit_delta("user:3", state)
+    assert first is not None
+    assert first.errors_delta == 2
+
+    # A second exit with no new errors reports zero, not the same two again.
+    second = api._exit_delta("user:3", state)
+    assert second.errors_delta == 0
+
+    state.record(Event(kind="llm_error", ts=4.0, step=4, error="boom again"))
+    third = api._exit_delta("user:3", state)
+    assert third.errors_delta == 1
+
+
+def test_exit_delta_tokens_cached_delta_diffs_tokens_cached_in():
+    state = SessionState("s1", key="user:4")
+    state.record(
+        Event(kind="llm_call", ts=1.0, step=1, tokens_in=1200, tokens_cached_in=1000)
+    )
+
+    delta = api._exit_delta("user:4", state)
+
+    assert delta is not None
+    assert delta.tokens_cached_delta == 1000
+
+
+def test_exit_delta_carries_no_trigger_when_the_session_never_tripped():
+    """A warn-mode session never latches, so tripped_by stays None forever --
+    last_detector/trigger_message/trigger_age_s must say so too, not guess."""
+    state = SessionState("s1", key="user:5")
+    state.record(Event(kind="llm_call", ts=1.0, step=1, tokens_out=1))
+
+    delta = api._exit_delta("user:5", state)
+
+    assert delta is not None
+    assert delta.last_detector is None
+    assert delta.trigger_message is None
+    assert delta.trigger_age_s is None
+
+
+def test_exit_delta_carries_the_latched_anomaly_as_the_trigger():
+    from runbound.events import Anomaly
+
+    state = SessionState("s1", key="user:6")
+    state.tripped_by = Anomaly(
+        detector="budget",
+        severity="critical",
+        message="Budget exceeded: $5.10 of $5.00",
+        details={},
+    )
+    state.tripped_at = time.monotonic() - 5.0
+
+    delta = api._exit_delta("user:6", state)
+
+    assert delta is not None
+    assert delta.last_detector == "budget"
+    assert delta.trigger_message == "Budget exceeded: $5.10 of $5.00"
+    assert delta.trigger_age_s == pytest.approx(5.0, abs=0.5)
+
+
+def test_exit_delta_redacts_the_raw_key_out_of_the_trigger_message_by_default():
+    """A detector may quote the raw key in its own message (it is the useful
+    local log); the wire never carries it unless send_session_keys is on."""
+    from runbound.events import Anomaly
+
+    key = "user:secret-email@example.com"
+    state = SessionState("s1", key=key)
+    state.tripped_by = Anomaly(
+        detector="error_storm",
+        severity="critical",
+        message=f"Error storm for session {key!r}: 5 failures in 10s",
+        details={},
+    )
+    state.tripped_at = time.monotonic()
+
+    delta = api._exit_delta(key, state)
+
+    assert delta is not None
+    assert key not in delta.trigger_message
+    assert "Error storm for session" in delta.trigger_message
+
+
+def test_exit_delta_keeps_the_raw_key_in_the_trigger_message_when_opted_in():
+    from runbound.events import Anomaly
+
+    key = "user:secret-email@example.com"
+    runbound.init(send_session_keys=True)
+    try:
+        state = SessionState("s1", key=key)
+        state.tripped_by = Anomaly(
+            detector="error_storm",
+            severity="critical",
+            message=f"Error storm for session {key!r}: 5 failures in 10s",
+            details={},
+        )
+        state.tripped_at = time.monotonic()
+
+        delta = api._exit_delta(key, state)
+    finally:
+        api._teardown_for_tests()
+
+    assert delta is not None
+    assert key in delta.trigger_message

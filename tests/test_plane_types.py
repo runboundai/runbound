@@ -136,6 +136,12 @@ ROUND_TRIPS = [
         tokens_delta=120,
         steps_delta=3,
         tool_calls={"search": 2},
+        events_delta=10,
+        errors_delta=1,
+        tokens_cached_delta=40,
+        last_detector="budget",
+        trigger_message="Budget exceeded: $5.10 of $5.00",
+        trigger_age_s=2.5,
     ),
     TripReport(
         key_hash="abc",
@@ -245,6 +251,36 @@ def test_from_wire_accepts_none_for_optional_fields():
 def test_from_wire_tolerates_a_non_dict_payload():
     assert from_wire(PlaneStatus, None) == PlaneStatus()
     assert from_wire(PlaneStatus, ["mode"]) == PlaneStatus()
+
+
+def test_exit_delta_from_wire_accepts_a_pre_t146_shape():
+    """An old SDK's exit never sent events_delta/errors_delta/tokens_cached_delta/
+    last_detector/trigger_message/trigger_age_s (T146) -- a genuinely old-shaped
+    payload, not today's shape with keys deleted, since a real old worker never
+    had those keys to omit in the first place."""
+    old_shape = {
+        "key_hash": "abc123",
+        "seq": 4,
+        "spend_delta_usd": 0.75,
+        "tokens_delta": 120,
+        "steps_delta": 3,
+        "tool_calls": {"search": 2},
+    }
+
+    delta = from_wire(ExitDelta, old_shape)
+
+    assert delta.key_hash == "abc123"
+    assert delta.seq == 4
+    assert delta.spend_delta_usd == 0.75
+    assert delta.tokens_delta == 120
+    assert delta.steps_delta == 3
+    assert delta.tool_calls == {"search": 2}
+    assert delta.events_delta == 0
+    assert delta.errors_delta == 0
+    assert delta.tokens_cached_delta == 0
+    assert delta.last_detector is None
+    assert delta.trigger_message is None
+    assert delta.trigger_age_s is None
 
 
 def test_from_wire_copies_dicts_so_the_payload_cannot_be_mutated_later():

@@ -151,11 +151,29 @@ class ExitDelta:
 
     ``steps_delta`` carries **model turns** (T134: an agent step is one model
     turn, not every recorded event) — a session with 3 model calls and 7 tool
-    calls reports ``steps_delta=3``, not ``10``. Before T134 this field
-    carried the raw event count, which is what ``max_steps`` used to mean;
-    a dashboard reading this field's old meaning needs to be told the units
-    changed underneath it. A later task adds the raw event count and the
-    other fields the dashboard needs back onto the wire explicitly.
+    calls reports ``steps_delta=3``, not ``10``. ``events_delta`` (T146) is
+    that raw event count instead — one field per concept, each named for
+    what it holds (an EM ruling settled a draft that would have kept a
+    second meaning on ``steps_delta`` itself; nothing was released, so there
+    was no reader to protect by doing that).
+
+    ``errors_delta`` and ``tokens_cached_delta`` (T139) are the same kind of
+    running-total diff as ``tokens_delta``: how many ``llm_error``/
+    ``tool_error`` events, and how many cached input tokens, this block added.
+
+    ``last_detector``, ``trigger_message`` and ``trigger_age_s`` (T146)
+    describe the anomaly that last stopped this session — ``None`` for a
+    session that never tripped (including every ``on_anomaly="warn"``
+    session, which never latches). ``trigger_message`` is the SDK's own
+    anomaly sentence, built entirely from hashes, counts, timing, money,
+    names and error classes (see :func:`anomaly_to_wire`, which this reuses
+    :func:`redact_key` from) — never prompt or tool-argument content, and
+    never a raw session key unless ``send_session_keys`` is on.
+    ``trigger_age_s`` is *this worker's own monotonic clock*, seconds since
+    the anomaly fired: the SDK's clock and the plane's are not the same
+    clock, so an age survives the trip across the wire where a timestamp
+    would not — the plane stamps ``trigger_ts = now - trigger_age_s`` on
+    its own clock on arrival.
     """
 
     key_hash: str = ""
@@ -164,6 +182,12 @@ class ExitDelta:
     tokens_delta: int = 0
     steps_delta: int = 0
     tool_calls: dict = field(default_factory=dict)
+    events_delta: int = 0
+    errors_delta: int = 0
+    tokens_cached_delta: int = 0
+    last_detector: str | None = None
+    trigger_message: str | None = None
+    trigger_age_s: float | None = None
 
 
 @dataclass(frozen=True)

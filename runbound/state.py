@@ -56,7 +56,13 @@ class SessionState:
     ``error_timestamps`` holds the failures of the trailing minute (model calls
     and tools alike), pruned as they are appended, and ``consecutive_errors``
     is how many failures have happened since the last model call that worked —
-    the two numbers a retry storm shows up in.
+    the two numbers a retry storm shows up in. ``total_errors`` (T146) is a
+    third, unpruned count: the session's lifetime total of the same
+    ``llm_error``/``tool_error`` events, diffed into
+    :class:`~runbound.plane_types.ExitDelta`'s ``errors_delta`` the way
+    ``total_tokens`` already diffs into ``tokens_delta`` — a storm window and
+    a running total answer different questions, and only the second survives
+    being read twice a minute apart.
 
     ``tripped_by`` is the latch: the anomaly that stopped this session, kept so
     that a host which catches the exception and keeps serving is stopped again
@@ -209,6 +215,7 @@ class SessionState:
         self.token_timestamps: deque[tuple[float, int]] = deque()
         self.error_timestamps: deque[float] = deque()
         self.consecutive_errors = 0
+        self.total_errors = 0  # T146: lifetime count, for ExitDelta.errors_delta
         self.tripped_by: Anomaly | None = None
         self.tripped_at: float | None = None
         self.lock = threading.RLock()
@@ -327,6 +334,7 @@ class SessionState:
                 self.recent_hashes.append(event.args_hash)
             if event.kind in ERROR_KINDS:
                 self.consecutive_errors += 1
+                self.total_errors += 1
                 self.error_timestamps.append(event.ts)
                 self._prune_error_window(event.ts)
             elif event.kind == "llm_call":
