@@ -40,22 +40,23 @@ import runbound
 runbound.init(budget_usd=5.0, on_anomaly="raise")   # everything below is now guarded
 ```
 
-**Level 2: one session per user.** One line per request. Wrap each end-user
-turn in `runbound.session(key)` and every control above becomes per user
-instead of per process: this user's budget, this user's ladder, this user
-stopped, everyone else untouched. With the control plane the key's budget and
-latch hold across every worker that serves it.
+**Level 2: one session per run.** One line per unit of work. Wrap each run in
+`runbound.session(key)` — the key is any id you already have: a run id, a job,
+a tenant, a customer — and every control above becomes per key instead of per
+process: this run's budget, this run's ladder, this run stopped, every other
+caller untouched. With the control plane the key's budget and latch hold across
+every worker that serves it.
 
 ```python
-with runbound.session(f"user:{user_id}"):
-    reply = client.chat.completions.create(...)
+with runbound.session(f"run:{run_id}"):
+    answer = client.chat.completions.create(...)
 ```
 
 **Level 3: refuse actions before they run.** Only for the tools that matter.
 Agents have stopped only writing text: they send the email, issue the refund,
 delete the record. Decorate the two or three functions that are irreversible
 or reach the outside world with `@runbound.tool`, write a policy (deny this
-tool, at most once per user, needs approval, or a predicate of your own over
+tool, at most once per run, needs approval, or a predicate of your own over
 the arguments, run in your process), and the call is refused *before the
 function body runs*. Roll a policy out in dry run first and read what it would
 have blocked. The rules are yours; runbound enforces and records them, it
@@ -82,11 +83,12 @@ One agent burned **$2,847 in four hours** on a refactoring loop while every
 monitoring dashboard stayed green. A four-agent loop ran for **11 days and cost
 $47,000**; a budget alert fired on day 9, two days too late. In both cases the
 telemetry worked. Nobody was watching it at 3am, and nothing in the stack had
-the authority to pull the plug. A chatbot fails the same way at higher volume:
-an end user discovers your support bot will answer anything and uses your API
-key for their homework, or a provider update flips the model into thinking mode
-and a two-second answer becomes a seventy-second one across every conversation
-you serve. Nothing errors. Nothing pages.
+the authority to pull the plug. The same failure arrives at higher volume when
+one service serves many callers: a chatbot free-rider works out that your
+support assistant will answer anything and spends your API key on their
+homework, or a provider update flips the model into thinking mode and a
+two-second answer becomes a seventy-second one across every run you serve.
+Nothing errors. Nothing pages.
 
 runbound is the layer with the authority to pull the plug, and the proof
 that it did. It raises on the agent's own thread, in the middle of the loop,
@@ -98,7 +100,7 @@ Try it offline, no API key needed:
 
 ```
 .venv/bin/python examples/runaway_demo.py         # 10 seconds, no API key needed
-.venv/bin/python examples/chatbot_abuse_demo.py   # the chatbot story, offline
+.venv/bin/python examples/chatbot_abuse_demo.py   # the free-rider story, offline
 .venv/bin/python examples/policy_demo.py          # actions refused before they ran
 ```
 
@@ -135,7 +137,7 @@ calls `wrap()` for you on the OpenAI and Anthropic SDK classes themselves, so
 a client built after it is guarded already with no explicit call. `@runbound.tool`
 decorates your functions. Every model call and tool call that passes through
 one of those emits a small immutable event into an in-process session — one per process by
-default, or one per user key inside a `runbound.session()` block. A model
+default, or one per session key inside a `runbound.session()` block. A model
 call that *fails* emits one too (`llm_error`), and so does every tool call the
 model **asks** for in its answer (`tool_request`), before your code dispatches
 it. Seven detectors read that session after every event; the first anomaly
@@ -203,7 +205,7 @@ green because it has nothing to read. `runbound.coverage()` and
 | Provider errors → `error_storm`, circuits | The exception raised inside the guarded call. | any call runbound did not make. `record_call(..., error=exc)` reports one by hand. |
 | Tool calls the **model asked for** → loops | Parsed off the response: `tool_calls`, Responses `function_call` items, Anthropic `tool_use` blocks. | a guarded client. |
 | Tool name + argument hash **you executed** → loops, action policy, `max_calls` | `@runbound.tool`, or the LangChain handler. | any tool that is not decorated. |
-| Which user this is → per-user limits, spike baselines, the abuse ladder | `runbound.session(key)`. | without it every request lands in the one process-wide default session, so one user's spike is measured against everybody's traffic. |
+| Which run this is → per-key limits, spike baselines, the ladder | `runbound.session(key)`. | without it every call lands in the one process-wide default session, so one key's spike is measured against everybody's traffic. |
 | In-process inference (no HTTP call to read) | `@runbound.llm` or `runbound.record_call()`. | nothing else can see it. |
 
 ### What it never reads
@@ -312,7 +314,8 @@ python -m venv .venv
 There are no runtime dependencies — stdlib only. LangChain support is the one
 extra: `pip install "runbound[langchain]"`.
 
-**2. Wire the three sensors**, and only the first is required:
+**2. Wire the three sensors** around one agent run — only the first is
+required:
 
 ```python
 import runbound
@@ -324,14 +327,25 @@ client = runbound.wrap(OpenAI())
 @runbound.tool
 def search(query: str) -> str:
     ...
+
+with runbound.session(f"run:{run_id}", tags={"service": "research-agent"}):
+    agent.run(task)   # every model call and every @tool inside it is bounded
 ```
+
+That run may spend $5 and take **50 model turns**. `max_steps` counts turns:
+one `create()` call is one step however many tools the model then asks for and
+your code then dispatches. The knob that counts everything instead — model
+calls, tool calls, tool requests, failures — is `max_events`, and a tool-using
+run records several of those per turn. They are two different walls, not one
+wall at two thresholds; set either, or both. See [`max_steps` and
+`max_events`](#max_steps-and-max_events-steps-are-turns-events-are-events).
 
 `wrap()` returns the same client object it was given, so nothing downstream
 changes — and with `auto_wrap` at its default you can drop it entirely for an
 OpenAI or Anthropic client built after `init()`. Keep it for the unusual cases:
 a gateway or proxy object, or a client constructed before `init()` ran. What
 `init()` cannot do for you is the other two sensors: a tool is only guarded if
-it carries `@runbound.tool`, and limits are only per-user inside
+it carries `@runbound.tool`, and limits are only per key inside
 `runbound.session(key)`. [What the SDK actually sees](#what-the-sdk-actually-sees--and-what-it-never-sees)
 lists exactly which numbers go blind without each one, and
 `runbound.coverage()` tells you what is instrumented right now.
@@ -377,53 +391,52 @@ See it work, offline, with no API key and no `openai` package installed:
 
 ```bash
 .venv/bin/python examples/runaway_demo.py
-.venv/bin/python examples/chatbot_abuse_demo.py
+.venv/bin/python examples/policy_demo.py
 ```
 
 The first runs a deliberately looping agent, stops it on the third identical
 tool call before that call executes, then runs a spend spiral and stops it on
-the budget cap. The second is the chatbot story: three end-users on their own
-keyed sessions, one of whom pushes the model into thinking mode, with
-`on_anomaly="raise"` as the only configuration — a quiet notice on the first
-odd call, a stop on the second, and the other two users left alone.
+the budget cap. The second is a support agent that tries four things the
+business wrote down that it may not do — a deny list, a per-session call cap,
+an argument constraint and an approval gate — and each one is refused before
+the function body runs.
 `examples/openai_agent.py` is the same wiring against a real OpenAI key.
 
-For a real dress rehearsal — a FastAPI chatbot over HTTP, a normal user, an
-abuser who gets latched and refused pre-spend, a support `clear()`, and a
-genuine user who is watched but never blocked — see
-[`examples/stress/`](examples/stress/README.md). It runs with no API key and
-also against a real one, and shows the multi-worker limitation honestly.
+The second worked example — many people behind one service, each on their own
+key — is in [Runs keyed by any id](#runs-keyed-by-any-id) below.
 
 ---
 
-## Per-user sessions
+## Runs keyed by any id
 
-A chatbot serves many people through one process, and "the process spent too
-much" is not a useful thing to know about it. `runbound.session()` gives each
-end-user their own session, so counters, baselines and trips are per user:
+One process usually does more than one thing at a time, and "the process spent
+too much" is rarely the useful sentence. `runbound.session(key)` scopes every
+control above to whatever id you pass it — an agent run, a background job, a
+tenant, a customer — so counters, baselines and trips are per key:
 
 ```python
-with runbound.session(f"user:{user_id}", tags={"service": "support-bot"}):
+with runbound.session(f"run:{run_id}", tags={"service": "refunds-agent"}):
     response = client.chat.completions.create(model="gpt-4o", messages=messages)
 ```
 
 - **The key is yours and opaque to us.** runbound stores it, prints it in
-  alerts, and never interprets it. Send a customer id, a tenant id, a hash —
-  identity stays the business's. `tags` is a small dict of labels that rides
-  along with it.
+  alerts, and never interprets it. Send a run id, a job id, a tenant id, a
+  customer id, a hash — identity stays the business's. `tags` is a small dict
+  of labels that rides along with it.
 - **The same key is the same session.** Re-entering a key in a later request
   returns the state it already had, so budgets and learned baselines survive
-  from request to request. Tags given on a later entry are merged in.
+  from request to request — a retried job, or a second turn of the same
+  conversation. Tags given on a later entry are merged in.
 - **Everything is per key**: step count, tokens, dollars, the loop window, and
   the spike baseline.
-- **A trip stops that session only.** The end-user who spikes gets a
-  `GuardrailTripped` on their request; everyone else keeps chatting, because
-  detectors fire per session and the other sessions never tripped.
+- **A trip stops that session only.** The key that spikes gets a
+  `GuardrailTripped` on the call that crossed the line; every other run carries
+  on, because detectors fire per session and the other sessions never tripped.
 - **A tripped session stays tripped.** The wall is a latch, not a speed bump:
   once a session trips critically, every later call re-raises (or re-invokes
   your callback), and under `on_anomaly="raise"` even *entering*
-  `session(key)` raises — so a blocked user costs you **zero** model calls
-  from their next message on. Check without tripping via
+  `session(key)` raises — so a blocked key costs you **zero** model calls
+  from its next request on. Check without tripping via
   `runbound.is_tripped(key)`; forgive explicitly with
   `runbound.clear(key)` (fresh budget, fresh baseline, detectors re-armed).
 - **The latch is permanent by default — and that is a choice you can change.**
@@ -449,8 +462,11 @@ with runbound.session(f"user:{user_id}", tags={"service": "support-bot"}):
 - **Inert before `init()`.** The block yields `None` and observes nothing,
   exactly like the rest of the SDK.
 
-**We never write your bot's replies.** runbound stops the session and hands
-control straight back to you; what your user reads is yours to write.
+**The second example: a chatbot.** The same call, keyed by the person rather
+than by the run — one process serving many people, each with their own budget,
+baseline and latch, so the one who spikes is stopped and everybody else keeps
+chatting. runbound never writes the reply: it stops the session and hands
+control straight back to you.
 
 ```python
 from runbound import GuardrailTripped
@@ -460,9 +476,19 @@ def handle(user_id: str, message: str) -> str:
         try:
             return call_model(message)
         except GuardrailTripped as tripped:
-            log.warning("guardrail: %s", tripped.anomaly.message)
+            log.warning("runbound: %s", tripped.anomaly.message)
             return "You've reached today's assistant limit — a human will follow up."
 ```
+
+`examples/chatbot_abuse_demo.py` runs that story offline: three people on their
+own keyed sessions, one of whom pushes the model into thinking mode, with
+`on_anomaly="raise"` as the only configuration — a quiet notice on the first
+odd call, a stop on the second, and the other two left alone. For a dress
+rehearsal over HTTP — a FastAPI service, a normal caller, a repeat-offender key
+that gets latched and refused pre-spend, a support `clear()`, and a heavy but
+genuine caller who is watched and never blocked — see
+[`examples/stress/`](examples/stress/README.md). It runs with no API key and
+also against a real one, and shows the multi-worker limitation honestly.
 
 **Async tasks inherit the session; new threads do not.** The binding is a
 `contextvars.ContextVar`, so an `asyncio` task copies the context it was created
@@ -488,10 +514,10 @@ run more than one of them — and then every number quietly becomes a number
 *per replica*:
 
 - **The budget multiplies.** `budget_usd=5.0` across eight workers is a $40
-  budget. The end-user you meant to cut off at $5 gets $5 from each of them.
-- **A blocked user comes back on another worker.** A latch lives in the process
-  that set it. The abuser you stopped hits the load balancer again, lands on a
-  replica that has never heard of them, and carries on.
+  budget. The key you meant to cut off at $5 gets $5 from each of them.
+- **A blocked key comes back on another worker.** A latch lives in the process
+  that set it. The repeat-offender key you stopped hits the load balancer
+  again, lands on a replica that has never heard of it, and carries on.
 - **Nothing learned survives.** Strikes and cooldowns, `max_calls` tallies,
   provider circuits and fan-out counters are each rediscovered N times over,
   and forgotten at the next deploy.
@@ -588,9 +614,9 @@ runbound.plane_status()
   batch latency. Worst-case overspend for one key is the sum over workers of
   (the spend of that worker's one in-flight block, plus anything it admitted
   while stale) — the full statement and the tests that assert it live in
-  [INVARIANTS.md](INVARIANTS.md#budget). Keep blocks short (one end-user
-  request per block) and lower `control_plane_cache_s` to tighten the bound,
-  at the cost of more entry requests. The worker that crosses the line trips
+  [INVARIANTS.md](INVARIANTS.md#budget). Keep blocks short (one request per
+  block) and lower `control_plane_cache_s` to tighten the bound, at the cost
+  of more entry requests. The worker that crosses the line trips
   on the same turn a single worker with those numbers would; the anomaly
   says where the money went: `details["fleet_spend_offset_usd"]` and
   `["fleet_tokens_offset"]`. `max_total_tokens` works the same way.
@@ -600,10 +626,10 @@ runbound.plane_status()
   cached answer for that key finishes the turn it is on, and the entry after
   the cache expires is the one that is refused. That window is the knob; lower
   it to tighten propagation at the cost of more entry requests.
-  The latch arrives with what is left of its ttl, so the end-user is let
-  back in when the *fleet's* cooldown runs out rather than when one worker
-  happened to hear about it. Under `on_anomaly="raise"` that means the block is
-  refused before it runs, which is what makes a blocked user cost zero model
+  The latch arrives with what is left of its ttl, so the key is let back in
+  when the *fleet's* cooldown runs out rather than when one worker happened to
+  hear about it. Under `on_anomaly="raise"` that means the block is
+  refused before it runs, which is what makes a blocked key cost zero model
   calls fleet-wide. The abuse ladder's strike count travels with it, so a
   rollover earned on worker 3 tightens the allowance on worker 7.
 - **Org-wide action policy.** The plane states one rule set per `service`, and
@@ -709,7 +735,7 @@ What is **never** on that wire, because there is no field for it to travel in:
   useful one — so the last thing done to an outbound anomaly, on the plane
   wire, is to replace every occurrence of the key with the first 12 characters
   of its hash and an ellipsis: `"3f2a9c1b04d7…"`. Two records about the same
-  end user still line up; neither carries the key — as long as
+  key still line up; neither carries the key itself — as long as
   `send_session_keys` is off. An `exits` entry's `trigger_message` is the same
   kind of sentence (it is, verbatim, the `message` of the anomaly that
   latched the session) and gets the same treatment before it leaves. Turn
@@ -775,7 +801,7 @@ fleet's totals stay right. What a denial can take away is the plane's own
 additions — telemetry (`events_denied`, `events_over_cap`) and the shared entry
 answer (`workers_synced_exceeded`). The notice is logged at most once an hour.
 `fleet_status(key)` is the other half of `session_status(key)`: that one is what
-*this* worker knows about an end-user, this one what the whole fleet does — and
+*this* worker knows about one key, this one what the whole fleet does — and
 it answers `None` for a key this worker has not opened a block for in the last
 few seconds. `door_refusals` is the one local number in it: how many blocks
 *this* worker has turned away at the door while the key was latched — what the
@@ -831,14 +857,15 @@ variance on a fast bot (0.3s lookups, one 1.5s answer) never counts as a spike:
   an incident either, and a wrong stop on a real user is worse than the
   spend. Set `on_spike="trip"` if you want a confirmed spike to follow your
   `on_anomaly` (raise, callback) and stop that session, or
-  [`on_spike="limit"`](#the-abuse-ladder-on_spikelimit) for the middle
-  setting — sustained spiking earns a session limit before anything closes.
+  [`on_spike="limit"`](#many-callers-behind-one-service-on_spikelimit) for the
+  middle setting — sustained spiking earns a session limit before anything
+  closes.
   Each phase is reported once per session, and a window that returns to normal
   simply goes quiet.
 
-**The held baseline: an abuser's spikes never become their "normal".** The
-baseline is the median of the session's own recent calls, and a spike lands in
-that history like any other call — so a sustained run of them would drag the
+**The held baseline: a repeat offender's spikes never become their "normal".**
+The baseline is the median of the session's own recent calls, and a spike lands
+in that history like any other call — so a sustained run of them would drag the
 median up until the abuse read as ordinary. It does not: while the trailing
 window still contains an abnormal call, the baseline is **frozen** at the
 snapshot taken on the last call before the abnormal run began. Live tracking
@@ -898,19 +925,20 @@ instead, or set `on_unpriced_model="estimate"` / `"refuse"` (see the
 
 Honest about the limits: **baselines live in this process and reset when it
 restarts.** A fresh worker re-learns each session over its first 4 calls, and
-two workers serving the same user do not share what they have learned.
+two workers serving the same key do not share what they have learned.
 Cross-instance baselines need a backend, which is on the roadmap and not in the
 SDK.
 
-### The abuse ladder (`on_spike="limit"`)
+### Many callers behind one service (`on_spike="limit"`)
 
-A moderate spike should not slam the door. Someone asking one genuinely hard
-question looks, for a moment, exactly like someone farming your bot for free
-tokens — and cutting the first one off is worse than paying for the second.
-`on_spike="limit"` is the middle setting: **graduated pressure for behavior**,
-applied to one end-user's session, one rung at a time. Money keeps its own hard
-wall underneath — `budget_usd` is arithmetic and stops the session outright,
-ladder or no ladder.
+When one service is shared — a hosted agent, an internal API, an assistant —
+some keys behave and some do not, and a moderate spike should not slam the
+door. A caller asking one genuinely hard question looks, for a moment, exactly
+like a caller farming your service for free tokens, and cutting the first one
+off is worse than paying for the second. `on_spike="limit"` is the middle
+setting: **graduated pressure for behavior**, applied to one key's session, one
+rung at a time. Money keeps its own hard wall underneath — `budget_usd` is
+arithmetic and stops the session outright, ladder or no ladder.
 
 | Level | What it means | What runbound does | What your app sees |
 |---|---|---|---|
@@ -937,7 +965,7 @@ runbound.init(
 )
 ```
 
-**Telling the user how long.** `runbound.session_status(key)` reads the
+**Telling the caller how long.** `runbound.session_status(key)` reads the
 ladder without touching it (never creates a session, never counts as using
 one), which is how you render "back in 5 minutes" instead of a bare error:
 
@@ -953,10 +981,10 @@ runbound.session_status("user:5310")
 ```
 
 `runbound.clear(key)` is total forgiveness: the strikes go too, so a cleared
-user starts again at the full allowance rather than one rollover from a block.
+key starts again at the full allowance rather than one rollover from a block.
 
 **The ladder explains itself.** `session_status(key)` also answers "why was this
-user limited?" without anyone reading our code:
+key limited?" without anyone reading our code:
 
 ```python
 runbound.session_status("user:5310")["why"]
@@ -1021,7 +1049,7 @@ tie](#which-anomaly-wins-a-tie).
 | `velocity` | Burning tokens too fast, regardless of the total | `tokens_per_minute_limit` | Tokens recorded in the trailing 60 seconds (measured from the current event's timestamp) exceed the limit. An entry exactly 60s old still counts. Severity `warn`. |
 | `steps` | An agent that will not stop taking model turns | `max_steps` | `turns > max_steps`, where a turn is one `llm_call` — a model call that makes three tool calls is one step, not four. Severity `critical`. See [max_steps and max_events](#max_steps-and-max_events-steps-are-turns-events-are-events). |
 | `events` | A session generating too much recorded activity, of any kind | `max_events` | `event_count > max_events` — every recorded event counts: model calls, tool calls, tool requests, failures. This is what `max_steps` counted before 0.3.0. Severity `critical`. |
-| `spike` | A session whose model calls stop looking like themselves — thinking mode, a model update, an end-user driving long generations | none (on by default); tune with `spike_*`, cap with `max_call_seconds` / `max_tokens_out_per_call` / `max_cost_per_call_usd` | A call exceeds `spike_factor` × this session's median duration or output work, after `spike_warmup_calls` of history. First one severity `warn` (never stops the agent); `spike_confirm` of the trailing 5 makes it `critical`. A breached hard cap — seconds, output tokens, or dollars on one call — is `critical` immediately, from call #1. See [Spike detection](#spike-detection-zero-config). |
+| `spike` | A session whose model calls stop looking like themselves — thinking mode, a model update, a caller driving long generations | none (on by default); tune with `spike_*`, cap with `max_call_seconds` / `max_tokens_out_per_call` / `max_cost_per_call_usd` | A call exceeds `spike_factor` × this session's median duration or output work, after `spike_warmup_calls` of history. First one severity `warn` (never stops the agent); `spike_confirm` of the trailing 5 makes it `critical`. A breached hard cap — seconds, output tokens, or dollars on one call — is `critical` immediately, from call #1. See [Spike detection](#spike-detection-zero-config). |
 | `error_storm` | An agent retrying into a wall: a provider answering 429 while every layer above it retries | `error_storm_limit` (default **10**, `None` disables) | More than `error_storm_limit` failed calls — failed model calls *and* failed tools — in the trailing 60 seconds. Severity `critical`. The one detector that is on by default with a number. See [Retry storms](#retry-storms-and-the-provider-circuit-breaker). |
 | `timeout` | A run that stopped being work an hour ago, with no single call looking wrong | `max_session_seconds`, `max_session_lifetime_seconds` | `event.ts - session.run_started_at > max_session_seconds` (`details["scope"] == "run"`), on any event kind, on the monotonic clock; or, if set, `event.ts - session.started_at > max_session_lifetime_seconds` (`details["scope"] == "lifetime"`). Each fires independently, once per session. Severity `critical`. See [Time and fan-out limits](#time-and-fan-out-limits). |
 
@@ -1177,12 +1205,12 @@ keyword on this call.
 | Setting | Options | Default | What each option does |
 |---|---|---|---|
 | `on_anomaly` | `"warn"` / `"raise"` / `"callback"` | `"warn"` | The reaction to a critical anomaly. **warn**: log a warning, the agent keeps running. **raise**: raise `GuardrailTripped` on the agent's thread (`exc.anomaly` is the full `Anomaly`; `try/finally` still runs). **callback**: call your `callback(anomaly)` — your own kill switch; if it raises, that is logged and swallowed. |
-| `on_trip` | `"latch"` / `"once"` | `"latch"` | What a critical trip does to the session **afterwards**. **latch**: the session stays stopped — every later call is refused (raise / callback again, no re-alert), and under `"raise"` even entering `session(key)` raises, so a blocked user costs zero model calls until `clear()` or `latch_ttl_seconds`. **once**: stop that one call only; the next call is evaluated afresh (a caught exception lets the user continue — pick this only if you handle blocking yourself). |
+| `on_trip` | `"latch"` / `"once"` | `"latch"` | What a critical trip does to the session **afterwards**. **latch**: the session stays stopped — every later call is refused (raise / callback again, no re-alert), and under `"raise"` even entering `session(key)` raises, so a blocked key costs zero model calls until `clear()` or `latch_ttl_seconds`. **once**: stop that one call only; the next call is evaluated afresh (a caught exception lets the caller continue — pick this only if you handle blocking yourself). |
 | `latch_ttl_seconds` | `None` / seconds | `None` | Only matters with `on_trip="latch"`. **None**: the latch is permanent until `clear()`. **A number**: the latch expires that many seconds after it was set — every detector is re-armed and the session's next event is judged fresh, on the same cumulative counters. This **re-admits, it does not reset**: a session still over budget re-trips immediately, with the same detector; only `clear()` zeroes the counters themselves. Opt-in — nothing expires unless you set it. |
-| `on_spike` | `"notify"` / `"trip"` / `"limit"` | `"notify"` | What a *confirmed* spike does (a first spike is always notify-only). **notify**: log and alert, never stop — thinking mode alone is not an incident. **trip**: treat it as critical and follow `on_anomaly` / `on_trip`. **limit**: climb [the abuse ladder](#the-abuse-ladder-on_spikelimit) instead of slamming the door — a confirmed spike costs the session an allowance of `spike_limit_calls` abnormal calls, and only an exhausted allowance closes it, with a cooldown and a strike (requires `on_trip="latch"`, which enforces the cooldown). Explicit hard caps (`max_call_seconds`, `max_tokens_out_per_call`) always trip regardless — you set that number on purpose. |
+| `on_spike` | `"notify"` / `"trip"` / `"limit"` | `"notify"` | What a *confirmed* spike does (a first spike is always notify-only). **notify**: log and alert, never stop — thinking mode alone is not an incident. **trip**: treat it as critical and follow `on_anomaly` / `on_trip`. **limit**: climb [the abuse ladder](#many-callers-behind-one-service-on_spikelimit) instead of slamming the door — a confirmed spike costs the session an allowance of `spike_limit_calls` abnormal calls, and only an exhausted allowance closes it, with a cooldown and a strike (requires `on_trip="latch"`, which enforces the cooldown). Explicit hard caps (`max_call_seconds`, `max_tokens_out_per_call`) always trip regardless — you set that number on purpose. |
 | `on_loop` | `None` / `"break"` / `"throttle"` / `"escalate"` | `None` | The reaction to a loop only (details [below](#when-a-loop-is-detected)). **None**: follow `on_anomaly`. **break**: raise immediately, whatever `on_anomaly` says. **throttle**: sleep before each repeat, never raise — a blocking `time.sleep()` on a sync call, and under a running event loop the engine hands the delay to the async wrapper instead, which `await asyncio.sleep()`s it, so the loop is never blocked either way. **escalate**: warn first, raise at `loop_hard_threshold`. |
 | `on_provider_failure` | `"notify"` / `"open"` | `"notify"` | What a provider that keeps failing does to your calls. **notify**: count the failures and alert once when `circuit_failure_threshold` of them land inside `circuit_window_seconds` — nothing is ever blocked. **open**: also refuse calls — the wrapped client raises `CircuitOpen` (a `GuardrailTripped`, with `.provider`) **before** touching the provider for `circuit_cooldown_seconds`, then lets exactly one probe through; a successful probe closes the circuit. Your app catches it and picks its own fallback — [we never route](#retry-storms-and-the-provider-circuit-breaker). The circuit is per provider and process-wide, so it stops nobody's session and latches nothing. |
-| `max_active_sessions`, `max_session_depth`, `max_child_sessions` | `None` / a number | `None` | The fan-out limits. A `session()` block that would take the run past one of them raises `GuardrailTripped` (detector `fanout`) **at the door, before its body runs**. **This row ignores `on_anomaly`** — like the per-call caps, these are numbers you stated — and it **latches nothing**: what was wrong is the shape of the run, not this end-user, so the next block is judged on its own. See [Time and fan-out limits](#time-and-fan-out-limits). |
+| `max_active_sessions`, `max_session_depth`, `max_child_sessions` | `None` / a number | `None` | The fan-out limits. A `session()` block that would take the run past one of them raises `GuardrailTripped` (detector `fanout`) **at the door, before its body runs**. **This row ignores `on_anomaly`** — like the per-call caps, these are numbers you stated — and it **latches nothing**: what was wrong is the shape of the run, not this key, so the next block is judged on its own. See [Time and fan-out limits](#time-and-fan-out-limits). |
 | `max_inflight_calls` | `None` / a number | `None` | How many calls to one endpoint may be in flight at once. The call that would take a provider label past it raises `GuardrailTripped` (detector `inflight`) **before the request goes out**. **This row ignores `on_anomaly`** — the number is one you stated — and **latches nothing**: the moment a slot frees up the next call goes through. Alerted once per endpoint. See [Self-hosted models](#self-hosted-models). |
 | `budget_admission`, `admission_output_tokens` | `bool`, `int` | `False`, `1024` | **Opt-in.** When `True`, `Engine.admit` also refuses a call **before it goes out** whose *estimated* cost would push `budget_usd` past its limit — `GuardrailTripped` (detector `budget`, `details["rule"] == "admission"`). **This row ignores `on_anomaly`** and **never latches**: an estimate is not a wall, and a cheaper call may still fit. An unknown model skips the estimate (warned once per model) rather than refuse a cost nobody stated. Alerted once per session. `admission_output_tokens` is the assumed output size when a request states no `max_tokens` / `max_completion_tokens` / `max_output_tokens` cap. With `budget_admission` left off, nothing here runs. See [Admission](#admission-an-opt-in-pre-call-budget-check-budget_admission). |
 | `max_steps`, `max_events` | `None` / a number | `None` | Unlike the two rows above, both are ordinary detectors (`steps`, `events`): `critical`, follow `on_anomaly` and `on_trip` like `budget` does. **They count different things, not the same thing at two thresholds**: `max_steps` counts model turns (`llm_call` events) only, `max_events` counts every recorded event. Set both if you want an independent wall on each. See [max_steps and max_events](#max_steps-and-max_events-steps-are-turns-events-are-events). |
@@ -1216,7 +1244,7 @@ at the door, before any provider call. The two cases carry different
 `detector`s, both with `details["origin"] == "plane"`: an entry refused
 because the plane could not be reached at all (`on_plane_loss="refuse"`) is
 detector `plane`, and resolves against the `"plane"` key in a
-[refusals profile](#what-the-end-user-sees--your-words-your-status) (built-in
+[refusals profile](#what-the-caller-sees--your-words-your-status) (built-in
 fallback: HTTP 503, "The assistant is temporarily unavailable."); an org daily
 budget already spent is detector `budget` with `details["rule"] ==
 "org_budget"` — it is a budget like any other, just decided by the plane —
@@ -1343,10 +1371,10 @@ is not a number, a missing header, a body that has been touched. Verify the
 *raw* body: re-serializing the parsed JSON will not reproduce the bytes that
 were signed.
 
-### What the end user sees — your words, your status
+### What the caller sees — your words, your status
 
-runbound raises `GuardrailTripped` — it never writes the sentence your end
-user reads. Without this, every app ends up inventing its own HTTP status and
+runbound raises `GuardrailTripped` — it never writes the sentence your caller
+reads. Without this, every app ends up inventing its own HTTP status and
 copy for a refusal, one `except` block at a time, and a customer who wants to
 change either has to ship code. `exc.refusal` fixes that: it carries the
 status and the message *you* set, resolved fresh on every access.
@@ -1597,9 +1625,9 @@ Four honest notes:
 
 Two boundaries worth stating plainly:
 
-- **`max_calls` is per session.** Inside `runbound.session(key)` each end-user
-  gets their own tally; outside one, everything counts against the default
-  session `init()` created. Both are per process.
+- **`max_calls` is per session.** Inside `runbound.session(key)` each key gets
+  its own tally; outside one, everything counts against the default session
+  `init()` created. Both are per process.
 - **Under LangChain, constraints see the input string.** The handler enforces
   the policy in `on_tool_start`, where LangChain hands us the tool's name and a
   single `input_str` — so `call.args == (input_str,)` and `call.kwargs == {}`.
@@ -1631,9 +1659,9 @@ session it belongs to is the thing to stop. Set `error_storm_limit=None` to
 turn it off.
 
 **Per provider — the circuit.** The circuit is process-wide and keyed by
-provider, because a provider is down for everyone, not for one unlucky
-end-user. `circuit_failure_threshold` (5) failures inside
-`circuit_window_seconds` (60) opens it for `circuit_cooldown_seconds` (30).
+provider, because a provider is down for everyone, not for one unlucky caller.
+`circuit_failure_threshold` (5) failures inside `circuit_window_seconds` (60)
+opens it for `circuit_cooldown_seconds` (30).
 
 The key is the client's shape **and the endpoint it points at** —
 `"openai@api.openai.com"`, `"openai@localhost:11434"`,
@@ -1782,14 +1810,14 @@ and follows `on_anomaly` and `on_trip` exactly like `budget` does.
 
 | Clock | Measures | Keyed session (`session(key)`) | Unkeyed (default) session |
 |---|---|---|---|
-| `max_session_seconds` (`details["scope"] == "run"`) | The current *run* | Reset on **every entry** of `session(key)` — a returning end-user's next message starts a fresh clock, not a continuation of their first one ever. | Never reset: the default session guards the whole process, so it *is* the run, from `init()` onward. |
+| `max_session_seconds` (`details["scope"] == "run"`) | The current *run* | Reset on **every entry** of `session(key)` — a returning key's next request starts a fresh clock, not a continuation of its first one ever. | Never reset: the default session guards the whole process, so it *is* the run, from `init()` onward. |
 | `max_session_lifetime_seconds` (`details["scope"] == "lifetime"`) | The session's whole existence | Set once, at the key's first-ever entry, and never reset — the old (pre-0.3.0) meaning of `max_session_seconds`, for a customer who wants it back. `None` (off) by default. | Identical to `max_session_seconds` here, since the default session is never re-entered — this knob exists for keyed sessions. |
 
-A keyed chatbot session entered three times over 70 minutes, each block
-short, never trips `max_session_seconds=3600` — the run clock resets each
-time. One block that itself runs 3601 seconds does. `max_session_lifetime_seconds`
-trips on the *sum* of the key's whole history instead, whenever you set it —
-independently of whether the run clock ever trips.
+A keyed session entered three times over 70 minutes, each block short, never
+trips `max_session_seconds=3600` — the run clock resets each time. One block
+that itself runs 3601 seconds does. `max_session_lifetime_seconds` trips on the
+*sum* of the key's whole history instead, whenever you set it — independently
+of whether the run clock ever trips.
 
 **The three fan-out limits are enforced at the door.** Entering
 `runbound.session(key)` records where the block sits — its depth, its parent,
@@ -1808,7 +1836,7 @@ the session `key`. Two properties are deliberate, and both are in
 [the reactions table](#what-happens-when-something-trips--every-choice-in-one-place):
 it is enforced **regardless of `on_anomaly`** — like a per-call cap, this is a
 number you stated, not something inferred — and it **latches nothing**, because
-the thing that went wrong is the shape of the run, not this end-user. The next
+the thing that went wrong is the shape of the run, not this key. The next
 block for the same key is judged on its own shape. Each rule pages once per
 session, however often the agent walks back into it.
 
@@ -1856,7 +1884,7 @@ keyword`.
 | `throttle_base_seconds` | `float` | `2.0` | First sleep applied by `on_loop="throttle"`; it doubles on each further repeat. Must be positive. |
 | `throttle_max_seconds` | `float` | `30.0` | Ceiling on the throttle sleep. Must be positive and >= `throttle_base_seconds`. |
 | `spike_detection` | `bool` | `True` | The per-session behavior watch. Set `False` to turn it off. |
-| `on_spike` | `str` | `"notify"` | What a *confirmed* spike does: `"notify"` logs and alerts only; `"trip"` follows `on_anomaly` and stops that session; `"limit"` climbs [the abuse ladder](#the-abuse-ladder-on_spikelimit) — allowance, then rollover, then a block (requires `on_trip="latch"`). Hard caps always react regardless. |
+| `on_spike` | `str` | `"notify"` | What a *confirmed* spike does: `"notify"` logs and alerts only; `"trip"` follows `on_anomaly` and stops that session; `"limit"` climbs [the abuse ladder](#many-callers-behind-one-service-on_spikelimit) — allowance, then rollover, then a block (requires `on_trip="latch"`). Hard caps always react regardless. |
 | `spike_limit_calls` | `int` | `5` | Ladder only. Abnormal calls a *limited* session may still make before it is closed and rolled over. Halved for each strike the key has already earned, floor 1. Must be >= 1. |
 | `spike_cooldown_seconds` | `float` | `300.0` | Ladder only. How long a rolled-over key is refused at the door before its fresh session starts serving. Must be positive. |
 | `spike_max_strikes` | `int` | `3` | Ladder only. Rollovers a key may earn before it is blocked permanently, until `clear()`. Must be >= 1. |
@@ -1909,7 +1937,7 @@ keyword`.
 | `budget_admission` | `bool` | `False` | **Opt-in.** Refuse a call *before it goes out* whose estimated cost would cross `budget_usd` — see [Admission](#admission-an-opt-in-pre-call-budget-check-budget_admission). Off leaves every call path exactly as it was before this setting existed. |
 | `admission_output_tokens` | `int` | `1024` | The assumed output size `budget_admission`'s estimate uses when a request states no `max_tokens` / `max_completion_tokens` / `max_output_tokens` cap. Must be a positive int. Ignored when a request names its own cap. |
 | `loop_ignore_tools` | `tuple[str, ...]` | `()` | Tool names exempt from the loop window by policy rather than by decorator — equivalent to `@runbound.tool(repeatable=True)` for every call to that name, whoever runs it (executed or model-requested). They still count toward `tool_calls()` and any `max_calls` in your action policy. For marking a tool that is *meant* to repeat (polling a job, checking a status) — not for tuning around a real loop. |
-| `refusals` | `dict \| None` | `None` | **Opt-in.** Your own HTTP status and sentence for a refusal, by detector (including `"plane"`) or `"default"`. Validated at `init()` — a bad status or an over-length message raises `ValueError` naming the key. A control-plane profile overrides this field by field; unset, `BUILTIN` answers. See [What the end user sees](#what-the-end-user-sees--your-words-your-status). |
+| `refusals` | `dict \| None` | `None` | **Opt-in.** Your own HTTP status and sentence for a refusal, by detector (including `"plane"`) or `"default"`. Validated at `init()` — a bad status or an over-length message raises `ValueError` naming the key. A control-plane profile overrides this field by field; unset, `BUILTIN` answers. See [What the caller sees](#what-the-caller-sees--your-words-your-status). |
 
 Every limit knob — `budget_usd`, `max_total_tokens`, `max_steps`, `max_events`,
 `tokens_per_minute_limit`, `max_call_seconds`, `max_tokens_out_per_call`,
@@ -1925,11 +1953,11 @@ The rest of the public API:
 | `runbound.init(**kwargs)` | Validates config, builds the engine, starts a session. Calling it again reconfigures and starts fresh. |
 | `runbound.wrap(client)` | Guards a client's calls in place and returns the same object. Wrapping twice is a no-op; an unrecognized client raises `ValueError`. |
 | `runbound.tool` / `runbound.tool(name="...", repeatable=True)` | Records every call to a function. Usable bare or with an explicit name. `repeatable=True` marks a tool that is *supposed* to run with the same arguments over and over — polling a job, checking a status — so its calls never feed the loop window (equivalent to listing its name in `loop_ignore_tools`). They still count toward `tool_calls()` and any `max_calls` in your action policy: mark polling, do not tune around a real loop. |
-| `runbound.session(key, tags=None)` | Context manager: accounts everything inside it to `key`'s own session. Yields the `SessionState`, or `None` before `init()`. See [Per-user sessions](#per-user-sessions). |
+| `runbound.session(key, tags=None)` | Context manager: accounts everything inside it to `key`'s own session. Yields the `SessionState`, or `None` before `init()`. See [Runs keyed by any id](#runs-keyed-by-any-id). |
 | `runbound.reset()` | Starts a fresh session with the same config: counters to zero, every keyed session forgotten, detectors re-armed. No-op before `init()`. |
 | `runbound.current_session()` | The `SessionState` work is being accounted to — the enclosing `session()` block's, else the default one — or `None` before `init()`. |
 | `runbound.is_tripped(key=None)` | The `Anomaly` that latched a session (`key=None` = the active one), else `None`. Never creates a session. |
-| `runbound.session_status(key)` | Where a keyed session stands on [the abuse ladder](#the-abuse-ladder-on_spikelimit): a dict of `level` (0 quiet, 1 watching, 2 limited, 3 closed — a blocked key reads `level: 0`, since the session behind it is fresh; see `strikes`/`tripped_by` below), `strikes`, `allowance_left`, `cooldown_remaining_s`, `tripped_by` and `generation`. A blocked key is identified by `strikes == spike_max_strikes` with a permanent latch (`tripped_by == "spike"`, `cooldown_remaining_s == 0.0`), not by `level`. `None` before `init()` and for an unknown, cleared or evicted key. Never creates a session. |
+| `runbound.session_status(key)` | Where a keyed session stands on [the abuse ladder](#many-callers-behind-one-service-on_spikelimit): a dict of `level` (0 quiet, 1 watching, 2 limited, 3 closed — a blocked key reads `level: 0`, since the session behind it is fresh; see `strikes`/`tripped_by` below), `strikes`, `allowance_left`, `cooldown_remaining_s`, `tripped_by` and `generation`. A blocked key is identified by `strikes == spike_max_strikes` with a permanent latch (`tripped_by == "spike"`, `cooldown_remaining_s == 0.0`), not by `level`. `None` before `init()` and for an unknown, cleared or evicted key. Never creates a session. |
 | `runbound.tool_calls(key=None)` | How many times each tool has been *attempted* in a session (`{"send_email": 2}`) — what [`max_calls`](#action-policy--rules-for-what-your-agent-may-do) is measured against. A copy; `{}` before `init()` or for an unknown key. Never creates a session. |
 | `runbound.circuit_state(provider="openai")` | Where one provider's circuit stands: `"closed"`, `"open"` or `"half_open"`. Takes a full endpoint label (`"openai@localhost:11434"`) or a bare shape (`"openai"`), which reads the **worst** state among that shape's endpoints. Counted under both `on_provider_failure` modes. Reads `"closed"` before `init()` and whenever it cannot be read. See [Retry storms](#retry-storms-and-the-provider-circuit-breaker). |
 | `runbound.inflight_calls(provider="openai")` | How many guarded calls to that provider are in flight right now. Same label-or-shape resolution as `circuit_state()`, summed across matching endpoints. `0` before `init()` and when no `max_inflight_calls` is set (nothing is counted then). |
@@ -2037,12 +2065,12 @@ fix a stale number without waiting for a release.
 
 #### Cached input tokens
 
-A repeated system prompt, a long few-shot block, a chatbot's growing
+A repeated system prompt, a long few-shot block, an agent's growing message
 history — anything the provider recognizes as a repeat of something it just
 saw — is billed as a **cache hit**, at a discount runbound now reads and
 prices correctly: OpenAI at 50% of its input rate, Anthropic at 10%. Before
 this, runbound had no reader for either field and priced every cached token
-at the full input rate — a chatbot with a large cached system prompt was
+at the full input rate — an agent with a large cached system prompt was
 over-charged on nearly every call, which trips `budget_usd` **before the
 money is actually gone**, the one direction a dollar wall must never err in.
 
@@ -2382,8 +2410,8 @@ Honest limitations today:
   streaming](#async-and-streaming).
 - **OpenAI streams need `stream_options={"include_usage": True}`** to be priced.
   Without it a stream is recorded as a step with zero tokens.
-- **Sessions are per process.** `runbound.session(key)` gives each end-user
-  their own; work outside any block goes to one default session. Call
+- **Sessions are per process.** `runbound.session(key)` gives each key its own
+  session; work outside any block goes to one default session. Call
   `runbound.reset()` between agent runs in a long-lived worker so counters
   restart and detectors re-arm.
 - **Without a control plane, everything is per process.** Budgets, latches,

@@ -72,7 +72,7 @@ RETRY_EVERY_S = 30.0
 STALE_HALT_S = 60.0
 
 #: Most keys the decision cache holds. Entries expire on their own; this is
-#: the ceiling for a process churning through end-users faster than that.
+#: the ceiling for a process churning through keys faster than that.
 DECISION_CACHE_MAX = 1024
 
 #: How often the plane's ``notice`` — the entitlement nudge a customer is meant

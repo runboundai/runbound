@@ -211,9 +211,9 @@ class GuardrailConfig:
     # hours is an incident even when every individual call looks fine. None
     # (the default) means no wall clock at all. Measured from
     # SessionState.run_started_at, which the api resets on every entry of a
-    # keyed session() block — this is the run's clock, not the end-user's
-    # identity's clock, so a chatbot user's tenth message next week does not
-    # inherit their first message's age. The unkeyed default session has no
+    # keyed session() block — this is the run's clock, not the key's own
+    # clock, so a returning caller's tenth request next week does not
+    # inherit the age of their first. The unkeyed default session has no
     # entry to reset on, so for it this is simply the process's own age.
     max_session_seconds: float | None = None
     # The old, identity-scoped meaning of the above, for a customer who wants
@@ -391,7 +391,7 @@ class GuardrailConfig:
     # for both tool_call and tool_request events, whoever runs it. Mark
     # polling; do not tune it to dodge a real loop.
     loop_ignore_tools: tuple[str, ...] = ()
-    # What the end user is told when a session is refused: the customer's own
+    # What the caller is told when a session is refused: the customer's own
     # status/message per detector (or "default"), overriding
     # runbound.responses.BUILTIN. See that module for the profile shape and
     # precedence against a control-plane profile. None (the default) leaves
@@ -781,7 +781,7 @@ class GuardrailConfig:
     def _validate_refusals(self) -> None:
         """Check ``refusals`` against the shape :mod:`runbound.responses` reads.
 
-        Validated once here, loudly, so a customer's typo in an end-user-facing
+        Validated once here, loudly, so a customer's typo in a caller-facing
         status code fails at startup rather than being silently ignored (or
         crashing a request) the first time it is resolved. ``None`` is the
         default and always accepted; an unset field within an entry is fine

@@ -417,7 +417,7 @@ class TimeoutDetector(_FireOnceDetector):
     ``max_session_seconds`` (``scope="run"``) measures from
     ``state.run_started_at``, which the api resets on every entry of a keyed
     :func:`~runbound.session` block — this is the *run's* clock, so a
-    returning chatbot user's tenth message does not inherit the age of their
+    returning caller's tenth request does not inherit the age of their
     first. For the default (unkeyed) session, which has no entry to reset on,
     this is simply the process's own age.
 
@@ -526,7 +526,7 @@ class SpikeDetector:
 
     Every other detector needs a number from the user; this one learns one. It
     compares each model call against the median of that session's own recent
-    calls, so a chatbot that normally answers in two seconds notices the answer
+    calls, so a service that normally answers in two seconds notices the answer
     that took seventy-four — with nothing configured.
 
     A ratio is not enough on its own: the call must also be slower (or larger)
@@ -931,11 +931,11 @@ def _baseline(
 
     ``held`` says the session's trailing calls already contain an abnormal one,
     and then the answer is ``state.spike_baseline``: the snapshot taken on the
-    last call before that run began. Holding it is what stops an abuser's own
-    spikes — which land in the session's history like any other call — from
-    dragging the median up until they read as normal. A trailing window of
-    nothing but ordinary calls refreshes the snapshot and hands judgement back
-    to the live medians.
+    last call before that run began. Holding it is what stops a repeat
+    offender's own spikes — which land in the session's history like any
+    other call — from dragging the median up until they read as normal. A
+    trailing window of nothing but ordinary calls refreshes the snapshot and
+    hands judgement back to the live medians.
 
     Only a warmed-up, non-zero history is worth snapshotting, so a session
     flagged before it ever warmed up (a per-call cap breached on call #1) has

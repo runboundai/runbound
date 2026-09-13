@@ -143,7 +143,7 @@ def session_started() -> None:
     """One more key registered for the first time.
 
     A count, not a set: keeping the keys would mean a second, unbounded copy of
-    end-user identifiers outliving the registry that evicts them. The trade is
+    caller identifiers outliving the registry that evicts them. The trade is
     stated rather than hidden — a key whose session was evicted and then
     re-entered counts again.
     """

@@ -38,8 +38,9 @@ class SessionState:
     under ``self.lock`` (reentrant, so callers may hold it across a
     ``record()`` when they need a consistent multi-attribute read).
 
-    ``key`` and ``tags`` identify a keyed session (one chatbot end-user, say)
-    and are ``None``/empty for the default session that guards a whole process.
+    ``key`` and ``tags`` identify a keyed session (one run, one job, one
+    caller, say) and are ``None``/empty for the default session that guards a
+    whole process.
 
     ``tool_calls`` counts attempts per tool name — the per-session number an
     action policy's ``max_calls`` is measured against. Only executed calls are
@@ -96,10 +97,10 @@ class SessionState:
     it is set once, at creation, because that session guards the whole
     process and *is* the run. For a keyed session it is reset by the api on
     every entry of :func:`~runbound.session` (before the fleet sync), because
-    a returning chatbot user's next message is a new run, not a continuation
-    of the first one they ever sent — a session reused across requests must
-    not read as "running" since their very first message. ``started_at``
-    keeps its original meaning (the session's *lifetime*, from creation) for
+    a returning key's next request is a new run, not a continuation of the
+    first one it ever sent — a session reused across requests must not read
+    as "running" since its very first request. ``started_at`` keeps its
+    original meaning (the session's *lifetime*, from creation) for
     ``max_session_lifetime_seconds``, the opt-in cap for a customer who wants
     the old, identity-scoped meaning back.
 

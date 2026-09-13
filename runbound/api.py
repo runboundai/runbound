@@ -134,7 +134,7 @@ _ACTIVE = 0
 _DOOR_REFUSALS: dict[str, int] = {}
 
 #: ``(session_id, rule)`` pairs a fan-out refusal has already been alerted on.
-#: A refused end-user (or a retrying agent) walks into the same wall on every
+#: A refused caller (or a retrying agent) walks into the same wall on every
 #: attempt, and the on-call wants to hear about the wall once. Emptied with the
 #: registry, under ``_LOCK``.
 _FANOUT_ALERTED: set[tuple[str, str]] = set()
@@ -320,7 +320,7 @@ def _new_session(
     """A session sized by the configuration, identified by its key.
 
     A keyed session's id is derived from the key, so every worker running the
-    same code derives the same id for the same end-user: an incident that
+    same code derives the same id for the same key: an incident that
     happens on eight replicas dedups into one alert instead of eight. The
     default session, which nobody else can name, keeps a random id. Callers
     hold ``_LOCK`` — the generation and strike counters are read under it.
@@ -632,7 +632,7 @@ def session(key: str, tags: dict | None = None) -> Iterator[SessionState | None]
 
     One key means one :class:`SessionState`, reused across blocks, so budgets
     and baselines survive from request to request and only the offending
-    end-user is ever stopped. At most ``max_sessions`` keys are kept; the
+    key is ever stopped. At most ``max_sessions`` keys are kept; the
     least recently used is dropped, and re-entering a dropped key simply
     starts it over.
 
@@ -644,8 +644,8 @@ def session(key: str, tags: dict | None = None) -> Iterator[SessionState | None]
 
     Under ``on_anomaly="raise"``, entering the block for a key that has already
     tripped raises :class:`~runbound.exceptions.GuardrailTripped` *before the
-    body runs* — a blocked end-user costs the business nothing from their next
-    message on. :func:`clear` is how that key is let back in — or, with
+    body runs* — a blocked key costs the business nothing from its next
+    request on. :func:`clear` is how that key is let back in — or, with
     ``latch_ttl_seconds`` configured, simply waiting out the window.
 
     Entering is also where the fan-out limits are enforced. With
@@ -654,7 +654,7 @@ def session(key: str, tags: dict | None = None) -> Iterator[SessionState | None]
     :class:`~runbound.exceptions.GuardrailTripped` before its body runs —
     whatever ``on_anomaly`` says, because those are numbers the customer
     stated, and latching nothing, because what was wrong is the shape of the
-    run rather than this end-user.
+    run rather than this key.
 
     Entering is also where the abuse ladder (``on_spike="limit"``) rolls a key
     over: a session the ladder closed is retired here and the key continues in
@@ -872,7 +872,7 @@ def _apply_remote_latch(state: SessionState, latch) -> None:
     The remote anomaly is latched exactly as a local one would be, with what
     is left of its ttl as this session's own expiry — so ``_refuse_if_tripped``
     refuses the block, ``is_tripped()`` reports the real reason, and the
-    end-user is let back in when the fleet's cooldown runs out rather than when
+    key is let back in when the fleet's cooldown runs out rather than when
     this worker happened to hear about it. A latch with nothing left on it is
     not applied at all.
     """
@@ -1120,7 +1120,7 @@ def fleet_status(key: str) -> dict | None:
          "policy_version": 4, "age_s": 1.2, "door_refusals": 4}
 
     The other half of :func:`session_status`: that one reports what *this*
-    worker knows about an end-user, this one what the whole fleet does. Reads
+    worker knows about one key, this one what the whole fleet does. Reads
     the entry-decision cache only, so it never opens a socket and answers
     ``None`` for a key this worker has not opened a session for in the last few
     seconds — and always, without a control plane.
@@ -1331,7 +1331,7 @@ def _rolled_over(key: str, state: SessionState) -> SessionState:
     """``key``'s session, replaced first if the ladder closed the old one.
 
     The ladder's last rung latches a session with ``action="rollover"``: the
-    detector has decided this end-user's session is over, and retiring it is
+    detector has decided this key's session is over, and retiring it is
     the api's half of the deal — a new generation of the key, one more strike,
     half the allowance, and a cooldown to serve before the fresh session runs.
     The strike outlives the session it was earned on, so a repeat offender
@@ -1375,7 +1375,7 @@ def _rollover_strikes(state: SessionState, latched: Anomaly) -> int | None:
     fresh one it latches as a cooldown. Only the first has yet to pay for it,
     and the strike count is what tells them apart — a session created by a
     rollover already carries the strike written into the anomaly, so retrying
-    all through the cooldown costs the end-user nothing extra.
+    all through the cooldown costs the caller nothing extra.
     """
     details = latched.details
     if not isinstance(details, dict) or details.get("action") != "rollover":
@@ -1452,7 +1452,7 @@ def _latch_rollover(
     """Start the fresh session stopped: a cooldown, or the final block.
 
     Below ``spike_max_strikes`` the session is latched on the rollover anomaly
-    itself for ``spike_cooldown_seconds`` — the end-user is refused for that
+    itself for ``spike_cooldown_seconds`` — the key is refused for that
     long and then served again, on tighter terms. At the last strike there is
     no expiry: the key stays blocked until the business clears it.
 
@@ -1605,7 +1605,7 @@ def is_tripped(key: str | None = None) -> Anomaly | None:
     """The anomaly a session is latched on, or ``None`` if it is running.
 
     With a ``key``, reports that keyed session — ask before doing expensive
-    work for an end-user, or to render "you have hit your limit" without
+    work for a caller, or to render "you have hit your limit" without
     catching an exception. Never creates a session, so an unknown key (or a
     key evicted from the registry) simply reads ``None``.
 
@@ -1634,7 +1634,7 @@ def is_tripped(key: str | None = None) -> Anomaly | None:
 def session_status(key: str) -> dict | None:
     """Where a keyed session stands right now, or ``None`` if there is none.
 
-    Everything the abuse ladder knows about one end-user, in the terms a
+    Everything the abuse ladder knows about one key, in the terms a
     dashboard or a support agent asks in::
 
         {"level": 2,                  # 0 quiet, 1 watching, 2 limited, 3 closed
@@ -1811,9 +1811,9 @@ def _cooldown_remaining(state: SessionState, tripped: Anomaly | None) -> float:
 
 
 def clear(key: str) -> None:
-    """Forget ``key``'s session entirely: explicit forgiveness for one user.
+    """Forget ``key``'s session entirely: explicit forgiveness for one key.
 
-    The business decides when a blocked end-user is let back in — after a
+    The business decides when a blocked key is let back in — after a
     payment, a support review, or a billing period. The next :func:`session`
     block for that key starts a brand-new session — a new generation of that
     key's id: the latch is gone, counters are back at zero and the

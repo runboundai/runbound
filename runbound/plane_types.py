@@ -350,7 +350,7 @@ def redacted_key(key: str, digest: str | None = None) -> str:
 
     The first :data:`REDACTED_HASH_CHARS` characters of the key's sha256 hex
     digest, then ``"…"`` — e.g. ``"3f2a9c1b04d7…"``. Long enough that two
-    records about the same end user still line up, far too short to reverse,
+    records about the same key still line up, far too short to reverse,
     and visibly not a key. ``digest`` is the full :func:`key_hash` when the
     caller already has it; it is computed here when not.
     """

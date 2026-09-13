@@ -19,7 +19,7 @@ class GuardrailTripped(Exception):
 
     @property
     def refusal(self) -> Refusal:
-        """What the app should tell the end user: the customer's own words.
+        """What the app should tell the caller: the customer's own words.
 
         Resolved lazily, on each access, from whatever plane profile and
         local ``GuardrailConfig.refusals`` are in effect *right now* — a

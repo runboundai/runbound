@@ -391,6 +391,12 @@ Two more release-gating fixes from the same outside review.
   and (Wave 31) an "Alerting" section pointing delivery at the control plane's
   own docs, with the receiver-side `verify_webhook_signature` walkthrough kept
   here.
+- README and the SDK's own docstrings lead with an autonomous agent: the quick
+  start is a tool-using agent run, "Per-user sessions" is now "Runs keyed by
+  any id" (a run id, a job, a tenant, a user), the spike ladder is "Many
+  callers behind one service", and "end user"/"abuser" read as
+  "caller"/"repeat-offender key". Both worked stories stay — a runaway agent
+  and a chatbot free-rider. Wording only; no behaviour changed.
 
 ### Docs
 

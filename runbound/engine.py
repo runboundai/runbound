@@ -142,7 +142,7 @@ class Engine:
 
     ``circuit`` is the provider circuit breaker, and is deliberately *not*
     per session: a provider is down for the whole process, not for one
-    end-user, so every session's failures count towards the same breaker.
+    caller, so every session's failures count towards the same breaker.
 
     ``observers`` are told what happened *after* it has happened — anything
     with ``on_event(session, event)`` and ``on_anomaly(session, anomaly,
@@ -257,7 +257,7 @@ class Engine:
         if worst.detector == SPIKE_DETECTOR:
             if worst.severity != "critical":
                 # A heightened watch is a notice, never a stop: one odd model
-                # call must not take down a chatbot, whatever on_anomaly says.
+                # call must not take down a service, whatever on_anomaly says.
                 # That holds for the ladder's session limit too — it costs the
                 # session its allowance, not its next answer.
                 if _detail(worst, "level", 0) == 2:
@@ -879,14 +879,14 @@ class Engine:
         if anomaly.detector in (CIRCUIT_DETECTOR, INFLIGHT_DETECTOR):
             # A circuit — and a full endpoint — belongs to a provider, not to
             # the session that happened to make the call: the session id is
-            # dropped so one outage pages once however many end-users ran into
+            # dropped so one outage pages once however many callers ran into
             # it, and two endpoints stay two incidents.
             key = (anomaly.detector, _detail(anomaly, "provider", None))
         if anomaly.detector == PLANE_DETECTOR:
             # A plane-loss refusal (`on_plane_loss="refuse"`) belongs to the
             # outage, not to whichever session's entry happened to hit it
             # first: the session id is dropped so one degraded link pages once
-            # however many end-users are refused at the door while it lasts.
+            # however many callers are refused at the door while it lasts.
             key = (anomaly.detector, _detail(anomaly, "reason", None))
         if anomaly.detector == BUDGET_DETECTOR and _detail(anomaly, "reason", None) == (
             "unpriced_model"

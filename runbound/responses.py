@@ -1,7 +1,7 @@
 """Customer-set refusal responses: runbound says *that* a call was refused,
-never what the bot should say about it — until now the app had to invent the
-HTTP status and the sentence an end user reads. This module lets the customer
-state both, once, and carries them to wherever a
+never what the caller should be told about it — until now the app had to
+invent the HTTP status and the sentence that caller reads. This module lets
+the customer state both, once, and carries them to wherever a
 :class:`~runbound.exceptions.GuardrailTripped` is raised.
 
 A *profile* is a plain dict, the same shape locally (``GuardrailConfig.refusals``)
@@ -105,7 +105,7 @@ _REMOTE_PROFILE: dict | None = None
 
 @dataclass(frozen=True)
 class Refusal:
-    """What the app should tell the end user, and how, for one refusal.
+    """What the app should tell the caller, and how, for one refusal.
 
     ``status``/``message`` are the customer's own words wherever they set
     them, else :data:`BUILTIN`'s bland default. ``retry_after_s`` is the
