@@ -234,6 +234,62 @@ Earlier versions were internal.
   `INVARIANTS.md`, "The SDK detects, stops, refuses and reports. The plane
   routes and delivers."
 
+### Wave F (T133–T135): what the SDK counts, and which anomaly wins
+
+Three release-gating fixes from an outside review of the SDK, landed before
+the first PyPI release because each changes the meaning of a public knob —
+renaming or re-meaning one after real customers hold a version would break
+them.
+
+- **T133 — `max_session_seconds` measures the run, not the end-user's whole
+  history.** Before this, `SessionState.started_at` was set once, at
+  creation, and `max_session_seconds` measured elapsed time from it — so for
+  a keyed chatbot session that is reused across requests, the wall clock
+  counted from the user's very first message ever, and a returning user
+  could trip the timeout on their next word. `SessionState.run_started_at` is
+  now reset on every entry of `runbound.session(key)`, and the `timeout`
+  detector measures `max_session_seconds` against it instead
+  (`details["scope"] == "run"`). The default (unkeyed) session, which has no
+  entry to reset on, is unchanged: it *is* the run, from `init()` onward.
+  `started_at` keeps its old meaning — the session's whole existence, never
+  reset — for the new, opt-in `max_session_lifetime_seconds`
+  (`details["scope"] == "lifetime"`), for a customer who wants the old
+  behavior back on purpose. The two fire independently.
+- **T134 — steps are model turns; a new `max_events` counts everything.**
+  `max_steps` counted every recorded event before this — a turn with one
+  model call and three tool calls read as four steps. `SessionState.turns`
+  now counts `llm_call` events only, and `max_steps` (detector `steps`) is
+  measured against it. `SessionState.step_count` is renamed
+  `event_count` (measuring what `max_steps` used to: every recorded event),
+  and a new `max_events` (detector `events`) is measured against it instead.
+  `step_count` is kept for one release as a read-only alias for
+  `event_count`. `ExitDelta.steps_delta` now carries turns, not the raw event
+  count — see "What the plane needs from this" below.
+- **T135 — anomaly ties are resolved by a stated order, not list order.**
+  When more than one detector fires critical on the same event, which one
+  drove the reaction used to depend on `detectors.DEFAULT_DETECTORS`' list
+  order — invisible, and never a decision anyone actually made. A new
+  `runbound.events.PRIORITY` table states the order once (highest first):
+  `policy`, `budget`, `loop`, `error_storm`, `steps`, `events`, `timeout`,
+  `spike`, `velocity`. `Engine._winner` (renamed from `_most_severe`)
+  resolves ties against `(severity, priority, detector name)` instead of
+  iteration order — reversing `DEFAULT_DETECTORS` now produces the same
+  winner. A detector name the table has never heard of (a customer's own)
+  sorts after every named one and warns once; it never crashes the
+  selection. Door anomalies (`halt`, `circuit`, `inflight`, `plane`) are
+  raised before detection runs and are never part of a tie.
+
+  **What the plane needs from this (T146):** `ExitDelta.steps_delta` on the
+  wire now means model turns, not the raw event count it meant before this
+  release — a dashboard's "Steps" column reading it should say "model turns."
+  T146 is the task that changes the plane; this release only prepares the
+  SDK side (`SessionState.turns`, `SessionState.event_count`, the `events`
+  detector) and repoints the one existing wire field. It does not add a
+  separate wire field for the raw event count, `errors_delta`,
+  `tokens_cached_delta`, `last_detector`, or the two trigger fields — those
+  are T146's own addition, together with the plane-side router, ledger and
+  migration this SDK release does not touch.
+
 ### Changed
 
 - README: a "Fleet mode" section (when the plane is contacted, what it adds,

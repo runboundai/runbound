@@ -24,7 +24,7 @@ from collections.abc import Sequence
 from .circuit import CircuitBreaker, is_provider_failure
 from .config import GuardrailConfig
 from .detectors import DEFAULT_DETECTORS, BudgetDetector, LoopDetector, SpikeDetector
-from .events import Anomaly, Event
+from .events import PRIORITY, Anomaly, Event
 from .exceptions import GuardrailTripped, PolicyViolation
 from .policy import ToolCall, ToolPolicy, Violation, coerce, evaluate, merge
 from .shared import LocalState
@@ -163,6 +163,9 @@ class Engine:
         )
         self._alerted: set[tuple] = set()
         self._reported: set[tuple] = set()
+        # A detector name events.PRIORITY has never heard of is warned about
+        # exactly once per engine, not once per event it co-fires in.
+        self._unranked_warned: set[str] = set()
         # A process with no plane must not pay for the fleet seam: reading a
         # circuit's state before every successful call is only worth it when
         # somebody is listening for the transition.
@@ -212,13 +215,13 @@ class Engine:
         for anomaly in anomalies:
             self._alert(anomaly, session)
 
-        worst = _most_severe(anomalies)
+        worst = self._winner(anomalies)
         if worst.detector == LOOP_DETECTOR and self.config.on_loop is not None:
             # A loop policy must never shadow a co-firing non-loop critical:
             # fire-once detectors get no second chance to stop the run.
             others = [a for a in anomalies if a.detector != LOOP_DETECTOR]
-            if others and _most_severe(others).severity == "critical":
-                self._react(_most_severe(others), session)
+            if others and self._winner(others).severity == "critical":
+                self._react(self._winner(others), session)
                 return
             self._react_to_loop(worst, session)
             return
@@ -511,6 +514,17 @@ class Engine:
             int(getattr(shared, "policy_version", 0) or 0),
             bool(getattr(shared, "policy_dry_run", False)),
         )
+
+    def _winner(self, anomalies: list[Anomaly]) -> Anomaly:
+        """The anomaly that drives the reaction (T135).
+
+        Most severe first (any ``critical`` beats any ``warn``); a tie among
+        anomalies of the same severity is broken by :data:`events.PRIORITY` —
+        the one stated order — then by detector name, so the result never
+        depends on which detector happened to run first in ``self.detectors``.
+        Reversing ``DEFAULT_DETECTORS`` produces the same winner.
+        """
+        return min(anomalies, key=lambda a: _anomaly_sort_key(a, self._unranked_warned))
 
     def _detect(self, session: SessionState, event: Event) -> list[Anomaly]:
         """Run every detector; a broken one is logged and skipped."""
@@ -985,9 +999,37 @@ def _detail(anomaly: Anomaly, key: str, default):
     return default if value is None else value
 
 
-def _most_severe(anomalies: list[Anomaly]) -> Anomaly:
-    """First critical anomaly if there is one, else the first anomaly."""
-    for anomaly in anomalies:
-        if anomaly.severity == "critical":
-            return anomaly
-    return anomalies[0]
+#: Severity always outranks priority: any critical anomaly beats any warn
+#: one, whatever their detectors' declared order. Lower rank wins.
+_SEVERITY_RANK = {"critical": 0, "warn": 1}
+
+#: Rank handed to a detector name events.PRIORITY has no entry for — after
+#: every named one, so an unranked detector loses every tie it is in.
+_UNRANKED_PRIORITY = len(PRIORITY)
+
+
+def _priority_rank(detector: str, warned: set[str]) -> int:
+    """``detector``'s tie-break rank from :data:`events.PRIORITY`.
+
+    A detector this table does not know about — a customer's own, or one
+    the table has not caught up with yet — must never crash the winner
+    selection: it sorts last, and this warns about it exactly once (``warned``
+    is one engine's own memo, so a chatty session does not repeat itself).
+    """
+    rank = PRIORITY.get(detector)
+    if rank is not None:
+        return rank
+    if detector not in warned:
+        warned.add(detector)
+        _LOG.warning(
+            "runbound: detector %r has no entry in events.PRIORITY; it will "
+            "lose every tie against a ranked detector until one is added",
+            detector,
+        )
+    return _UNRANKED_PRIORITY
+
+
+def _anomaly_sort_key(anomaly: Anomaly, warned: set[str]) -> tuple:
+    """``(severity_rank, priority_rank, detector_name)`` — lower sorts first."""
+    severity_rank = _SEVERITY_RANK.get(anomaly.severity, len(_SEVERITY_RANK))
+    return (severity_rank, _priority_rank(anomaly.detector, warned), anomaly.detector)

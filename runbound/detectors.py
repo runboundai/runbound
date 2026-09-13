@@ -258,7 +258,13 @@ class VelocityDetector(_FireOnceDetector):
 
 
 class StepDetector(_FireOnceDetector):
-    """Catches an agent that keeps taking steps past its allowed budget."""
+    """Catches an agent that keeps taking steps past its allowed budget.
+
+    An agent step is a model turn (T134): ``max_steps`` is measured against
+    ``state.turns`` (the count of ``llm_call`` events), not every recorded
+    event — a turn that makes three tool calls is one step, not four. See
+    :class:`EventsDetector` for the raw every-event count this used to mean.
+    """
 
     name = "steps"
 
@@ -269,22 +275,61 @@ class StepDetector(_FireOnceDetector):
             return None
 
         with state.lock:
-            step_count = state.step_count
+            turns = state.turns
 
-        if step_count <= config.max_steps:
+        if turns <= config.max_steps:
             return None
 
         return Anomaly(
             detector=self.name,
             severity="critical",
             message=(
-                f"Step limit exceeded: {step_count} steps taken, "
+                f"Step limit exceeded: {turns} steps (model turns) taken, "
                 f"limit {config.max_steps}"
             ),
             details={
                 "session_id": state.session_id,
-                "step_count": step_count,
+                "turns": turns,
                 "max_steps": config.max_steps,
+            },
+        )
+
+
+class EventsDetector(_FireOnceDetector):
+    """Catches a session that keeps generating events past its allowed budget.
+
+    Every recorded event counts — model calls, tool calls, tool requests, and
+    failures alike — which is what ``max_steps`` counted before T134
+    redefined "step" to mean a model turn. Use this when what you actually
+    want bounded is total recorded activity, not just how many times the
+    model itself was called.
+    """
+
+    name = "events"
+
+    def _evaluate(
+        self, state: SessionState, event: Event, config: GuardrailConfig
+    ) -> Anomaly | None:
+        if config.max_events is None:
+            return None
+
+        with state.lock:
+            event_count = state.event_count
+
+        if event_count <= config.max_events:
+            return None
+
+        return Anomaly(
+            detector=self.name,
+            severity="critical",
+            message=(
+                f"Event limit exceeded: {event_count} events recorded, "
+                f"limit {config.max_events}"
+            ),
+            details={
+                "session_id": state.session_id,
+                "event_count": event_count,
+                "max_events": config.max_events,
             },
         )
 
@@ -353,24 +398,81 @@ class TimeoutDetector(_FireOnceDetector):
     the wall clock says this run stopped being work an hour ago.
 
     Any event kind can trip it — a session is running whether it is calling a
-    model, running a tool or failing — and the clock is the monotonic one the
-    session was created on, so it measures elapsed time and never a change to
-    the system clock. ``max_session_seconds`` is the age a session may reach
-    and keep going; the first event past it fires, once per session, as
-    critical.
+    model, running a tool or failing. Two independent clocks, two independent
+    limits, each fired once per session:
+
+    ``max_session_seconds`` (``scope="run"``) measures from
+    ``state.run_started_at``, which the api resets on every entry of a keyed
+    :func:`~runbound.session` block — this is the *run's* clock, so a
+    returning chatbot user's tenth message does not inherit the age of their
+    first. For the default (unkeyed) session, which has no entry to reset on,
+    this is simply the process's own age.
+
+    ``max_session_lifetime_seconds`` (``scope="lifetime"``) measures from
+    ``state.started_at``, which is never reset — the session's age since it
+    was first created, the old identity-scoped meaning, for a customer who
+    wants it back. Off by default.
+
+    Both read the monotonic clock, never the system one, so a clock change
+    cannot fake either. The two fire independently: a session that already
+    tripped the run wall can still trip the lifetime wall later, and vice
+    versa.
     """
 
     name = "timeout"
 
-    def _evaluate(
+    def __init__(self) -> None:
+        super().__init__()
+        # A second, independent fire-once memo: the base class's ``_fired``
+        # is used for the run-scoped wall, this one for the lifetime-scoped
+        # wall, so either can trip without silencing the other.
+        self._fired_lifetime: set[str] = set()
+
+    def check(
         self, state: SessionState, event: Event, config: GuardrailConfig
     ) -> Anomaly | None:
-        limit = config.max_session_seconds
+        """Report a run timeout, else a lifetime timeout, each once per session.
+
+        The run wall is checked first: on an event that could trip both (an
+        unkeyed session with both knobs set to the same number, say) the run
+        anomaly is the one reported, since it is the wall enabled by default
+        and the one every existing caller expects.
+        """
+        session_id = getattr(state, "session_id", "")
+        if session_id not in self._fired:
+            anomaly = self._evaluate_scope(
+                state, event, config.max_session_seconds, "run_started_at", "run"
+            )
+            if anomaly is not None:
+                self._fired.add(session_id)
+                return anomaly
+        if session_id not in self._fired_lifetime:
+            anomaly = self._evaluate_scope(
+                state,
+                event,
+                config.max_session_lifetime_seconds,
+                "started_at",
+                "lifetime",
+            )
+            if anomaly is not None:
+                self._fired_lifetime.add(session_id)
+                return anomaly
+        return None
+
+    @staticmethod
+    def _evaluate_scope(
+        state: SessionState,
+        event: Event,
+        limit: float | None,
+        clock_attr: str,
+        scope: str,
+    ) -> Anomaly | None:
+        """One clock's verdict: ``None`` when off, unreadable, or not yet over."""
         if limit is None:
             return None
 
         try:
-            elapsed = float(event.ts) - float(getattr(state, "started_at", 0.0))
+            elapsed = float(event.ts) - float(getattr(state, clock_attr, 0.0))
         except (TypeError, ValueError):
             return None  # fail-open: an unreadable clock is not an incident
         if elapsed <= limit:
@@ -379,10 +481,10 @@ class TimeoutDetector(_FireOnceDetector):
         key = getattr(state, "key", None)
         whose = f" for session {key!r}" if key else ""
         return Anomaly(
-            detector=self.name,
+            detector=TimeoutDetector.name,
             severity="critical",
             message=(
-                f"Session timeout{whose}: running for {elapsed:.0f}s, "
+                f"Session timeout{whose} ({scope}): running for {elapsed:.0f}s, "
                 f"limit {limit:.0f}s"
             ),
             details={
@@ -391,6 +493,7 @@ class TimeoutDetector(_FireOnceDetector):
                 "tags": dict(getattr(state, "tags", None) or {}),
                 "elapsed_s": elapsed,
                 "limit": float(limit),
+                "scope": scope,
             },
         )
 
@@ -961,6 +1064,7 @@ DEFAULT_DETECTORS = [
     BudgetDetector,
     VelocityDetector,
     StepDetector,
+    EventsDetector,
     SpikeDetector,
     ErrorStormDetector,
     TimeoutDetector,

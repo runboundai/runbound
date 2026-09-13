@@ -330,7 +330,10 @@ def test_escalate_overrides_the_callback_for_loops_but_not_for_other_detectors()
     seen: list[Anomaly] = []
     config = GuardrailConfig(
         loop_threshold=3,
-        max_steps=3,
+        # Steps are model turns (T134): loop_repeats below pushes tool_call
+        # events, which no longer count toward max_steps, so the single
+        # llm_call turn after it must trip the threshold on its own.
+        max_steps=0,
         on_loop="escalate",
         on_anomaly="callback",
         callback=seen.append,

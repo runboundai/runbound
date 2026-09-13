@@ -114,12 +114,14 @@ _POSITIVE_LIMITS = (
     "budget_usd",
     "max_total_tokens",
     "max_steps",
+    "max_events",
     "tokens_per_minute_limit",
     "max_call_seconds",
     "max_tokens_out_per_call",
     "latch_ttl_seconds",
     "error_storm_limit",
     "max_session_seconds",
+    "max_session_lifetime_seconds",
     "max_cost_per_call_usd",
     "max_active_sessions",
     "max_session_depth",
@@ -174,7 +176,12 @@ class GuardrailConfig:
 
     budget_usd: float | None = None
     max_total_tokens: int | None = None
+    # An agent step is a model turn (T134): max_steps is measured against
+    # SessionState.turns, which counts llm_call events only. max_events
+    # counts every recorded event (what max_steps used to mean) and is
+    # measured against SessionState.event_count.
     max_steps: int | None = None
+    max_events: int | None = None
     tokens_per_minute_limit: int | None = None
     loop_threshold: int = 3  # k identical action-hashes => loop
     loop_window: int = 20  # sliding window size (events)
@@ -200,10 +207,21 @@ class GuardrailConfig:
     max_call_seconds: float | None = None  # hard per-call duration cap
     max_tokens_out_per_call: int | None = None  # hard per-call output cap
     max_cost_per_call_usd: float | None = None  # hard per-call dollar cap
-    # How long one session may run, whatever it is doing: a run going for
+    # How long one *run* may go on, whatever it is doing: a run going for
     # hours is an incident even when every individual call looks fine. None
-    # (the default) means no wall clock at all.
+    # (the default) means no wall clock at all. Measured from
+    # SessionState.run_started_at, which the api resets on every entry of a
+    # keyed session() block — this is the run's clock, not the end-user's
+    # identity's clock, so a chatbot user's tenth message next week does not
+    # inherit their first message's age. The unkeyed default session has no
+    # entry to reset on, so for it this is simply the process's own age.
     max_session_seconds: float | None = None
+    # The old, identity-scoped meaning of the above, for a customer who wants
+    # it: how long a session may exist at all, from its first creation,
+    # regardless of how many times it is re-entered. None (the default) means
+    # off. Measured from SessionState.started_at, which is never reset. Fires
+    # as a second "timeout" anomaly with details["scope"] == "lifetime".
+    max_session_lifetime_seconds: float | None = None
     # The shape of a fan-out. A cascade of agents opening sub-sessions costs
     # money in proportion to numbers nobody looked at, so each of these is a
     # number the customer states: sessions open at once across the process,

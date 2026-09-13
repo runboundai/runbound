@@ -955,20 +955,44 @@ The whole climb, end to end and offline:
 ## How we prevent uncontrolled execution — the detectors (implementation)
 
 The headline is the promise above: unbounded or policy-violating execution
-gets stopped deterministically. These seven detectors are how — the
+gets stopped deterministically. These eight detectors are how — the
 implementation, not the pitch. Each is plain counting over in-memory state.
 No detector calls a model, and none of them can be "wrong" in the way a
-classifier can — they report a fact about your session.
+classifier can — they report a fact about your session. Ties among critical
+anomalies that co-fire on the same event are resolved by a fixed precedence,
+not by the order below — see [Which anomaly wins a
+tie](#which-anomaly-wins-a-tie).
 
 | Detector | What it catches | Config knob | Fires when |
 |---|---|---|---|
 | `loop` | The agent repeating the same tool call with the same arguments — whether your code ran it or [the model just asked for it](#model-requested-tool-calls-loops-without-tool) | `loop_threshold` (default 3), `loop_window` (default 20) | The current `tool_call` or `tool_request` event's argument hash appears **at least** `loop_threshold` times in the last `loop_window` recorded actions. Requests are hashed into their own namespace, so three requests and three executions are two threes, not a six. Severity `critical`. |
 | `budget` | A run spending more money or more tokens than allowed | `budget_usd`, `max_total_tokens` | `total_cost_usd > budget_usd`, or `total_tokens > max_total_tokens`. Strictly greater: exactly at the limit does not trip. Cost is reported first if one event blows through both. Severity `critical`. |
 | `velocity` | Burning tokens too fast, regardless of the total | `tokens_per_minute_limit` | Tokens recorded in the trailing 60 seconds (measured from the current event's timestamp) exceed the limit. An entry exactly 60s old still counts. Severity `warn`. |
-| `steps` | An agent that will not stop taking steps | `max_steps` | `step_count > max_steps`. Severity `critical`. |
+| `steps` | An agent that will not stop taking model turns | `max_steps` | `turns > max_steps`, where a turn is one `llm_call` — a model call that makes three tool calls is one step, not four. Severity `critical`. See [max_steps and max_events](#max_steps-and-max_events-steps-are-turns-events-are-events). |
+| `events` | A session generating too much recorded activity, of any kind | `max_events` | `event_count > max_events` — every recorded event counts: model calls, tool calls, tool requests, failures. This is what `max_steps` counted before 0.3.0. Severity `critical`. |
 | `spike` | A session whose model calls stop looking like themselves — thinking mode, a model update, an end-user driving long generations | none (on by default); tune with `spike_*`, cap with `max_call_seconds` / `max_tokens_out_per_call` / `max_cost_per_call_usd` | A call exceeds `spike_factor` × this session's median duration or output work, after `spike_warmup_calls` of history. First one severity `warn` (never stops the agent); `spike_confirm` of the trailing 5 makes it `critical`. A breached hard cap — seconds, output tokens, or dollars on one call — is `critical` immediately, from call #1. See [Spike detection](#spike-detection-zero-config). |
 | `error_storm` | An agent retrying into a wall: a provider answering 429 while every layer above it retries | `error_storm_limit` (default **10**, `None` disables) | More than `error_storm_limit` failed calls — failed model calls *and* failed tools — in the trailing 60 seconds. Severity `critical`. The one detector that is on by default with a number. See [Retry storms](#retry-storms-and-the-provider-circuit-breaker). |
-| `timeout` | A run that stopped being work an hour ago, with no single call looking wrong | `max_session_seconds` | `event.ts - session.started_at > max_session_seconds`, on any event kind, on the monotonic clock. Severity `critical`. See [Time and fan-out limits](#time-and-fan-out-limits). |
+| `timeout` | A run that stopped being work an hour ago, with no single call looking wrong | `max_session_seconds`, `max_session_lifetime_seconds` | `event.ts - session.run_started_at > max_session_seconds` (`details["scope"] == "run"`), on any event kind, on the monotonic clock; or, if set, `event.ts - session.started_at > max_session_lifetime_seconds` (`details["scope"] == "lifetime"`). Each fires independently, once per session. Severity `critical`. See [Time and fan-out limits](#time-and-fan-out-limits). |
+
+### Which anomaly wins a tie
+
+When more than one detector fires critical on the same event, exactly one
+drives the reaction (`on_anomaly`, `on_trip`) — the rest are still alerted,
+just not acted on. Which one wins is a **fixed, stated precedence**
+(`runbound.events.PRIORITY`), not an accident of which detector happened to
+run first:
+
+`policy` > `budget` > `loop` > `error_storm` > `steps` > `events` > `timeout` > `spike` > `velocity`
+
+Read as: a tool-policy violation outranks everything (you wrote that rule
+yourself); then cost, then repetition, then failure, then shape (`steps`,
+`events`), then time, then behavior — `velocity` last, since it is warn-only
+and never stops anything anyway. `halt`, `circuit`, `inflight` and `plane`
+are door refusals, raised before detection ever runs, so they are never in a
+tie with anything. A detector name this table has never heard of — your own,
+custom one — sorts after every named one and warns once; it never crashes
+the selection. This order does not depend on `DEFAULT_DETECTORS`' list order,
+which you are free to reorder or replace when injecting your own detectors.
 
 Two behaviors worth knowing before you tune anything:
 
@@ -983,9 +1007,27 @@ Two behaviors worth knowing before you tune anything:
   unless you set `spike_detection=False`, and `error_storm`, which ships with a
   number (`error_storm_limit=10`) and is off only if you set it to `None`.
 
-**One step is one recorded event**, not one agent iteration: a model call and a
-tool call each get their own step number. An agent doing one model call plus one
-tool call per turn reaches `max_steps=50` after 25 turns.
+### `max_steps` and `max_events`: steps are turns, events are events
+
+**One step is one model turn** (`llm_call` event) — not one agent iteration
+in the older, looser sense, and not every recorded event either. An agent
+that makes one model call and then three tool calls in the same turn has
+taken **one** step, however many events that produced. `max_steps` is
+measured against `SessionState.turns`; an agent alternating one model call
+with one tool call reaches `max_steps=50` after 50 turns (100 events).
+
+**`max_events`** is the raw count instead: every recorded event — model
+calls, tool calls, tool requests, failures — counted once each, measured
+against `SessionState.event_count`. This is what `max_steps` counted before
+0.3.0. Use it when what you actually want bounded is total recorded
+activity, not how many times the model itself ran.
+
+The two are independent and both optional: three model calls plus seven tool
+calls is `turns == 3` and `event_count == 10`; `max_steps=3` and
+`max_events=10` each trip on their own turn, whichever you set.
+`SessionState.step_count` is kept for one release as a read-only alias for
+`event_count` — the pre-0.3.0 name for the pre-0.3.0 meaning — but new code
+should read `turns` or `event_count` by name instead.
 
 **Where in the call the trip happens** differs by detector, and it matters:
 
@@ -1032,7 +1074,8 @@ keyword on this call.
 | `on_provider_failure` | `"notify"` / `"open"` | `"notify"` | What a provider that keeps failing does to your calls. **notify**: count the failures and alert once when `circuit_failure_threshold` of them land inside `circuit_window_seconds` — nothing is ever blocked. **open**: also refuse calls — the wrapped client raises `CircuitOpen` (a `GuardrailTripped`, with `.provider`) **before** touching the provider for `circuit_cooldown_seconds`, then lets exactly one probe through; a successful probe closes the circuit. Your app catches it and picks its own fallback — [we never route](#retry-storms-and-the-provider-circuit-breaker). The circuit is per provider and process-wide, so it stops nobody's session and latches nothing. |
 | `max_active_sessions`, `max_session_depth`, `max_child_sessions` | `None` / a number | `None` | The fan-out limits. A `session()` block that would take the run past one of them raises `GuardrailTripped` (detector `fanout`) **at the door, before its body runs**. **This row ignores `on_anomaly`** — like the per-call caps, these are numbers you stated — and it **latches nothing**: what was wrong is the shape of the run, not this end-user, so the next block is judged on its own. See [Time and fan-out limits](#time-and-fan-out-limits). |
 | `max_inflight_calls` | `None` / a number | `None` | How many calls to one endpoint may be in flight at once. The call that would take a provider label past it raises `GuardrailTripped` (detector `inflight`) **before the request goes out**. **This row ignores `on_anomaly`** — the number is one you stated — and **latches nothing**: the moment a slot frees up the next call goes through. Alerted once per endpoint. See [Self-hosted models](#self-hosted-models). |
-| `max_session_seconds` | `None` / seconds | `None` | The wall clock. Unlike the row above, this one is an ordinary detector (`timeout`): it is `critical`, fires once per session, and follows `on_anomaly` and `on_trip` like `budget` does. |
+| `max_steps`, `max_events` | `None` / a number | `None` | Unlike the two rows above, both are ordinary detectors (`steps`, `events`): `critical`, follow `on_anomaly` and `on_trip` like `budget` does. **They count different things, not the same thing at two thresholds**: `max_steps` counts model turns (`llm_call` events) only, `max_events` counts every recorded event. Set both if you want an independent wall on each. See [max_steps and max_events](#max_steps-and-max_events-steps-are-turns-events-are-events). |
+| `max_session_seconds`, `max_session_lifetime_seconds` | `None` / seconds | `None` | The two wall clocks. Also ordinary detectors (`timeout`), like the row above: `critical`, follows `on_anomaly` and `on_trip` like `budget` does. `max_session_seconds` measures the *run* — reset on every `session(key)` entry — and fires with `details["scope"] == "run"`; `max_session_lifetime_seconds` measures since the session's first-ever creation and fires with `details["scope"] == "lifetime"`. Each fires once per session, independently of the other. See [Time and fan-out limits](#time-and-fan-out-limits). |
 | `on_halt` | `"raise"` / `"warn"` | `"raise"` | What an org-wide halt from [the control plane](#fleet-mode--one-truth-across-all-your-workers-control-plane) does to this worker. **raise**: every guarded `session()` block is refused **at the door** with `GuardrailTripped` (detector `halt`) — that is what a kill switch is for. **warn**: nothing is refused; the halt is logged at most once a minute, so you can prove the switch reaches your workers before you let it stop them. **This row ignores `on_anomaly`** and **latches nothing**: by default the halt lifts by itself 60 s after the last contact with the plane — see `stale_halt` below for the other choice. |
 | `stale_halt` | `"release"` / `"hold"` | `"release"` | What an **enforced** halt does while the plane link itself goes degraded (not the same question as whether to enforce a halt at all — that is `on_halt`). **release**: the halt stops being enforced 60 s after the last successful contact with the plane, so a dead plane cannot keep a fleet stopped forever. **hold**: the halt stays enforced past that window, until a heartbeat explicitly says otherwise — pick this when a false "all clear" costs you more than a stuck kill switch. `plane_status().halt_stale_s` reports how long a currently-enforced halt has been stale. |
 | `on_plane_loss` | `"guard_locally"` / `"refuse"` | `"guard_locally"` | What entering a `session()` block does when the plane could not answer the entry question at all (timeout, error, a degraded link with no fresh cached decision) — a different moment from an *answered* refusal, which is always honored regardless of this setting. **guard_locally**: fall back to local detection alone, today's behavior. **refuse**: refuse the entry itself (detector `plane`, `GuardrailTripped`) rather than guess — latches nothing, costs no strike, and the very next entry asks the plane again. An invalid token is a configuration error, not plane loss, and guards locally under **both** settings (logged at most once a minute) — this option is only about a plane that could not be reached or answer, not one that rejected your credentials. |
@@ -1042,7 +1085,7 @@ keyword on this call.
 | Fleet circuit | follows `on_provider_failure` | `"notify"` | The plane can open or close a provider circuit on **every** worker at once, so one outage is discovered once for the fleet. What an open circuit *does* here is unchanged and still yours: **notify** alerts and lets every call through, **open** raises `CircuitOpen` before the call. Like a local circuit, it stops no session and latches nothing. |
 | `tool_policy.on_violation` | `"block"` / `"block_and_latch"` / `"dry_run"` | `"block"` | What a tool call that breaks [your action policy](#action-policy--rules-for-what-your-agent-may-do) does. **block**: refuse that one call — `PolicyViolation` (a `GuardrailTripped`) is raised on the agent's thread, the tool body never runs, and the session keeps going. **block_and_latch**: refuse it *and* stop the session, honoring `on_trip` (under `"once"`, only that call). **dry_run**: let the call run, and log and alert what would have been refused — how you roll a policy out. **This row ignores `on_anomaly`**: the rule is one you stated about your own agent, so it is enforced whether or not detectors are set to stop anything. |
 
-Which detectors can latch a session: `budget`, `steps`, `error_storm`,
+Which detectors can latch a session: `budget`, `steps`, `events`, `error_storm`,
 `timeout`, a `loop` under `"break"` / escalate-critical, a hard cap, a `spike`
 only under `on_spike="trip"` or the ladder's `on_spike="limit"` (where the latch
 is what serves the cooldown), and `policy` under
@@ -1553,11 +1596,23 @@ runbound.init(
 )
 ```
 
-**`max_session_seconds` is a detector** (`timeout`). Any event kind trips it —
-a session is running whether it is calling a model, running a tool, or
-failing — measured on the monotonic clock the session started on, so a system
-clock change cannot fake it. It fires once per session, `critical`, and follows
-`on_anomaly` and `on_trip` exactly like `budget` does.
+**`max_session_seconds` and `max_session_lifetime_seconds` are both the
+`timeout` detector**, reading two different clocks. Any event kind trips
+either — a session is running whether it is calling a model, running a tool,
+or failing — measured on the monotonic clock, never the system one, so a
+clock change cannot fake either. Each fires once per session, `critical`,
+and follows `on_anomaly` and `on_trip` exactly like `budget` does.
+
+| Clock | Measures | Keyed session (`session(key)`) | Unkeyed (default) session |
+|---|---|---|---|
+| `max_session_seconds` (`details["scope"] == "run"`) | The current *run* | Reset on **every entry** of `session(key)` — a returning end-user's next message starts a fresh clock, not a continuation of their first one ever. | Never reset: the default session guards the whole process, so it *is* the run, from `init()` onward. |
+| `max_session_lifetime_seconds` (`details["scope"] == "lifetime"`) | The session's whole existence | Set once, at the key's first-ever entry, and never reset — the old (pre-0.3.0) meaning of `max_session_seconds`, for a customer who wants it back. `None` (off) by default. | Identical to `max_session_seconds` here, since the default session is never re-entered — this knob exists for keyed sessions. |
+
+A keyed chatbot session entered three times over 70 minutes, each block
+short, never trips `max_session_seconds=3600` — the run clock resets each
+time. One block that itself runs 3601 seconds does. `max_session_lifetime_seconds`
+trips on the *sum* of the key's whole history instead, whenever you set it —
+independently of whether the run clock ever trips.
 
 **The three fan-out limits are enforced at the door.** Entering
 `runbound.session(key)` records where the block sits — its depth, its parent,
@@ -1614,7 +1669,8 @@ keyword`.
 |---|---|---|---|
 | `budget_usd` | `float \| None` | `None` | Dollar cap for the session. Trips when total estimated cost exceeds it. |
 | `max_total_tokens` | `int \| None` | `None` | Token cap for the session (input + output). Works for unpriced and local models. |
-| `max_steps` | `int \| None` | `None` | Maximum recorded events in the session. |
+| `max_steps` | `int \| None` | `None` | Maximum model turns (`llm_call` events) in the session. An agent step is a model turn, not every recorded event — see [max_steps and max_events](#max_steps-and-max_events-steps-are-turns-events-are-events). |
+| `max_events` | `int \| None` | `None` | Maximum recorded events in the session — every kind counted once each. What `max_steps` counted before 0.3.0. |
 | `tokens_per_minute_limit` | `int \| None` | `None` | Ceiling on tokens in any trailing 60-second window. |
 | `loop_threshold` | `int` | `3` | Identical tool-call hashes within the window that count as a loop. Must be >= 2. |
 | `loop_window` | `int` | `20` | How many recent tool calls are remembered. Must be >= `loop_threshold`. |
@@ -1636,7 +1692,8 @@ keyword`.
 | `max_call_seconds` | `float \| None` | `None` | Hard per-call duration ceiling. Breaching it is `critical` on the first call, no warm-up. |
 | `max_tokens_out_per_call` | `int \| None` | `None` | Hard per-call ceiling on output work — the provider's completion-token count, which already includes reasoning tokens. Same immediate `critical`. |
 | `max_cost_per_call_usd` | `float \| None` | `None` | Hard per-call ceiling on estimated dollars for one model call. Same immediate `critical`, from call #1; reported by `spike` with `details["metric"] == "cost_usd"`. `$0.00` for unpriced models — cap tokens there instead. |
-| `max_session_seconds` | `float \| None` | `None` | Wall-clock ceiling on one session, on the monotonic clock. Any event kind trips it; `critical`, once per session, follows `on_anomaly`. See [Time and fan-out limits](#time-and-fan-out-limits). |
+| `max_session_seconds` | `float \| None` | `None` | Wall-clock ceiling on one *run*, on the monotonic clock. Reset on every `session(key)` entry (unchanged for the default session, which never re-enters). Any event kind trips it; `critical`, once per session, follows `on_anomaly`, `details["scope"] == "run"`. See [Time and fan-out limits](#time-and-fan-out-limits). |
+| `max_session_lifetime_seconds` | `float \| None` | `None` | Wall-clock ceiling on a keyed session's whole existence, since its first-ever entry — never reset. The pre-0.3.0 meaning of `max_session_seconds`, for a customer who wants it. `critical`, once per session, follows `on_anomaly`, `details["scope"] == "lifetime"`. See [Time and fan-out limits](#time-and-fan-out-limits). |
 | `max_active_sessions` | `int \| None` | `None` | How many `session()` blocks may be open at once, process-wide. Enforced at the door, whatever `on_anomaly` says; latches nothing. |
 | `max_session_depth` | `int \| None` | `None` | How deep `session()` blocks may nest. A top-level block is depth `0`, so `2` permits it plus two levels under it. Same door, same rules. |
 | `max_child_sessions` | `int \| None` | `None` | How many distinct child sessions one session may open. Same door, same rules. |
@@ -1674,10 +1731,10 @@ keyword`.
 | `loop_ignore_tools` | `tuple[str, ...]` | `()` | Tool names exempt from the loop window by policy rather than by decorator — equivalent to `@runbound.tool(repeatable=True)` for every call to that name, whoever runs it (executed or model-requested). They still count toward `tool_calls()` and any `max_calls` in your action policy. For marking a tool that is *meant* to repeat (polling a job, checking a status) — not for tuning around a real loop. |
 | `refusals` | `dict \| None` | `None` | **Opt-in.** Your own HTTP status and sentence for a refusal, by detector (including `"plane"`) or `"default"`. Validated at `init()` — a bad status or an over-length message raises `ValueError` naming the key. A control-plane profile overrides this field by field; unset, `BUILTIN` answers. See [What the end user sees](#what-the-end-user-sees--your-words-your-status). |
 
-Every limit knob — `budget_usd`, `max_total_tokens`, `max_steps`,
+Every limit knob — `budget_usd`, `max_total_tokens`, `max_steps`, `max_events`,
 `tokens_per_minute_limit`, `max_call_seconds`, `max_tokens_out_per_call`,
-`max_cost_per_call_usd`, `max_session_seconds`, `max_active_sessions`,
-`max_session_depth`, `max_child_sessions`, `max_inflight_calls`,
+`max_cost_per_call_usd`, `max_session_seconds`, `max_session_lifetime_seconds`,
+`max_active_sessions`, `max_session_depth`, `max_child_sessions`, `max_inflight_calls`,
 `error_storm_limit`, `latch_ttl_seconds` — must be positive or `None`. The three `circuit_*` knobs
 are always on and must be positive.
 
@@ -1859,7 +1916,7 @@ are the right ones:
 | `max_tokens_out_per_call` | The output explosion: a model that will not stop generating. |
 | `max_call_seconds`, `max_session_seconds` | Latency and the run that never ends. |
 | `max_active_sessions`, `max_session_depth`, `max_child_sessions` | Fan-out — the sub-agent cascade that fills the queue with work nobody asked for. |
-| `max_total_tokens`, `max_steps` | The session-wide walls that need no prices at all. |
+| `max_total_tokens`, `max_steps`, `max_events` | The session-wide walls that need no prices at all. |
 
 **Want dollars anyway? Price your own hardware.** `custom_prices` is
 `model -> (usd per 1M input tokens, usd per 1M output tokens)`, and nothing

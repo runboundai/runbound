@@ -9,6 +9,7 @@ from runbound.detectors import (
     DEFAULT_DETECTORS,
     BudgetDetector,
     ErrorStormDetector,
+    EventsDetector,
     LoopDetector,
     SpikeDetector,
     StepDetector,
@@ -381,13 +382,14 @@ def test_velocity_sessions_fire_independently():
 
 
 # --------------------------------------------------------------------------
-# StepDetector
+# StepDetector — an agent step is a model turn (T134), so these use llm_event
+# rather than tool_event: a tool call must never move this counter.
 # --------------------------------------------------------------------------
 
 
 def test_steps_disabled_when_knob_none():
     config = GuardrailConfig()
-    event = tool_event(step=9999, ts=1.0)
+    event = llm_event(step=9999, ts=1.0)
     state = replay([event])
 
     assert StepDetector().check(state, event, config) is None
@@ -395,25 +397,38 @@ def test_steps_disabled_when_knob_none():
 
 def test_steps_silent_when_exactly_at_limit():
     config = GuardrailConfig(max_steps=5)
-    event = tool_event(step=5, ts=1.0)
-    state = replay([event])
+    events = [llm_event(step=i, ts=float(i)) for i in range(1, 6)]
+    state = replay(events)
 
-    assert state.step_count == 5
-    assert StepDetector().check(state, event, config) is None
+    assert state.turns == 5
+    assert StepDetector().check(state, events[-1], config) is None
+
+
+def test_a_tool_call_never_advances_the_step_count():
+    """The heart of T134: steps are model turns, tool calls are not steps."""
+    config = GuardrailConfig(max_steps=1)
+    events = [llm_event(step=1, ts=1.0)] + [
+        tool_event(step=i, ts=float(i)) for i in range(2, 10)
+    ]
+    state = replay(events)
+
+    assert state.turns == 1
+    assert state.event_count == 9
+    assert StepDetector().check(state, events[-1], config) is None
 
 
 def test_steps_fires_when_strictly_above_limit():
     config = GuardrailConfig(max_steps=5)
-    event = tool_event(step=6, ts=1.0)
-    state = replay([event])
+    events = [llm_event(step=i, ts=float(i)) for i in range(1, 7)]
+    state = replay(events)
 
-    anomaly = StepDetector().check(state, event, config)
+    anomaly = StepDetector().check(state, events[-1], config)
 
     assert anomaly is not None
     assert anomaly.detector == "steps"
     assert anomaly.severity == "critical"
     assert "6" in anomaly.message
-    assert anomaly.details["step_count"] == 6
+    assert anomaly.details["turns"] == 6
     assert anomaly.details["max_steps"] == 5
     assert anomaly.details["session_id"] == "s1"
 
@@ -421,25 +436,96 @@ def test_steps_fires_when_strictly_above_limit():
 def test_steps_fires_once_per_session():
     config = GuardrailConfig(max_steps=5)
     detector = StepDetector()
-    first = tool_event(step=6, ts=1.0)
-    state = replay([first])
+    events = [llm_event(step=i, ts=float(i)) for i in range(1, 7)]
+    state = replay(events)
 
-    assert detector.check(state, first, config) is not None
+    assert detector.check(state, events[-1], config) is not None
 
-    second = tool_event(step=7, ts=2.0)
-    state.record(second)
-    assert detector.check(state, second, config) is None
+    seventh = llm_event(step=7, ts=7.0)
+    state.record(seventh)
+    assert detector.check(state, seventh, config) is None
 
 
 def test_steps_sessions_fire_independently():
     config = GuardrailConfig(max_steps=5)
     detector = StepDetector()
-    event = tool_event(step=6, ts=1.0)
-    state_a = replay([event], session_id="a")
-    state_b = replay([event], session_id="b")
+    events = [llm_event(step=i, ts=float(i)) for i in range(1, 7)]
+    state_a = replay(events, session_id="a")
+    state_b = replay(events, session_id="b")
 
-    assert detector.check(state_a, event, config) is not None
-    assert detector.check(state_b, event, config) is not None
+    assert detector.check(state_a, events[-1], config) is not None
+    assert detector.check(state_b, events[-1], config) is not None
+
+
+# --------------------------------------------------------------------------
+# EventsDetector — max_events counts every recorded event (T134's new knob,
+# what max_steps used to mean).
+# --------------------------------------------------------------------------
+
+
+def test_events_disabled_when_knob_none():
+    config = GuardrailConfig()
+    event = tool_event(step=9999, ts=1.0)
+    state = replay([event])
+
+    assert EventsDetector().check(state, event, config) is None
+
+
+def test_events_silent_when_exactly_at_limit():
+    config = GuardrailConfig(max_events=5)
+    events = [tool_event(step=i, ts=float(i)) for i in range(1, 6)]
+    state = replay(events)
+
+    assert state.event_count == 5
+    assert EventsDetector().check(state, events[-1], config) is None
+
+
+def test_events_fires_when_strictly_above_limit():
+    config = GuardrailConfig(max_events=5)
+    events = [tool_event(step=i, ts=float(i)) for i in range(1, 7)]
+    state = replay(events)
+
+    anomaly = EventsDetector().check(state, events[-1], config)
+
+    assert anomaly is not None
+    assert anomaly.detector == "events"
+    assert anomaly.severity == "critical"
+    assert "6" in anomaly.message
+    assert anomaly.details["event_count"] == 6
+    assert anomaly.details["max_events"] == 5
+    assert anomaly.details["session_id"] == "s1"
+
+
+def test_events_fires_once_per_session():
+    config = GuardrailConfig(max_events=5)
+    detector = EventsDetector()
+    events = [tool_event(step=i, ts=float(i)) for i in range(1, 7)]
+    state = replay(events)
+
+    assert detector.check(state, events[-1], config) is not None
+
+    seventh = tool_event(step=7, ts=7.0)
+    state.record(seventh)
+    assert detector.check(state, seventh, config) is None
+
+
+def test_events_and_steps_trip_independently():
+    """3 model calls + 7 tool calls = 3 steps, 10 events (T134 acceptance)."""
+    config = GuardrailConfig(max_steps=2, max_events=9)
+    llm_events = [llm_event(step=i, ts=float(i)) for i in range(1, 4)]
+    tool_events = [tool_event(step=i, ts=float(i)) for i in range(4, 11)]
+    state = replay(llm_events + tool_events)
+
+    assert state.turns == 3
+    assert state.event_count == 10
+    assert state.step_count == 10  # deprecated alias for event_count
+
+    last = tool_events[-1]
+    steps_anomaly = StepDetector().check(state, last, config)
+    events_anomaly = EventsDetector().check(state, last, config)
+
+    assert steps_anomaly is not None and steps_anomaly.detector == "steps"
+    assert events_anomaly is not None and events_anomaly.detector == "events"
 
 
 # --------------------------------------------------------------------------
@@ -447,12 +533,13 @@ def test_steps_sessions_fire_independently():
 # --------------------------------------------------------------------------
 
 
-def test_default_detectors_are_the_seven_classes():
+def test_default_detectors_are_the_eight_classes():
     assert DEFAULT_DETECTORS == [
         LoopDetector,
         BudgetDetector,
         VelocityDetector,
         StepDetector,
+        EventsDetector,
         SpikeDetector,
         ErrorStormDetector,
         TimeoutDetector,
@@ -465,6 +552,7 @@ def test_detectors_expose_their_names():
         "budget",
         "velocity",
         "steps",
+        "events",
         "spike",
         "error_storm",
         "timeout",

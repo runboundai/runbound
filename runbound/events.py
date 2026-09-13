@@ -90,7 +90,39 @@ class Anomaly:
     detector; ``details`` carries the same numbers machine-readably.
     """
 
-    detector: str  # "loop" | "budget" | "velocity" | "steps"
+    detector: str  # "loop" | "budget" | "velocity" | "steps" | "events" | ...
     severity: str  # "warn" | "critical"
     message: str  # human-readable, includes numbers
     details: dict
+
+
+#: Which detector wins a tie among anomalies of the same severity (T135).
+#:
+#: Before this, ties among critical anomalies co-firing on the same event
+#: were decided by the order ``detectors.DEFAULT_DETECTORS`` happened to list
+#: them in — invisible, and an accident of that list's history rather than a
+#: stated decision. This is the one place the order is stated; the engine's
+#: winner-selection (``engine._winner``) reads it instead of iteration order,
+#: so reversing ``DEFAULT_DETECTORS`` produces the same winner.
+#:
+#: Lower number wins. Fixed order (EM decision, highest first): a policy
+#: violation outranks everything (the customer wrote the rule themselves);
+#: then budget, loop, error_storm, steps, events, timeout, spike, velocity —
+#: roughly cost, then repetition, then failure, then shape, then time, then
+#: behavior, with velocity (warn-only, never stops anything) last. Door
+#: anomalies (``halt``, ``circuit``, ``inflight``, ``plane``) are never in a
+#: tie because they are raised before detection ever runs, so they have no
+#: entry here. A detector not listed here — a customer's own, or one this
+#: table has not caught up with yet — sorts after every named one and never
+#: crashes the selection; see ``engine._priority_rank``.
+PRIORITY: dict[str, int] = {
+    "policy": 0,
+    "budget": 1,
+    "loop": 2,
+    "error_storm": 3,
+    "steps": 4,
+    "events": 5,
+    "timeout": 6,
+    "spike": 7,
+    "velocity": 8,
+}

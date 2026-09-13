@@ -85,6 +85,18 @@ class SessionState:
     exact-priced fleet next to an experimental unpriced model can see how much
     of the total is a guess.
 
+    ``run_started_at`` is the clock ``max_session_seconds`` measures against:
+    the monotonic instant this *run* began. For the default (unkeyed) session
+    it is set once, at creation, because that session guards the whole
+    process and *is* the run. For a keyed session it is reset by the api on
+    every entry of :func:`~runbound.session` (before the fleet sync), because
+    a returning chatbot user's next message is a new run, not a continuation
+    of the first one they ever sent — a session reused across requests must
+    not read as "running" since their very first message. ``started_at``
+    keeps its original meaning (the session's *lifetime*, from creation) for
+    ``max_session_lifetime_seconds``, the opt-in cap for a customer who wants
+    the old, identity-scoped meaning back.
+
     ``spend_offset_usd`` and ``tokens_offset`` are what the *rest of the fleet*
     has already spent under this session's key, handed over by the control
     plane when the session was entered and added to the local counters by the
@@ -180,7 +192,8 @@ class SessionState:
         self.ladder_history: deque[tuple[int, int, float, str]] = deque(
             ladder_history or (), maxlen=10
         )
-        self.step_count = 0
+        self.event_count = 0
+        self.turns = 0
         self.tool_calls: dict[str, int] = {}
         self.total_tokens = 0
         self.total_cost_usd = 0.0
@@ -189,6 +202,7 @@ class SessionState:
         self.tokens_offset = 0
         self.fleet_generation: int | None = None
         self.started_at = time.monotonic()
+        self.run_started_at = self.started_at
         self.recent_hashes: deque[str] = deque(maxlen=loop_window)
         self.recent_calls: deque[tuple[float, int, float]] = deque(maxlen=spike_window)
         self.token_timestamps: deque[tuple[float, int]] = deque()
@@ -204,6 +218,18 @@ class SessionState:
         with self.lock:
             self._steps += 1
             return self._steps
+
+    @property
+    def step_count(self) -> int:
+        """Deprecated read-only alias for ``event_count`` (T134).
+
+        Before this release "steps" meant every recorded event; it now means
+        model turns (:attr:`turns`), and ``max_steps`` is measured against
+        that instead. This alias is kept for one release for anyone already
+        reading ``session.step_count`` expecting the old, every-event count —
+        assign to :attr:`event_count` instead, this attribute cannot be set.
+        """
+        return self.event_count
 
     def record_ladder_transition(
         self,
@@ -249,10 +275,15 @@ class SessionState:
     def record(self, event: Event) -> None:
         """Fold one event into the session counters, atomically.
 
-        ``step_count`` tracks the highest step seen rather than the number of
-        events, so several events on one step (an llm_call plus its tool_call)
-        do not inflate it. Only ``tool_call`` and ``tool_request`` events with a
-        hash contribute to the loop window — and only when they are not
+        ``event_count`` tracks the highest step seen rather than the number
+        of events folded so far, so several events sharing one step (an
+        llm_call plus its tool_call) do not inflate it; ``max_events`` is
+        measured against it. ``turns`` counts ``llm_call`` events only — one
+        agent step is one model turn — and ``max_steps`` is measured against
+        that instead (T134; ``step_count`` is a read-only alias for
+        ``event_count``, kept for one release). Only ``tool_call`` and
+        ``tool_request`` events with a hash contribute to the loop window —
+        and only when they are not
         ``loop_exempt`` (``@runbound.tool(repeatable=True)``, or a name in
         ``loop_ignore_tools``): such a call is marked "supposed to repeat" and
         never feeds the window, but still raises ``tool_calls`` below, since it
@@ -279,7 +310,7 @@ class SessionState:
         """
         tokens = event.tokens_in + event.tokens_out
         with self.lock:
-            self.step_count = max(self.step_count, event.step)
+            self.event_count = max(self.event_count, event.step)
             self.total_tokens += tokens
             self.total_cost_usd += event.cost_usd
             if event.priced == "estimated":
@@ -297,6 +328,7 @@ class SessionState:
                     self.tool_calls.get(event.tool_name, 0) + 1
                 )
             if event.kind == "llm_call":
+                self.turns += 1
                 # Providers already include reasoning/thinking tokens inside
                 # the completion count, so tokens_out IS the output work —
                 # adding tokens_reasoning again would double-count and make

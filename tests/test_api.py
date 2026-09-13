@@ -249,8 +249,12 @@ def test_loop_trips_before_the_tool_body_runs():
     assert calls == ["cats", "cats"]  # the tripping call never ran the tool
 
 
-def test_step_limit_trips_through_the_decorator():
-    runbound.init(max_steps=2, on_anomaly="raise")
+def test_event_limit_trips_through_the_decorator():
+    """T134: steps are model turns now, so tool calls (what @runbound.tool
+    records) trip max_events, not max_steps — this test used to pin the old
+    "steps = every event" meaning with max_steps; it now exercises max_events
+    instead, which is what that meaning became."""
+    runbound.init(max_events=2, on_anomaly="raise")
 
     @runbound.tool
     def ping(n):
@@ -261,6 +265,20 @@ def test_step_limit_trips_through_the_decorator():
 
     with pytest.raises(GuardrailTripped) as excinfo:
         ping(3)
+
+    assert excinfo.value.anomaly.detector == "events"
+
+
+def test_step_limit_trips_through_a_model_call():
+    """T134: max_steps now counts model turns, which the tool decorator does
+    not produce — this exercises the redefined meaning directly."""
+    runbound.init(max_steps=2, on_anomaly="raise")
+
+    runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)
+    runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)
+
+    with pytest.raises(GuardrailTripped) as excinfo:
+        runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)
 
     assert excinfo.value.anomaly.detector == "steps"
 

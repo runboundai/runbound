@@ -148,6 +148,14 @@ class ExitDelta:
     Deltas, not totals: two workers on the same key each report their own
     share, and the plane adds them up. ``seq`` orders one worker's reports so
     a retry cannot be counted twice.
+
+    ``steps_delta`` carries **model turns** (T134: an agent step is one model
+    turn, not every recorded event) — a session with 3 model calls and 7 tool
+    calls reports ``steps_delta=3``, not ``10``. Before T134 this field
+    carried the raw event count, which is what ``max_steps`` used to mean;
+    a dashboard reading this field's old meaning needs to be told the units
+    changed underneath it. A later task adds the raw event count and the
+    other fields the dashboard needs back onto the wire explicitly.
     """
 
     key_hash: str = ""

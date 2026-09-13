@@ -567,3 +567,24 @@ def test_recent_calls_window_comes_from_the_configured_spike_window():
 def test_session_is_exported():
     assert runbound.session is api.session
     assert "session" in runbound.__all__
+
+
+# --- _exit_delta carries model turns, not raw events (T134) -----------------
+
+
+def test_exit_delta_steps_delta_carries_turns_not_events():
+    """3 model calls + 7 tool calls = 3 steps, 10 events; the wire delta's
+    steps_delta reflects the turns count, since T134 redefined "steps"."""
+    state = SessionState("s1", key="user:1")
+    for i in range(1, 4):
+        state.record(Event(kind="llm_call", ts=float(i), step=i, tokens_out=1))
+    for i in range(4, 11):
+        state.record(Event(kind="tool_call", ts=float(i), step=i, tool_name="search"))
+
+    assert state.turns == 3
+    assert state.event_count == 10
+
+    delta = api._exit_delta("user:1", state)
+
+    assert delta is not None
+    assert delta.steps_delta == 3

@@ -644,6 +644,10 @@ def session(key: str, tags: dict | None = None) -> Iterator[SessionState | None]
         yield None
         return
     state = _rolled_over(key, state)
+    # The run's clock starts now, not at this session's first-ever creation:
+    # max_session_seconds measures the run, and this key's own history is
+    # what max_session_lifetime_seconds is for (T133).
+    state.run_started_at = time.monotonic()
     _sync_entry(key, state)
     _refuse_fanout(state)
     _refuse_if_tripped(state)
@@ -964,11 +968,14 @@ def _exit_delta(key: str, state: SessionState) -> "ExitDelta | None":
     instead of counting a block's spend twice. Counters only ever go up, so
     every delta is clamped at zero: a session reset underneath us costs the
     plane one empty report, never a negative budget.
+
+    ``steps_delta`` carries model turns (T134: an agent step is a turn, not
+    every recorded event) — ``state.turns`` here, not ``state.event_count``.
     """
     with state.lock:
         spend = float(state.total_cost_usd)
         tokens = int(state.total_tokens)
-        steps = int(state.step_count)
+        steps = int(state.turns)
         tools = dict(state.tool_calls)
     session_id = getattr(state, "session_id", "")
     with _LOCK:

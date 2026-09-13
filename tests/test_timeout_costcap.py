@@ -22,8 +22,16 @@ HOUR = 3600.0
 
 
 def state_at(started_at: float = 0.0, key: str | None = None, tags: dict | None = None):
+    """A session whose run clock (and lifetime clock) started at ``started_at``.
+
+    ``run_started_at`` is set alongside ``started_at`` (T133 split them, and
+    ``max_session_seconds`` now reads the former) so every test below that was
+    written against the single old clock keeps exercising the same scenario:
+    a session that has been running, uninterrupted, since ``started_at``.
+    """
     state = SessionState("s1", key=key, tags=tags)
     state.started_at = started_at
+    state.run_started_at = started_at
     return state
 
 
@@ -108,6 +116,7 @@ def test_another_session_is_still_timed_out():
     assert detector.check(state_at(0.0), event(ts=3601.0), config) is not None
     other = SessionState("s2", key="user:2")
     other.started_at = 0.0
+    other.run_started_at = 0.0
     assert detector.check(other, event(ts=3601.0), config) is not None
 
 
@@ -121,11 +130,15 @@ def test_any_event_kind_can_time_a_session_out(kind):
 
 
 def test_a_malformed_session_is_silent_rather_than_raising():
-    """Fail-open: the detector never takes down the host it is watching."""
+    """Fail-open: the detector never takes down the host it is watching.
+
+    ``run_started_at`` (not ``started_at``) is what the run-scoped clock now
+    reads (T133), so that is the attribute this test corrupts.
+    """
 
     class Odd:
         session_id = "x"
-        started_at = "not a number"
+        run_started_at = "not a number"
 
     config = GuardrailConfig(max_session_seconds=HOUR)
 
@@ -134,6 +147,74 @@ def test_a_malformed_session_is_silent_rather_than_raising():
 
 def test_timeout_is_one_of_the_default_detectors():
     assert TimeoutDetector in DEFAULT_DETECTORS
+
+
+# --- the lifetime clock (T133: max_session_lifetime_seconds) ---------------
+
+
+def test_no_lifetime_limit_means_no_lifetime_timeout():
+    detector, state = TimeoutDetector(), state_at(0.0)
+
+    assert detector.check(state, event(ts=1e9), GuardrailConfig()) is None
+
+
+def test_a_session_past_its_lifetime_limit_trips_with_lifetime_scope():
+    detector, state = TimeoutDetector(), state_at(0.0)
+    config = GuardrailConfig(max_session_lifetime_seconds=HOUR)
+
+    anomaly = detector.check(state, event(ts=3601.0), config)
+
+    assert anomaly is not None
+    assert anomaly.detector == "timeout"
+    assert anomaly.details["scope"] == "lifetime"
+    assert anomaly.details["elapsed_s"] == pytest.approx(3601.0)
+
+
+def test_a_session_exactly_at_the_lifetime_limit_is_silent():
+    detector, state = TimeoutDetector(), state_at(0.0)
+    config = GuardrailConfig(max_session_lifetime_seconds=HOUR)
+
+    assert detector.check(state, event(ts=HOUR), config) is None
+
+
+def test_the_run_scope_anomaly_says_scope_run():
+    detector, state = TimeoutDetector(), state_at(0.0)
+    config = GuardrailConfig(max_session_seconds=HOUR)
+
+    anomaly = detector.check(state, event(ts=3601.0), config)
+
+    assert anomaly.details["scope"] == "run"
+
+
+def test_run_and_lifetime_walls_trip_independently():
+    """A run reset well inside its lifetime can still trip the lifetime wall,
+    and a session under its lifetime cap can still trip on one long run —
+    each wall fires once, on its own clock, regardless of the other."""
+    detector = TimeoutDetector()
+    state = state_at(0.0)
+    # The run clock resets (as api.session() would do on re-entry), but the
+    # lifetime clock — since creation — has run past its cap.
+    state.run_started_at = 10_000.0
+    config = GuardrailConfig(max_session_seconds=HOUR, max_session_lifetime_seconds=HOUR)
+
+    anomaly = detector.check(state, event(ts=10_050.0), config)
+
+    assert anomaly is not None
+    assert anomaly.details["scope"] == "lifetime"
+    assert anomaly.details["elapsed_s"] == pytest.approx(10_050.0)
+
+    # The run wall is still armed (it never fired) and trips on its own turn.
+    second = detector.check(state, event(ts=10_050.0 + HOUR + 1.0), config)
+    assert second is not None
+    assert second.details["scope"] == "run"
+
+
+def test_lifetime_timeout_fires_once_per_session():
+    detector, state = TimeoutDetector(), state_at(0.0)
+    config = GuardrailConfig(max_session_lifetime_seconds=HOUR)
+
+    assert detector.check(state, event(ts=3601.0), config) is not None
+    assert detector.check(state, event(ts=3602.0, step=2), config) is None
 
 
 # --- the timeout through the engine -----------------------------------------

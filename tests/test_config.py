@@ -21,6 +21,8 @@ def test_defaults_match_spec():
     assert cfg.budget_usd is None
     assert cfg.max_total_tokens is None
     assert cfg.max_steps is None
+    assert cfg.max_events is None
+    assert cfg.max_session_lifetime_seconds is None
     assert cfg.tokens_per_minute_limit is None
     assert cfg.loop_threshold == 3
     assert cfg.loop_window == 20
@@ -83,7 +85,14 @@ def test_callback_set_but_mode_not_callback_raises(mode):
 
 @pytest.mark.parametrize(
     "field",
-    ["budget_usd", "max_total_tokens", "max_steps", "tokens_per_minute_limit"],
+    [
+        "budget_usd",
+        "max_total_tokens",
+        "max_steps",
+        "max_events",
+        "max_session_lifetime_seconds",
+        "tokens_per_minute_limit",
+    ],
 )
 @pytest.mark.parametrize("value", [0, -1])
 def test_non_positive_limits_raise(field, value):
@@ -93,7 +102,14 @@ def test_non_positive_limits_raise(field, value):
 
 @pytest.mark.parametrize(
     "field",
-    ["budget_usd", "max_total_tokens", "max_steps", "tokens_per_minute_limit"],
+    [
+        "budget_usd",
+        "max_total_tokens",
+        "max_steps",
+        "max_events",
+        "max_session_lifetime_seconds",
+        "tokens_per_minute_limit",
+    ],
 )
 def test_smallest_positive_limits_are_valid(field):
     GuardrailConfig(**{field: 1}).validate()

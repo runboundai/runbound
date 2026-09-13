@@ -385,6 +385,7 @@ def test_spike_is_one_of_the_default_detectors():
         "budget",
         "velocity",
         "steps",
+        "events",
         "spike",
         "error_storm",
         "timeout",

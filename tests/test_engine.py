@@ -211,7 +211,7 @@ def test_default_detectors_are_fresh_instances_per_engine():
     second = Engine(GuardrailConfig())
 
     assert [type(d) for d in first.detectors] == [type(d) for d in second.detectors]
-    assert len(first.detectors) == 7
+    assert len(first.detectors) == 8  # T134 added EventsDetector
     assert all(a is not b for a, b in zip(first.detectors, second.detectors))
 
 
