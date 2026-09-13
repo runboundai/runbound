@@ -8,6 +8,10 @@ green*. This module is the honest answer to "is anything actually being
 watched?": a handful of counters, one snapshot, and one warning that fires when
 a provider SDK is imported and yet no guarded call has ever been seen.
 
+It also builds the **tool report** — which tools this process has, taken from
+the ``@runbound.tool`` decorators at import time and from the names the model
+asks for, sent on the heartbeat and shown by :func:`runbound.tools`.
+
 Private on purpose — the public surface is ``runbound.coverage()``, a
 function. A submodule named ``coverage`` would be bound onto the package by any
 ``import runbound.coverage`` and would silently replace that function.
@@ -18,11 +22,14 @@ in a report, never a call. Counters are process-lifetime — ``init()`` and
 not a question a new session re-asks.
 """
 
+import hashlib
+import inspect
+import json
 import logging
 import sys
 import threading
 import time
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 _LOG = logging.getLogger("runbound")
 
@@ -56,6 +63,10 @@ DEFAULT_CHECK_SECONDS = 60.0
 #: growing with every dynamically-named tool a long-lived process ever saw.
 DECORATED_TOOL_NAMES_MAX = 32
 
+#: How many tools a report ever carries. Beyond this the report is truncated
+#: (sorted by name) and a debug line is logged once.
+TOOL_REPORT_MAX = 500
+
 _LOCK = threading.Lock()
 
 _WRAPPED_CLIENTS = 0
@@ -67,6 +78,13 @@ _LAST_GUARDED_AT: float | None = None
 _SHAPES_SEEN: set[str] = set()
 _DECORATED_TOOL_NAMES: set[str] = set()
 _TIMER: threading.Timer | None = None
+
+#: name -> report entry. A second, richer store beside ``_DECORATED_TOOL_NAMES``
+#: — that one answers "how many, and which names" for the coverage snapshot and
+#: keeps its own small cap; this one is what the console draws a tool inventory
+#: from, so it carries the signature too.
+_TOOLS: dict[str, dict] = {}
+_TRUNCATION_LOGGED = False
 
 
 def client_wrapped() -> None:
@@ -174,6 +192,205 @@ def providers_unguarded(imported: Sequence[str] | None = None) -> list[str]:
     with _LOCK:
         seen = set(_SHAPES_SEEN)
     return [name for name in names if _GUARDABLE.get(name) not in seen]
+
+
+# --- the tool report --------------------------------------------------------
+#
+# What tools this process has, built from the code that declares them rather
+# than from a file anyone writes, so it cannot drift from the code. Names,
+# parameter names, annotations rendered as strings and one line of docstring
+# leave the process; an argument value, a default value or a return value never
+# does.
+
+
+def tool_declared(name: str, func: Callable | None = None) -> None:
+    """Remember a tool the code declares, with its signature. Never raises."""
+    try:
+        if not isinstance(name, str) or not name:
+            return
+        entry = _tool_entry(name, func)
+        with _LOCK:
+            _TOOLS[name] = entry
+    except Exception:  # pragma: no cover - a report never costs a call
+        _LOG.debug("runbound: could not record the tool %r", name, exc_info=True)
+
+
+def tool_requested(name: str) -> None:
+    """Remember a tool name the *model* asked for. Never raises.
+
+    A name that no ``@runbound.tool`` declared stays ``decorated: False`` --
+    the model can ask for it and nothing guards it, which the console shows
+    in red. A name already declared is left exactly as it is.
+
+    Bounded by :data:`TOOL_REPORT_MAX`: these names come from a model, not from
+    the code, so a long-lived process asked for endlessly invented tools must
+    not grow a dict forever. Past the cap a new undecorated name is dropped,
+    which is what truncating the report would have done to it anyway.
+    """
+    try:
+        if not isinstance(name, str) or not name:
+            return
+        with _LOCK:
+            if name in _TOOLS or len(_TOOLS) >= TOOL_REPORT_MAX:
+                return
+            _TOOLS[name] = {
+                "name": name,
+                "decorated": False,
+                "params": [],
+                "doc": None,
+                "module": None,
+            }
+    except Exception:  # pragma: no cover
+        _LOG.debug("runbound: could not record the request for %r", name, exc_info=True)
+
+
+def tool_report() -> list[dict]:
+    """Every tool this process knows, sorted by name, capped at TOOL_REPORT_MAX.
+
+    A fresh copy each call, so a caller that edits what it got back — a test, a
+    REPL, a payload builder — cannot edit what the next heartbeat sends. Fails
+    open to ``[]``: a report that cannot be built is worth a debug line, never
+    an exception in a customer's process.
+    """
+    try:
+        with _LOCK:
+            entries = sorted(_TOOLS.values(), key=lambda entry: entry["name"])
+        if len(entries) > TOOL_REPORT_MAX:
+            _log_truncation(len(entries))
+            entries = entries[:TOOL_REPORT_MAX]
+        return [_copy_entry(entry) for entry in entries]
+    except Exception:  # pragma: no cover
+        _LOG.debug("runbound: could not build the tool report", exc_info=True)
+        return []
+
+
+def tool_report_hash(report: list[dict] | None = None) -> str:
+    """A stable short digest of a report: sha256 of the canonical JSON, 16 hex chars.
+
+    Stable across processes and across runs — it is what tells the plane
+    "nothing about my tools changed", so it must not depend on dict ordering or
+    on anything with an address in it. Raises only for a report that is not
+    JSON-serialisable, which is nothing :func:`tool_report` ever returns.
+    """
+    entries = tool_report() if report is None else report
+    canonical = json.dumps(entries, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def _copy_entry(entry: dict) -> dict:
+    """One entry, deep enough that nothing shared stays shared."""
+    return {**entry, "params": [dict(param) for param in entry["params"]]}
+
+
+def _log_truncation(total: int) -> None:
+    """Say once that a report is being cut short. Repeating it every 5s helps nobody."""
+    global _TRUNCATION_LOGGED
+    with _LOCK:
+        if _TRUNCATION_LOGGED:
+            return
+        _TRUNCATION_LOGGED = True
+    _LOG.debug(
+        "runbound knows %d tools and reports the first %d by name",
+        total,
+        TOOL_REPORT_MAX,
+    )
+
+
+def _tool_entry(name: str, func: Callable | None) -> dict:
+    """The five keys the plane reads, in the order it reads them."""
+    return {
+        "name": name,
+        "decorated": True,
+        "params": _params(func),
+        "doc": _first_doc_line(func),
+        "module": _module(func),
+    }
+
+
+def _params(func: Callable | None) -> list[dict]:
+    """A tool's parameters, or ``[]`` when the callable does not describe itself.
+
+    Builtins, C functions and exotic wrappers raise from
+    :func:`inspect.signature`; they are still tools this process has, so they
+    are reported with no parameters rather than not reported at all.
+    """
+    if func is None:
+        return []
+    try:
+        parameters = list(inspect.signature(func).parameters.values())
+    except Exception:
+        _LOG.debug("runbound: %r does not describe its signature", func, exc_info=True)
+        return []
+    if parameters and parameters[0].name in ("self", "cls"):
+        parameters = parameters[1:]
+    return [_param_entry(parameter) for parameter in parameters]
+
+
+def _param_entry(parameter: inspect.Parameter) -> dict:
+    """One parameter: its name as written, its annotation, whether it must be given.
+
+    ``required`` is "has no default" — never the default *value*, which is the
+    customer's data and stays in the customer's process.
+    """
+    if parameter.kind is inspect.Parameter.VAR_POSITIONAL:
+        name, required = "*" + parameter.name, False
+    elif parameter.kind is inspect.Parameter.VAR_KEYWORD:
+        name, required = "**" + parameter.name, False
+    else:
+        name = parameter.name
+        required = parameter.default is inspect.Parameter.empty
+    return {
+        "name": name,
+        "annotation": _annotation(parameter.annotation),
+        "required": required,
+    }
+
+
+def _annotation(annotation: Any) -> str | None:
+    """An annotation as the source that wrote it, or ``None`` when there is none.
+
+    A class renders as its bare name (``str``, ``float``), everything else as
+    its own text (``list[int]``, ``str | None``) — the same rendering
+    :class:`inspect.Signature` uses when it prints itself. Anything whose text
+    carries a memory address is dropped instead: an entry whose hash changed on
+    every restart would resend the whole report on every deploy of every
+    worker, and tell the console nothing it could use.
+    """
+    if annotation is inspect.Parameter.empty:
+        return None
+    if isinstance(annotation, str):
+        text = annotation
+    elif isinstance(annotation, type):
+        text = annotation.__qualname__
+    else:
+        text = str(annotation)
+    return None if not text or " at 0x" in text else text
+
+
+def _first_doc_line(func: Callable | None) -> str | None:
+    """The docstring's first non-empty line, stripped, or ``None``.
+
+    One line and never more, whatever the docstring holds — a privacy rule, not
+    a formatting preference: what follows the summary is where people put
+    hostnames, credentials and customer examples.
+    """
+    try:
+        doc = getattr(func, "__doc__", None)
+    except Exception:
+        return None
+    if not isinstance(doc, str):
+        return None
+    for line in doc.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return None
+
+
+def _module(func: Callable | None) -> str | None:
+    """Where the tool is defined, or ``None`` when the callable will not say."""
+    module = getattr(func, "__module__", None)
+    return module if isinstance(module, str) and module else None
 
 
 def snapshot(
@@ -303,7 +520,7 @@ def cancel_silence_timer() -> None:
 def reset_for_tests() -> None:
     """Put every counter back to zero and disarm the timer. Test-only."""
     global _WRAPPED_CLIENTS, _DECORATED_TOOLS, _TOOL_CALLS, _KEYED_SESSIONS
-    global _GUARDED_CALLS, _LAST_GUARDED_AT
+    global _GUARDED_CALLS, _LAST_GUARDED_AT, _TRUNCATION_LOGGED
     cancel_silence_timer()
     with _LOCK:
         _WRAPPED_CLIENTS = 0
@@ -314,3 +531,5 @@ def reset_for_tests() -> None:
         _LAST_GUARDED_AT = None
         _SHAPES_SEEN.clear()
         _DECORATED_TOOL_NAMES.clear()
+        _TOOLS.clear()
+        _TRUNCATION_LOGGED = False

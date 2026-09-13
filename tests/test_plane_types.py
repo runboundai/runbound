@@ -248,6 +248,18 @@ def test_from_wire_accepts_none_for_optional_fields():
     assert reply.org_id == ""  # org_id is not optional; wrong type -> default
 
 
+def test_a_plane_that_never_heard_of_tool_reports_is_assumed_to_have_ours():
+    """``tools_known`` defaults to True, and the default is load-bearing.
+
+    A plane too old to know the field omits it. Defaulting to False there would
+    have every worker resend its whole tool report on every heartbeat, forever,
+    to a plane that was never going to store it.
+    """
+    assert from_wire(HelloReply, {"org_id": "acme"}).tools_known is True
+    assert from_wire(HelloReply, {"tools_known": False}).tools_known is False
+    assert from_wire(HelloReply, {"tools_known": "nope"}).tools_known is True
+
+
 def test_from_wire_tolerates_a_non_dict_payload():
     assert from_wire(PlaneStatus, None) == PlaneStatus()
     assert from_wire(PlaneStatus, ["mode"]) == PlaneStatus()

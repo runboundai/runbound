@@ -540,6 +540,31 @@ def coverage() -> dict:
         return zeros
 
 
+def tools() -> list[dict]:
+    """The tool report this worker would send, exactly as the plane sees it.
+
+    Every tool this process knows — one entry per ``@runbound.tool`` and one
+    per tool name a model asked for that no decorator declared — sorted by
+    name::
+
+        [{"name": "issue_refund",
+          "decorated": True,               # False = nothing guards it
+          "params": [{"name": "user", "annotation": "str", "required": True}],
+          "doc": "Refund a customer.",     # the first line, never more
+          "module": "acme.tools"}]
+
+    Built from the code at import time, so it cannot drift from it, and
+    returned rather than printed: this is the thing to assert on in a test, and
+    a REPL displays it by itself. Works before :func:`init`, costs nothing to
+    call, and fails open to ``[]``.
+
+    Names, annotations rendered as strings and one docstring line are the whole
+    of what leaves the process. Never an argument, never a default value,
+    never a return value.
+    """
+    return _coverage.tool_report()
+
+
 def _refusals_source() -> str:
     """``"plane" | "local" | "default"`` — see :func:`coverage`. Never raises."""
     try:
@@ -2209,7 +2234,12 @@ class _Hooks:
         applies the same config by name, but a model *request* has no
         decorator to carry ``repeatable=True`` on, so config is the only way
         to mark one exempt here.
+
+        The name also joins the tool report: a tool the model can ask for that
+        no ``@runbound.tool`` declared is a coverage gap, and this is the only
+        place a process ever hears about it.
         """
+        _coverage.tool_requested(name)
         _observe(
             kind="tool_request",
             tool_name=name,
@@ -2630,6 +2660,7 @@ def tool(
     def decorate(func: Callable) -> Callable:
         tool_name = name or getattr(func, "__name__", "<tool>")
         _coverage.tool_decorated(tool_name)
+        _coverage.tool_declared(tool_name, func)
 
         if inspect.iscoroutinefunction(func):
 

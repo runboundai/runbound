@@ -637,12 +637,35 @@ a single file.
 
 | Endpoint | When | Fields |
 |---|---|---|
-| `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`) |
+| `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`), `active` (open `session()` blocks), `coverage` (the counts `runbound.coverage()` shows), `tools_hash`, and `tools` — the tool report — only when that hash changed |
 | `POST /v1/enter` | a `session()` block opens, on a cache miss | `key_hash`, `tags`, `service`, `worker_id`, `budget_usd`, `local_spend_usd`, `local_total_tokens` |
 | `POST /v1/trip` | a critical trip latches a session, and every block refused at the door because a key is latched | `key_hash`, the anomaly (`detector`, `severity`, `message`, scrubbed `details`, `reacted`), `latch_ttl_s`, `strikes`, `generation`, `refused_at_door` |
 | `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`kind`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
 | `GET /v1/policy?service=…` | the heartbeat announced a new policy version | nothing but the service name |
 | `POST /v1/clear` | `runbound.clear(key)` | `key_hash` |
+
+The **tool report** is the one record built from your code rather than from
+your traffic: for every `@runbound.tool` in the process, its name, its
+parameters' names, each annotation rendered as a string, whether each parameter
+has a default (never *what* the default is), the first line of its docstring
+and its defining module — plus a `decorated: false` entry for every tool name a
+model asked for that no decorator declared, which is exactly the coverage gap
+worth seeing. Read it yourself with `runbound.tools()`; it is the same list the
+heartbeat carries.
+
+```python
+[{"name": "issue_refund",
+  "decorated": True,
+  "params": [{"name": "user", "annotation": "str", "required": True},
+             {"name": "amount", "annotation": "float", "required": True}],
+  "doc": "Refund a customer.",
+  "module": "acme.tools"}]
+```
+
+`tools_hash` — 16 hex characters of a sha256 over that list — rides every
+heartbeat; the list itself rides only when the hash changed, or when the plane
+answers that it has none for this worker. A deploy costs one payload; the five
+seconds after it cost a hash. At most 500 tools are reported, sorted by name.
 
 An `exits` entry is a delta — what one `session()` block added since this
 worker's last report for that key — and its numbers keep the meaning stated
@@ -659,6 +682,10 @@ same one; the plane converts it to a timestamp on arrival, on its own clock.
 What is **never** on that wire, because there is no field for it to travel in:
 
 - **prompts and replies** — not read, not stored, not sent;
+- **defaults, return values and the rest of a docstring** — the tool report says
+  a parameter *has* a default, never its value, and carries a docstring's first
+  line and nothing after it: the lines after the summary are where hostnames,
+  credentials and customer examples live;
 - **tool arguments** — only `args_hash`, the same salted sha256 digest the loop
   detector compares. The salt is a random value generated once per process, so
   the digest is an *equality token* good for spotting a repeat inside this

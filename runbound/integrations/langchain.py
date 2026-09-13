@@ -34,7 +34,7 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from .. import api
+from .. import _coverage, api
 from ..exceptions import GuardrailTripped
 
 _LOG = logging.getLogger("runbound")
@@ -179,8 +179,15 @@ def _build_handler_class() -> type:
             LangChain hands us as its single argument; a
             :class:`~runbound.exceptions.PolicyViolation` is a
             ``GuardrailTripped``, so ``raise_error`` lets it stop the chain.
+
+            This is also where a LangChain agent's tools become known: the
+            framework owns the dispatch, so there is no ``@runbound.tool`` to
+            declare them and the callback is the only place the name is ever
+            said. They join the tool report undecorated, which is honest —
+            nothing here guards them by name.
             """
             name = _tool_name(serialized)
+            _coverage.tool_requested(name)
             api._observe(
                 kind="tool_call",
                 tool_name=name,

@@ -207,6 +207,15 @@ class HelloReply:
     """The plane's answer to a hello: who we are and what has changed.
 
     ``poll_s`` lets the plane slow a chatty fleet down without a redeploy.
+
+    ``tools_known`` is the plane saying whether it already holds this worker's
+    tool report; ``False`` makes the next heartbeat resend it in full. It
+    defaults to **True**, and that default is the whole point: a plane too old
+    to know about tool reports omits the field, :func:`from_wire` then takes
+    this default, and a default of ``False`` would have every worker in the
+    fleet resend its whole report on every heartbeat, forever, against a plane
+    that was never going to store it. "Assume the plane has it unless the plane
+    says otherwise" costs one stale report and nothing else.
     """
 
     org_id: str = ""
@@ -217,6 +226,7 @@ class HelloReply:
     circuits: dict = field(default_factory=dict)
     poll_s: float = 0.0
     notice: str | None = None
+    tools_known: bool = True
 
 
 @dataclass(frozen=True)

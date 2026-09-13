@@ -35,6 +35,7 @@ from .api import (
     session_status,
     tool,
     tool_calls,
+    tools,
     unpatch,
     wrap,
 )
@@ -81,6 +82,7 @@ __all__ = [
     "session_status",
     "tool",
     "tool_calls",
+    "tools",
     "unpatch",
     "verify_webhook_signature",
     "wrap",

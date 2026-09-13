@@ -151,6 +151,19 @@ def test_on_tool_start_emits_a_tool_call_event(handler):
     assert len(event.args_hash) == 64
 
 
+def test_on_tool_start_puts_the_tool_in_the_report_as_undecorated(handler):
+    """A framework's tools carry no decorator, so the callback is where they
+
+    become known — and the console shows them as unguarded, which they are."""
+    runbound.init()
+
+    handler.on_tool_start({"name": "search"}, "cats", run_id="run-1")
+
+    assert runbound.tools() == [
+        {"name": "search", "decorated": False, "params": [], "doc": None, "module": None}
+    ]
+
+
 @pytest.mark.parametrize("serialized", [None, {}, {"name": ""}, "not-a-mapping"])
 def test_tool_name_falls_back_when_serialized_carries_none(handler, serialized):
     runbound.init()

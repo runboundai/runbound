@@ -302,6 +302,11 @@ class RemoteState:
         self._notice_warning = _PeriodicWarning(NOTICE_INTERVAL_S, now)
         self._invalid_key_warning = _PeriodicWarning(WARN_INTERVAL_S, now)
         self._poller: Any = None
+        #: The tool-report hash the plane has acknowledged, and the one riding
+        #: a heartbeat whose reply has not come back yet. Both under
+        #: ``self._lock``; see :meth:`_tools_payload`.
+        self._tools_sent_hash: str | None = None
+        self._tools_pending_hash: str | None = None
         self.breaker: Any = None
 
     # --- the customer's settings, read defensively ---------------------------
@@ -779,6 +784,12 @@ class RemoteState:
         org's plan still allows (see :meth:`_apply_entitlements`). Never
         raises: a heartbeat that cannot be applied is logged, and the next one
         is tried as if nothing happened.
+
+        This runs only for a reply that actually arrived, which is what makes
+        it the right place to settle the tool report: the hash that rode the
+        last heartbeat becomes the acknowledged one, and a reply saying
+        ``tools_known: false`` throws that away so the next heartbeat resends
+        the report in full (see :meth:`_tools_payload`).
         """
         try:
             version = _as_int(getattr(reply, "policy_version", 0))
@@ -791,6 +802,7 @@ class RemoteState:
                 self._last_success = self._now()
                 self._failures = 0
                 changed = version != self._policy_version
+                self._settle_tools_hash(reply)
             self._apply_entitlements(entitlements)
             if changed:
                 self._fetch_policy(version)
@@ -799,6 +811,19 @@ class RemoteState:
             _LOG.warning(
                 "runbound: could not apply the control plane's reply", exc_info=True
             )
+
+    def _settle_tools_hash(self, reply: Any) -> None:
+        """Promote the pending tool-report hash, unless the plane wants it again.
+
+        Called from :meth:`apply_hello` with ``self._lock`` already held.
+        ``tools_known`` is read with a default of ``True`` because an older
+        plane does not send the field at all — see :class:`HelloReply`.
+        """
+        if self._tools_pending_hash is not None:
+            self._tools_sent_hash = self._tools_pending_hash
+            self._tools_pending_hash = None
+        if not getattr(reply, "tools_known", True):
+            self._tools_sent_hash = None
 
     def _apply_entitlements(self, entitlements: dict) -> None:
         """Do what the plan says this worker may still do.
@@ -1056,7 +1081,7 @@ class RemoteState:
 
     def _hello_payload(self) -> dict:
         """What each heartbeat says: who we are and what we already know."""
-        return {
+        payload = {
             "service": self._config.service,
             "worker_id": self._config.resolved_worker_id(),
             "sdk_version": _sdk_version(),
@@ -1065,6 +1090,44 @@ class RemoteState:
             "active": self._active_sessions(),
             "coverage": self._coverage_payload(),
         }
+        payload.update(self._tools_payload())
+        return payload
+
+    def _tools_payload(self) -> dict:
+        """``tools_hash`` every time, ``tools`` only when the plane needs it.
+
+        The hash rides every heartbeat so the plane can always tell whether
+        what it holds is current; the report itself rides only when its hash
+        differs from the last one the plane acknowledged — which covers both a
+        deploy that changed the tools and a plane that answered
+        ``tools_known: false`` (:meth:`apply_hello` clears the acknowledged
+        hash, so the very next heartbeat differs from it).
+
+        The hash of a report that went out is only *pending* until a reply
+        comes back: a heartbeat that was never answered proves nothing about
+        what the plane stored, so the next one sends the report again.
+
+        ``{}`` on any failure, so a heartbeat carries **neither** key rather
+        than a hash it cannot back up — a plane that had a hash and no report
+        would keep answering ``tools_known: false`` at a worker that cannot
+        build one. Same fail-open contract as :meth:`_coverage_payload`, and
+        the same in-call import, for the same cycle.
+        """
+        try:
+            from . import _coverage
+
+            report = _coverage.tool_report()
+            digest = _coverage.tool_report_hash(report)
+            with self._lock:
+                unsent = digest != self._tools_sent_hash
+                if unsent:
+                    self._tools_pending_hash = digest
+            if unsent:
+                return {"tools_hash": digest, "tools": report}
+            return {"tools_hash": digest}
+        except Exception:
+            _LOG.debug("runbound: could not build the tool report", exc_info=True)
+            return {}
 
     @staticmethod
     def _coverage_payload() -> dict:
