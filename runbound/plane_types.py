@@ -108,6 +108,13 @@ class WireAnomaly:
 
     ``reacted`` is one of ``"raise"``, ``"warn"``, ``"callback"``,
     ``"dry_run"``, ``"blocked"`` or ``"door"`` (refused at session entry).
+
+    ``anomaly_id`` is the id :class:`~runbound.events.Anomaly` stamped on
+    itself when the detector returned it — the same string on this anomaly's
+    telemetry export and on the :class:`TripReport` that reports the same
+    anomaly, so the plane files one row for the two. Empty when the anomaly
+    came from somewhere that has no id to give (a plane one release ahead
+    reading an older worker's payload sees the same empty string).
     """
 
     ts_wall: str = ""
@@ -117,6 +124,7 @@ class WireAnomaly:
     message: str = ""
     details: dict = field(default_factory=dict)
     reacted: str = ""
+    anomaly_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -192,7 +200,19 @@ class ExitDelta:
 
 @dataclass(frozen=True)
 class TripReport:
-    """A critical trip, told to the plane so the rest of the fleet learns it."""
+    """A critical trip, told to the plane so the rest of the fleet learns it.
+
+    ``anomaly_id`` repeats the id inside ``anomaly`` at the top level, where
+    the plane's writer reads it: this report and the telemetry export of the
+    same anomaly are one refusal, and the id is how the plane knows that
+    without timing the two arrivals.
+
+    ``worker_id`` is which worker was refused. The SDK leaves it empty and
+    the plane fills it from the ``X-Runbound-Worker`` header the same call
+    already carries (``routers/sdk._worker``); the field exists so a report
+    the *plane* writes for its own door refusal, and a caller replaying one,
+    have a documented place to say it.
+    """
 
     key_hash: str | None = None
     anomaly: dict = field(default_factory=dict)
@@ -200,6 +220,8 @@ class TripReport:
     strikes: int = 0
     generation: int = 0
     refused_at_door: bool = False
+    anomaly_id: str = ""
+    worker_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -370,6 +392,11 @@ def anomaly_to_wire(
     truncated: a detector's message is written by us, but the numbers in it
     come from the run, and a run can produce a very long one.
 
+    ``anomaly_id`` travels as the detector stamped it — a random hex string
+    with nothing of the session in it — so the plane can recognise this
+    anomaly's two reports as one. An object without one (a test double, an
+    anomaly built by hand) sends an empty id and is deduped the old way.
+
     ``key`` is the session's raw key, and is what makes this safe: detectors
     put it in ``details["key"]`` and quote it in their messages, so unless
     ``send_session_keys`` is set every occurrence of it is replaced by
@@ -390,7 +417,14 @@ def anomaly_to_wire(
         message=str(message)[:DETAIL_STRING_MAX],
         details=scrub_details(details),
         reacted=reacted,
+        anomaly_id=_anomaly_id(anomaly),
     )
+
+
+def _anomaly_id(anomaly: Any) -> str:
+    """The id an anomaly stamped on itself, or ``""`` if it has none."""
+    value = getattr(anomaly, "anomaly_id", "")
+    return value if isinstance(value, str) else ""
 
 
 def _redact(value: Any, key: str, stand_in: str, depth: int) -> Any:

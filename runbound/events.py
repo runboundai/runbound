@@ -4,7 +4,8 @@ Events are frozen: once an edge (a client wrapper or the ``@tool`` decorator)
 creates one, nothing downstream can mutate it.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from uuid import uuid4
 
 
 @dataclass(frozen=True)
@@ -96,12 +97,23 @@ class Anomaly:
 
     ``message`` is human-readable and includes the numbers that tripped the
     detector; ``details`` carries the same numbers machine-readably.
+
+    ``anomaly_id`` is this verdict's own identity, stamped once here and
+    never again. One anomaly reaches the control plane on two channels — the
+    synchronous trip (``POST /v1/trip``) and the telemetry export
+    (``POST /v1/events``) — and the id is what lets the plane recognise the
+    two reports as one fact instead of guessing from their timing. It is a
+    fresh random hex string per anomaly, derived from nothing about the
+    session, the key or the customer, so it carries no information beyond
+    "these two reports are the same one".
     """
 
     detector: str  # "loop" | "budget" | "velocity" | "steps" | "events" | ...
     severity: str  # "warn" | "critical"
     message: str  # human-readable, includes numbers
     details: dict
+    # Last, and defaulted, so every positional construction keeps working.
+    anomaly_id: str = field(default_factory=lambda: uuid4().hex)
 
 
 #: Which detector wins a tie among anomalies of the same severity (T135).

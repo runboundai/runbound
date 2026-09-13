@@ -614,22 +614,24 @@ class RemoteState:
         reacted: str,
         key: str | None = None,
     ) -> TripReport:
+        wire = anomaly_to_wire(
+            anomaly,
+            reacted,
+            digest,
+            _iso(),
+            send_session_keys=self._send_session_keys(),
+            key=key,
+        )
         return TripReport(
             key_hash=digest,
-            anomaly=to_wire(
-                anomaly_to_wire(
-                    anomaly,
-                    reacted,
-                    digest,
-                    _iso(),
-                    send_session_keys=self._send_session_keys(),
-                    key=key,
-                )
-            ),
+            anomaly=to_wire(wire),
             latch_ttl_s=None if ttl is None else float(ttl),
             strikes=int(getattr(state, "strikes", 0) or 0),
             generation=int(getattr(state, "fleet_generation", 0) or 0),
             refused_at_door=bool(door),
+            # The same anomaly goes to the exporter as telemetry; the id
+            # riding both is how the plane files one refusal, not two.
+            anomaly_id=wire.anomaly_id,
         )
 
     def circuit(self, label: str, state: str, failures: int, cooldown_s: float) -> None:
