@@ -1673,11 +1673,32 @@ or a bare shape (`"openai"`) for the **worst** state among its endpoints, so a
 health check written against `circuit_state("openai")` keeps meaning what it
 meant.
 
-Which failures count is a duck-typed read of `exc.status_code`: 408, 425, 429
-and every 5xx are the provider's, and so is anything with no readable status —
-a timeout, a dropped connection. Other 4xx (400, 401, 404) are **not**: a bad
-request or a bad key is a bug in your code, and blaming the provider for it
-would hide it.
+Which failures count is a four-way classification, and only two of the four
+open a circuit:
+
+| Class | What it is | Counts? |
+| --- | --- | --- |
+| `provider` | 408, 425, 429, any 5xx, and every flavour of timeout | **yes** |
+| `transport` | connection reset or refused, DNS, TLS — the request never arrived | **yes** |
+| `application` | `TypeError`, `ValueError`, `KeyError`, pydantic `ValidationError`, and any other 4xx (400, 401, 404) | no |
+| `cancel` | your code cancelled the call | no |
+
+`provider` and `transport` both count because both say the *next* call cannot
+succeed either, which is the only question a breaker asks. The other two never
+do: a bad request or a bad key is a bug in your code, a `TypeError` in your own
+callback is not the provider's fault, and opening a circuit over either would
+stop your calls to a provider that is answering perfectly. The alert an open
+circuit raises names the class in `details["fault"]`, because "the provider is
+answering 503" and "we cannot reach the provider" are different pages in a
+runbook.
+
+The classifier reads `exc.status_code` when the exception carries one — the
+provider answered, and its own verdict beats any guess of ours — and otherwise
+the exception's class name, walking its base classes. Provider SDK types
+(`openai.APIConnectionError`, `anthropic.APITimeoutError`) are matched **by
+name**: runbound imports neither package, so the answer is the same whether or
+not they are installed. An exception runbound cannot place is `application` —
+it will not stop your calls over something it does not understand.
 
 What an open circuit *does* is your explicit choice:
 

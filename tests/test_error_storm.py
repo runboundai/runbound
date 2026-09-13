@@ -8,6 +8,8 @@ Nothing here waits on real time: event timestamps are values, and the
 breaker's clock is a fake moved by hand.
 """
 
+import asyncio
+
 import pytest
 
 import runbound
@@ -360,6 +362,68 @@ def test_a_broken_breaker_never_blocks_the_host():
     engine.record_llm_success("openai")
 
     assert engine.circuit_allows("openai") is True
+
+
+def test_the_circuit_anomaly_names_the_fault_that_opened_it():
+    """An operator reading the alert can see *why* the circuit opened."""
+    observer = RecordingObserver()
+    engine = open_engine("open", observer)
+    state = SessionState("s1")
+
+    for _ in range(2):
+        engine.record_llm_error(state, "gpt-4o", Failure(429), 0.1, "openai")
+
+    alert = [a for a in observer.sent if a.detector == CIRCUIT_DETECTOR][0]
+    assert alert.details["fault"] == "provider"
+
+
+def test_a_transport_failure_opens_the_circuit_and_says_it_was_transport():
+    """A reset connection means the next call cannot succeed either."""
+    observer = RecordingObserver()
+    engine = open_engine("open", observer)
+    state = SessionState("s1")
+
+    for _ in range(2):
+        engine.record_llm_error(
+            state, "gpt-4o", ConnectionResetError("reset by peer"), 0.1, "openai"
+        )
+
+    assert engine.circuit_allows("openai") is False
+    alert = [a for a in observer.sent if a.detector == CIRCUIT_DETECTOR][0]
+    assert alert.details["fault"] == "transport"
+
+
+def test_a_bug_in_the_callers_own_code_never_opens_the_circuit():
+    """A TypeError out of the customer's callback is not the provider's fault."""
+    observer = RecordingObserver()
+    engine = open_engine("open", observer)
+    state = SessionState("s1")
+
+    for _ in range(5):
+        engine.record_llm_error(state, "gpt-4o", TypeError("str + int"), 0.1, "openai")
+
+    assert engine.circuit_allows("openai") is True
+    assert [a for a in observer.sent if a.detector == CIRCUIT_DETECTOR] == []
+
+
+def test_a_cancellation_never_reaches_the_breaker():
+    """Wrappers catch Exception, so it never gets here; if it did, it is not a
+    failure and must not be counted."""
+
+    class SpyBreaker:
+        def __init__(self):
+            self.marks = []
+
+        def record_failure(self, key):
+            self.marks.append(key)
+            return False
+
+    engine = open_engine("open", RecordingObserver())
+    engine.circuit = SpyBreaker()
+
+    engine._mark_provider(SessionState("s1"), asyncio.CancelledError(), "openai")
+
+    assert engine.circuit.marks == []
 
 
 def test_providers_have_their_own_circuits():

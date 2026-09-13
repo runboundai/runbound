@@ -21,7 +21,7 @@ import logging
 import time
 from collections.abc import Sequence
 
-from .circuit import CircuitBreaker, is_provider_failure
+from .circuit import CIRCUIT_FAULTS, CircuitBreaker, classify_failure
 from .config import GuardrailConfig
 from .detectors import DEFAULT_DETECTORS, BudgetDetector, LoopDetector, SpikeDetector
 from .events import PRIORITY, Anomaly, Event
@@ -328,22 +328,31 @@ class Engine:
     def _mark_provider(self, session: SessionState, exc: BaseException, provider: str) -> None:
         """Count a failure against ``provider``'s circuit and alert if it opened.
 
-        Only the provider's own failures count: a 400 is our request being
-        wrong, and opening a circuit over it would blame the provider for a bug
-        in the caller's code. Alerting happens under both modes — an open
-        circuit is news whether or not the customer asked us to act on it — and
-        exactly once, because one outage is one incident.
+        Only failures that say the *next* call cannot succeed count — the
+        provider's own (a 503, a timeout) and the network's (a reset, a refused
+        connection, DNS, TLS). A 400 is our request being wrong and a
+        ``TypeError`` is a bug in the caller's code; opening a circuit over
+        either would stop calls to a provider that is answering perfectly, and
+        a cancelled call did not fail at all. See
+        :func:`~runbound.circuit.classify_failure`, whose verdict travels on
+        the anomaly as ``details["fault"]`` so an operator can see why the
+        circuit opened.
+
+        Alerting happens under both modes — an open circuit is news whether or
+        not the customer asked us to act on it — and exactly once, because one
+        outage is one incident.
 
         Never raises: the circuit is an optimization on top of the host's own
         error handling, and a bug in it must not replace the provider's
         exception with ours.
         """
         try:
-            if not is_provider_failure(exc):
+            fault = classify_failure(exc)
+            if fault not in CIRCUIT_FAULTS:
                 return
             if not self.circuit.record_failure(provider):
                 return
-            anomaly = self._circuit_anomaly(provider)
+            anomaly = self._circuit_anomaly(provider, fault)
             self._alert(anomaly, session)
             self._report_circuit(provider, "open", self.config.circuit_failure_threshold)
             _LOG.warning("[runbound] %s", anomaly.message)
@@ -354,8 +363,14 @@ class Engine:
                 exc_info=True,
             )
 
-    def _circuit_anomaly(self, provider: str) -> Anomaly:
-        """Describe a circuit that has just opened, in the mode it opened in."""
+    def _circuit_anomaly(self, provider: str, fault: str) -> Anomaly:
+        """Describe a circuit that has just opened, in the mode it opened in.
+
+        ``fault`` is the class of the failure that opened it — ``"provider"``
+        or ``"transport"`` — and rides along in the details, because "the
+        provider is answering 503" and "we cannot reach the provider" are
+        different incidents with different first moves.
+        """
         config = self.config
         blocking = config.on_provider_failure == "open"
         tail = (
@@ -380,6 +395,7 @@ class Engine:
                 "cooldown_seconds": config.circuit_cooldown_seconds,
                 "on_provider_failure": config.on_provider_failure,
                 "state": "open",
+                "fault": fault,
             },
         )
 

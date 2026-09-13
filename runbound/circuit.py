@@ -4,8 +4,9 @@ A retry storm is a money blunder. An agent whose provider answers 429 or 503
 retries, the framework around it retries, and the loop above that retries
 again — every attempt costing latency, and the successful ones costing money —
 while nothing that could possibly work is happening. This module holds the two
-pure pieces of the answer: is this exception the *provider's* fault, and has
-that provider failed often enough to stop calling it for a while.
+pure pieces of the answer: what kind of failure this exception is — the
+provider's, the network's, or the caller's own — and has that provider failed
+often enough to stop calling it for a while.
 
 It decides nothing about the host's traffic. Opening the circuit is a signal —
 the engine alerts on it and, when the customer opted in, the api raises
@@ -28,28 +29,165 @@ CLOSED = "closed"
 OPEN = "open"
 HALF_OPEN = "half_open"
 
+#: The provider could not answer: it was slow, busy, or broken.
+PROVIDER = "provider"
+#: The request never reached the provider: reset, refused, DNS, TLS.
+TRANSPORT = "transport"
+#: The caller's own mistake: a bad request, or a bug in their code.
+APPLICATION = "application"
+#: The host cancelled the call. Not a failure of anything.
+CANCEL = "cancel"
+
+#: The two classes a circuit counts. Both mean the *next* call cannot succeed
+#: either, which is the only question a breaker asks; the other two say nothing
+#: about the provider's health and must never open a circuit.
+CIRCUIT_FAULTS = frozenset({PROVIDER, TRANSPORT})
+
+# The name sets below are matched against every class name in an exception's
+# MRO, never against an imported type: the SDK must import cleanly with neither
+# `openai` nor `anthropic` installed, and a customer who has them installed
+# must not get a different answer from a customer who does not. This is the
+# same discipline `plane_types.error_class_of` follows for the wire — an
+# exception is identified by the name of its class and nothing else.
+
+#: Timeouts, by class name. Includes the builtin (which ``socket.timeout`` and,
+#: since 3.11, ``asyncio.TimeoutError`` alias), openai's and anthropic's
+#: ``APITimeoutError``, and the httpx/requests/urllib3/aiohttp spellings.
+_PROVIDER_NAMES = frozenset(
+    {
+        "TimeoutError",
+        "APITimeoutError",
+        "Timeout",
+        "TimeoutException",
+        "ConnectTimeout",
+        "ReadTimeout",
+        "WriteTimeout",
+        "PoolTimeout",
+        "ConnectTimeoutError",
+        "ReadTimeoutError",
+        "ServerTimeoutError",
+    }
+)
+
+#: Connection failures, by class name. ``OSError`` is the builtin root of
+#: ``ConnectionError``, ``socket.gaierror``, ``ssl.SSLError`` and
+#: ``urllib.error.URLError``, so the MRO walk catches those whether or not they
+#: are spelled out; the rest are the HTTP stacks' own hierarchies, which hang
+#: off ``Exception`` instead.
+_TRANSPORT_NAMES = frozenset(
+    {
+        "OSError",
+        "ConnectionError",
+        "gaierror",
+        "herror",
+        "SSLError",
+        "APIConnectionError",
+        "ConnectError",
+        "NetworkError",
+        "ProtocolError",
+        "RemoteProtocolError",
+        "ProxyError",
+        "ReadError",
+        "WriteError",
+        "NewConnectionError",
+        "MaxRetryError",
+        "IncompleteRead",
+        "ClientConnectionError",
+        "ClientConnectorError",
+        "ServerDisconnectedError",
+    }
+)
+
+#: The caller's own mistakes, by class name. ``ValidationError`` is pydantic's
+#: — a request the customer's code built wrong, which no amount of waiting
+#: fixes.
+_APPLICATION_NAMES = frozenset({"TypeError", "ValueError", "KeyError", "ValidationError"})
+
+#: Cancellation, by class name. ``asyncio.CancelledError`` (which
+#: ``concurrent.futures.CancelledError`` aliases) is a ``BaseException``, so it
+#: normally travels past the wrappers untouched; naming it here is the second
+#: lock on a door that is already shut.
+_CANCEL_NAMES = frozenset({"CancelledError"})
+
+
+def classify_failure(exc: BaseException) -> str:
+    """What kind of failure ``exc`` is: the answer a circuit is asking for.
+
+    One of :data:`PROVIDER` (the provider was slow, busy or broken: status 408,
+    425, 429 or any 5xx, and every flavour of timeout), :data:`TRANSPORT` (the
+    request never got there: reset, refused, DNS, TLS), :data:`APPLICATION`
+    (the caller's own mistake: ``TypeError``, ``ValueError``, ``KeyError``,
+    pydantic's ``ValidationError``, and any 4xx that is not one of the three
+    above) or :data:`CANCEL` (the host cancelled; nothing failed).
+
+    Read in that order: a readable status decides first, because a status means
+    the provider answered and its own verdict beats any guess of ours; then the
+    class name, walking the whole MRO, so ``anthropic.APITimeoutError`` is a
+    timeout before it is the ``APIConnectionError`` it inherits from, and
+    ``ssl.SSLCertVerificationError`` is transport before it is the
+    ``ValueError`` it also inherits from. Provider SDK types are matched by
+    class *name*, never imported: the answer is the same whether or not the
+    customer has those packages installed.
+
+    Two edge cases are deliberate. An exception carrying a ``status_code`` that
+    cannot be read is :data:`PROVIDER`: it came off an HTTP response, and that
+    is more than we know about anything else. Everything else unrecognized is
+    :data:`APPLICATION` — the failures a retry storm is made of all have a
+    status, a timeout or a socket underneath them, so what is left is
+    overwhelmingly the host's own code, and refusing to open a circuit over an
+    exception we do not understand is the fail-open answer.
+
+    Never raises: an exception whose ``__class__`` lies, whose attributes throw
+    or which is not an exception at all is :data:`APPLICATION`.
+    """
+    try:
+        names = _class_names(exc)
+        if names & _CANCEL_NAMES:
+            return CANCEL
+        status = _status_of(exc)
+        if status is not None:
+            if status in _PROVIDER_SIDE_4XX or status >= 500:
+                return PROVIDER
+            if 400 <= status < 500:
+                return APPLICATION
+        if names & _PROVIDER_NAMES:
+            return PROVIDER
+        if names & _TRANSPORT_NAMES:
+            return TRANSPORT
+        if names & _APPLICATION_NAMES:
+            return APPLICATION
+        if _carries_status(exc):
+            return PROVIDER
+        return APPLICATION
+    except BaseException:  # pragma: no cover - the classifier owes an answer
+        return APPLICATION
+
 
 def is_provider_failure(exc: BaseException) -> bool:
-    """Is ``exc`` the provider failing, rather than the caller's own mistake?
+    """Does ``exc`` count against the provider's circuit?
 
-    Duck-typed on ``status_code``, so every OpenAI-compatible SDK and every
-    hand-rolled client is classified by the same rule and no provider package
-    is imported: 408, 425 and 429 (busy, too early, rate limited) and anything
-    in 5xx are the provider; every other 4xx is a bad request, a bad key or a
-    missing model, and retrying it or opening a circuit over it would hide a
-    bug in the caller's own code.
+    True for :data:`PROVIDER` and :data:`TRANSPORT` alike: a provider that
+    answers 503 and a connection that never reaches it both mean the next call
+    cannot succeed, and failing fast is right either way. False for the
+    caller's own mistakes and for cancellation, which say nothing about the
+    provider's health — opening a circuit over those would stop calls to a
+    provider that is working perfectly.
 
-    Anything with no readable status — a timeout, a dropped connection, an SDK
-    error object that raises when read — counts as the provider. Those are the
-    failures a retry storm is actually made of, and the classifier's job is to
-    be useful, not to be certain.
+    See :func:`classify_failure`, which decides; this only reads its answer.
     """
-    status = _status_of(exc)
-    if status is None:
-        return True
-    if status in _PROVIDER_SIDE_4XX or status >= 500:
-        return True
-    return not 400 <= status < 500
+    return classify_failure(exc) in CIRCUIT_FAULTS
+
+
+def _class_names(exc: BaseException) -> frozenset[str]:
+    """Every class name in ``exc``'s inheritance chain, bases included.
+
+    Read from ``type(exc)`` rather than ``exc.__class__``, which an object may
+    define as anything it likes; an empty set when the chain cannot be read.
+    """
+    try:
+        return frozenset(base.__name__ for base in type(exc).__mro__)
+    except Exception:
+        return frozenset()
 
 
 def _status_of(exc: BaseException) -> int | None:
@@ -59,6 +197,18 @@ def _status_of(exc: BaseException) -> int | None:
         return None if status is None else int(status)
     except Exception:
         return None
+
+
+def _carries_status(exc: BaseException) -> bool:
+    """Does ``exc`` carry a ``status_code`` at all, readable or not?
+
+    An attribute that raises when read still answers the only question here —
+    this object was built from an HTTP response — so it counts as carried.
+    """
+    try:
+        return getattr(exc, "status_code", None) is not None
+    except Exception:
+        return True
 
 
 class _Key:
