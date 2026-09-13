@@ -2057,6 +2057,7 @@ class _Hooks:
         error(model, exc, duration_s, provider)  # the call failed
         release(provider)                    # the call is over, however it ended
         tool_request(name, args_hash)        # the model asked for a tool
+        quota(provider, headers)             # the response carried rate-limit headers
         take_pending_delay()                 # a throttle delay owed to this task, if any
         abandoned(model, tokens_in, tokens_out, duration_s, provider, estimated)
             # a stream nobody finished reading
@@ -2257,6 +2258,29 @@ class _Hooks:
             raise
         except Exception:
             _LOG.warning("runbound failed to record a failed model call", exc_info=True)
+
+    def quota(self, provider: str, headers: Any) -> None:
+        """Let the circuit read the rate-limit headers a response carried.
+
+        A no-op unless ``circuit_reads_quota`` is on, and a no-op before
+        :func:`init`. The wrapper only calls it when there were headers to
+        read at all, which on a success path means the customer's own call
+        went through ``with_raw_response`` / ``.parse()`` — an ordinary call
+        returns a parsed model with no headers anywhere on it, and runbound
+        will not change how the call is made to get at them.
+
+        Never raises: the response is already in the caller's hands.
+        """
+        try:
+            with _LOCK:
+                engine = _ENGINE
+            if engine is None:
+                return
+            engine.note_quota(provider, headers)
+        except Exception:
+            _LOG.warning(
+                "runbound could not read the quota headers for %r", provider, exc_info=True
+            )
 
     def tool_request(self, name: str, args_hash: str | None) -> None:
         """Record a tool call the model asked for, before anyone dispatches it.

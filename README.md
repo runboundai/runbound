@@ -1807,6 +1807,60 @@ except CircuitOpen as outage:
 catches that keeps working unchanged — the call simply fails fast instead of
 joining the storm.
 
+### Reading the provider's own rate-limit headers (opt-in)
+
+Both providers already tell you how much quota is left and when it comes back
+— Anthropic on twelve `anthropic-ratelimit-*` headers, OpenAI on
+`x-ratelimit-remaining-requests` / `-tokens` and their resets — and a 429 adds
+`Retry-After`. `circuit_reads_quota=True` lets the circuit act on that instead
+of only counting failures:
+
+```python
+runbound.init(on_provider_failure="open", circuit_reads_quota=True)
+```
+
+Two things change, and nothing else:
+
+- **A 429's `Retry-After` sets that opening's cooldown** instead of
+  `circuit_cooldown_seconds`. The provider said when to come back; guessing 30
+  seconds over that is worse.
+- **A bucket at zero opens the circuit pre-emptively**, until its reset,
+  without waiting for `circuit_failure_threshold` failures. `remaining` is read
+  as the *smallest* count across every bucket the provider publishes, because
+  the tightest one is what will refuse the next call. It is reported as the
+  usual `circuit` anomaly with `details["reason"] == "quota"` (a failure-driven
+  opening carries `"failures"`).
+
+No header may hold a circuit shut for longer than **one hour**, whatever it
+says: your `circuit_cooldown_seconds` is the floor, that ceiling is the cap,
+and a reset a provider or a proxy states in days cannot wedge your agent shut.
+
+**The honest limit — a plain successful call carries no headers at all.** Both
+SDKs hand your code a parsed model (`anthropic.types.Message`,
+`openai.types.…`) with no `.headers` anywhere on it, and runbound will not
+change how your call is made to get at them: making it raw would change what
+your code receives, and no header is worth that. So a pre-emptive opening
+happens in exactly two situations:
+
+1. from an **error** response — every `APIStatusError` keeps
+   `.response.headers`, which is where a 429's `Retry-After` lives; or
+2. from a call **your own code** already made through `with_raw_response` /
+   `.parse()`, so the object in hand has `.headers` on it.
+
+On an ordinary successful call the check is one attribute lookup that misses,
+and nothing happens. Streaming is out of scope entirely.
+
+It is off by default because a header your gateway, proxy or LLM router
+rewrites should not stop your traffic by surprise. Everything about it is
+fail-open: a header that cannot be read says *nothing* — an unreadable
+`remaining` is never treated as zero, so an agent behind a proxy that strips
+rate-limit headers keeps calling a provider that is answering perfectly. With
+the option off, the circuit behaves exactly as it did before it existed.
+
+Nothing a header *said* ever leaves your process: the anomaly carries the
+derived numbers (the cooldown now in force, `reason`) and no header name or
+value.
+
 **We open the circuit and hand you the signal; we never route.** Picking a
 fallback provider is an application decision with your keys, your prices and
 your quality bar in it — the same boundary as never writing your bot's replies.

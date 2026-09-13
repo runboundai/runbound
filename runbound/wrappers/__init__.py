@@ -17,9 +17,11 @@ what they read: they price nothing, decide nothing, and store nothing.
 refuse it — ``request`` is the raw call kwargs, read by ``Engine.admit``'s
 opt-in ``budget_admission`` estimate; T136), then ``success(provider)`` or
 ``error(model, exc, duration_s, provider)``,
-``release(provider)`` when the call is over however it ended, and
+``release(provider)`` when the call is over however it ended,
 ``tool_request(name, args_hash)`` for each tool call the model asked for in
-what came back. A streamed call that is garbage collected before it ends
+what came back, and ``quota(provider, headers)`` on the rare response that
+carries rate-limit headers at all (T144 — see :func:`report_quota`). A
+streamed call that is garbage collected before it ends
 instead reports ``abandoned(model, tokens_in, tokens_out, duration_s,
 provider, estimated)`` — see :class:`_StreamGuard` — and an async caller under
 a running event loop may owe a throttle delay afterwards, fetched with
@@ -62,6 +64,7 @@ import urllib.parse
 import weakref
 from typing import Any, Callable, NamedTuple, Sequence
 
+from .. import quota
 from ..exceptions import GuardrailTripped
 
 _LOG = logging.getLogger("runbound")
@@ -123,6 +126,9 @@ class _NoHooks:
         return None
 
     def tool_request(self, name: str, args_hash: str | None) -> None:
+        return None
+
+    def quota(self, provider: str, headers: Any) -> None:
         return None
 
     def abandoned(
@@ -402,6 +408,34 @@ def release_slot(hooks: Hooks, provider: str) -> None:
             release(provider)
     except Exception:
         _LOG.warning("runbound could not release an in-flight slot", exc_info=True)
+
+
+def report_quota(hooks: Hooks, provider: str, response: Any) -> None:
+    """Hand over the rate-limit headers ``response`` carries, if it carries any.
+
+    T144. The cost on an ordinary call is one attribute lookup that misses:
+    both SDKs return a parsed model with no ``.headers`` anywhere on it, so
+    :func:`~runbound.quota.headers_of` says ``None`` and nothing else happens.
+    The reads that do find headers are the two where they survive — a call the
+    customer's own code made through ``with_raw_response`` / ``.parse()``, and
+    an error, which is reported through ``hooks.error`` instead of here.
+
+    A wrapper never makes the call raw to get at them: that would change what
+    the customer's code receives, and no header is worth that.
+
+    Tolerates hooks that predate this and have no ``quota``, and never raises:
+    reading a header is an optimization, and the response is already the
+    caller's.
+    """
+    try:
+        headers = quota.headers_of(response)
+        if headers is None:
+            return
+        report = getattr(hooks, "quota", None)
+        if report is not None:
+            report(provider, headers)
+    except Exception:
+        _LOG.debug("runbound: could not read a response's quota headers", exc_info=True)
 
 
 def estimated_tokens(chars: int) -> int:

@@ -20,8 +20,9 @@ import contextvars
 import logging
 import time
 from collections.abc import Sequence
+from typing import Any
 
-from .circuit import CIRCUIT_FAULTS, CircuitBreaker, classify_failure
+from .circuit import CIRCUIT_FAULTS, PROVIDER, CircuitBreaker, classify_failure
 from .config import GuardrailConfig
 from .detectors import DEFAULT_DETECTORS, BudgetDetector, LoopDetector, SpikeDetector
 from .events import PRIORITY, Anomaly, Event
@@ -38,6 +39,7 @@ from .policy import (
     merge,
 )
 from .pricing import price_for
+from .quota import MAX_COOLDOWN_S, Quota, cooldown_for, headers_of, read_quota
 from .shared import LocalState
 from .state import SessionState
 
@@ -350,12 +352,19 @@ class Engine:
             fault = classify_failure(exc)
             if fault not in CIRCUIT_FAULTS:
                 return
-            if not self.circuit.record_failure(provider):
+            quota = self._read_quota(exc)
+            if self.circuit.record_failure(provider):
+                cooldown = self._retry_after_hold(provider, quota)
+                self._announce_circuit(
+                    session,
+                    provider,
+                    fault,
+                    reason="failures",
+                    failures=self.config.circuit_failure_threshold,
+                    cooldown_s=cooldown,
+                )
                 return
-            anomaly = self._circuit_anomaly(provider, fault)
-            self._alert(anomaly, session)
-            self._report_circuit(provider, "open", self.config.circuit_failure_threshold)
-            _LOG.warning("[runbound] %s", anomaly.message)
+            self._open_on_quota(session, provider, quota)
         except Exception:
             _LOG.warning(
                 "runbound could not update the circuit for provider %r",
@@ -363,13 +372,126 @@ class Engine:
                 exc_info=True,
             )
 
-    def _circuit_anomaly(self, provider: str, fault: str) -> Anomaly:
+    def note_quota(self, provider: str, headers: Any) -> None:
+        """Read a response's quota headers and pre-emptively open if spent.
+
+        No-op unless ``config.circuit_reads_quota``. Never raises: a bug
+        here must not replace a provider's answer with ours.
+
+        Called from a wrapper's success path, which has no session to hand
+        over — and needs none: a circuit belongs to a provider, not to
+        whichever run happened to make the call, and the anomaly is deduped
+        by provider for exactly that reason. ``headers`` is what
+        :func:`~runbound.quota.headers_of` found on the response, which is
+        ``None`` for the plain parsed model an ordinary call returns; a
+        wrapper only calls this when there was something to read.
+        """
+        try:
+            if not self.config.circuit_reads_quota:
+                return
+            self._open_on_quota(None, provider, read_quota(headers))
+        except Exception:
+            _LOG.warning(
+                "runbound could not read the quota headers for provider %r",
+                provider,
+                exc_info=True,
+            )
+
+    def _read_quota(self, exc: BaseException) -> Quota:
+        """What the failed response's headers said, or nothing at all.
+
+        ``Quota()`` — every field ``None`` — whenever the customer has not
+        opted in, the exception carries no readable headers (a plain
+        ``TimeoutError`` never does), or reading them goes wrong.
+        """
+        try:
+            if not self.config.circuit_reads_quota:
+                return Quota()
+            headers = headers_of(exc)
+            return Quota() if headers is None else read_quota(headers)
+        except Exception:
+            _LOG.debug("runbound could not read a failure's headers", exc_info=True)
+            return Quota()
+
+    def _retry_after_hold(self, provider: str, quota: Quota) -> float:
+        """Re-time an opening the provider itself put a clock on.
+
+        A 429 says when to come back. When it does, that beats the configured
+        ``circuit_cooldown_seconds`` guess — capped at
+        :data:`~runbound.quota.MAX_COOLDOWN_S`, because no header gets to hold
+        a provider shut for a day. Returns the cooldown now in force, so the
+        anomaly reports the number that is actually being used.
+        """
+        cooldown = self.config.circuit_cooldown_seconds
+        if quota.retry_after_s is None:
+            return cooldown
+        hold = min(float(quota.retry_after_s), MAX_COOLDOWN_S)
+        self.circuit.force_open(provider, hold)
+        return hold
+
+    def _open_on_quota(
+        self, session: "SessionState | None", provider: str, quota: Quota
+    ) -> None:
+        """Open ``provider`` pre-emptively when its headers said it is spent.
+
+        ``Retry-After`` wins over the reset when both are readable: on a 429
+        it is the provider's own instruction, and the bucket's reset is only
+        the calendar. A ``remaining`` of ``None`` — no readable header, a
+        proxy that stripped them — opens nothing.
+        """
+        deadline = quota.retry_after_s if quota.retry_after_s is not None else quota.reset_s
+        if not self.circuit.note_quota(provider, quota.remaining, deadline):
+            return
+        self._announce_circuit(
+            session,
+            provider,
+            PROVIDER,
+            reason="quota",
+            failures=0,
+            cooldown_s=cooldown_for(deadline, self.config.circuit_cooldown_seconds),
+        )
+
+    def _announce_circuit(
+        self,
+        session: "SessionState | None",
+        provider: str,
+        fault: str,
+        *,
+        reason: str,
+        failures: int,
+        cooldown_s: float,
+    ) -> None:
+        """Alert, report and log one circuit that has just opened. Once."""
+        anomaly = self._circuit_anomaly(
+            provider, fault, reason=reason, cooldown_s=cooldown_s
+        )
+        self._alert(anomaly, session)
+        self._report_circuit(provider, "open", failures)
+        _LOG.warning("[runbound] %s", anomaly.message)
+
+    def _circuit_anomaly(
+        self,
+        provider: str,
+        fault: str,
+        *,
+        reason: str = "failures",
+        cooldown_s: float | None = None,
+    ) -> Anomaly:
         """Describe a circuit that has just opened, in the mode it opened in.
 
         ``fault`` is the class of the failure that opened it — ``"provider"``
         or ``"transport"`` — and rides along in the details, because "the
         provider is answering 503" and "we cannot reach the provider" are
         different incidents with different first moves.
+
+        ``reason`` says what opened it: ``"failures"``, the count reaching the
+        threshold, or ``"quota"`` (T144), the provider's own headers saying
+        the next call is going to be refused. ``cooldown_s`` is how long it is
+        actually shut for, which is the configured cooldown unless a 429's
+        ``Retry-After`` or a bucket's reset replaced it.
+
+        Nothing a header *said* appears here — only numbers derived from it.
+        A header's text never leaves the process.
         """
         config = self.config
         blocking = config.on_provider_failure == "open"
@@ -378,24 +500,30 @@ class Engine:
             if blocking
             else " (notify only: calls continue)"
         )
+        cooldown = config.circuit_cooldown_seconds if cooldown_s is None else cooldown_s
+        cause = (
+            f"{config.circuit_failure_threshold} failures in "
+            f"{config.circuit_window_seconds:.0f}s"
+            if reason == "failures"
+            else "the provider reports no quota left"
+        )
         return Anomaly(
             detector=CIRCUIT_DETECTOR,
             severity="critical",
             message=(
-                f"Provider {provider!r} circuit opened: "
-                f"{config.circuit_failure_threshold} failures in "
-                f"{config.circuit_window_seconds:.0f}s; cooling down "
-                f"{config.circuit_cooldown_seconds:.0f}s{tail}"
+                f"Provider {provider!r} circuit opened: {cause}; "
+                f"cooling down {cooldown:.0f}s{tail}"
             ),
             details={
                 "provider": provider,
                 "host": provider_host(provider),
-                "failures": config.circuit_failure_threshold,
+                "failures": config.circuit_failure_threshold if reason == "failures" else 0,
                 "window_seconds": config.circuit_window_seconds,
-                "cooldown_seconds": config.circuit_cooldown_seconds,
+                "cooldown_seconds": cooldown,
                 "on_provider_failure": config.on_provider_failure,
                 "state": "open",
                 "fault": fault,
+                "reason": reason,
             },
         )
 

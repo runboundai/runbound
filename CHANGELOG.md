@@ -5,6 +5,25 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **The circuit can read the provider's own rate-limit headers**, opt-in via
+  `circuit_reads_quota=True` (default off). A 429's `Retry-After` sets that
+  opening's cooldown instead of `circuit_cooldown_seconds`, and a remaining
+  bucket at zero opens the circuit until its reset without waiting for
+  `circuit_failure_threshold` failures — reported as the usual `circuit`
+  anomaly with `details["reason"] == "quota"` (a failure-driven one now says
+  `"failures"`). No header may hold a circuit shut for more than an hour.
+  Fail-open throughout: an unreadable header says nothing and is never read
+  as zero. Note the limit, which is in both provider SDKs rather than in
+  runbound — a plain successful call returns a parsed model with no headers
+  at all, so a pre-emptive opening happens only from an error response or
+  from a call your own code made through `with_raw_response` / `.parse()`;
+  runbound never changes how your call is made to get at headers. Streaming
+  is out of scope. With the option off, the circuit behaves exactly as before.
+
 ## [0.3.0] - 2026-09-12
 
 First public release, as `runbound` (import `runbound`), by Runbound AI.

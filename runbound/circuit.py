@@ -22,6 +22,8 @@ import time
 from collections import deque
 from collections.abc import Callable
 
+from .quota import cooldown_for
+
 #: 4xx statuses that mean "the provider is busy or slow", not "we sent rubbish".
 _PROVIDER_SIDE_4XX = frozenset({408, 425, 429})
 
@@ -211,6 +213,22 @@ def _carries_status(exc: BaseException) -> bool:
         return True
 
 
+def _is_spent(remaining: int | None) -> bool:
+    """Is ``remaining`` a readable count that has reached zero?
+
+    ``None`` is an unreadable header, and so is anything that is not a plain
+    number — a string, an object, a ``bool`` (which is an ``int`` in Python
+    and would otherwise make ``False`` mean "spent"). Every one of them says
+    nothing, which is the fail-open answer.
+    """
+    if isinstance(remaining, bool) or not isinstance(remaining, (int, float)):
+        return False
+    try:
+        return remaining <= 0
+    except Exception:
+        return False
+
+
 class _Key:
     """One provider's failure history and, when it is open, since when.
 
@@ -239,7 +257,9 @@ class CircuitBreaker:
 
     An operator can also put a key into either resting state by hand —
     :meth:`force_open` and :meth:`force_close` — and :meth:`snapshot` reads
-    every key back as plain data.
+    every key back as plain data. :meth:`note_quota` is the fourth way in: the
+    provider's own rate-limit headers, saying the next call is going to be
+    refused before it is made.
 
     Agents call from threads and from asyncio tasks, so all of it happens under
     one lock; nothing here does I/O or calls user code while holding it.
@@ -291,6 +311,38 @@ class CircuitBreaker:
             if entry is None:
                 return
             self._close(entry)
+
+    def note_quota(self, key: str, remaining: int | None, reset_s: float | None) -> bool:
+        """Open ``key`` until its quota resets, when there is nothing left.
+
+        The one thing a quota header can tell a breaker that a failure
+        cannot: the next call is *going* to be refused, so do not make it.
+
+        Opens only when ``remaining`` is exactly 0. ``None`` means the
+        header was unreadable and says nothing — it must never open a
+        circuit, or an agent behind a proxy that strips headers would
+        stop calling a provider that is answering perfectly. A positive
+        remaining is good news and does nothing: this method never closes
+        a circuit, never counts a failure, and never shortens an opening
+        that is already longer.
+
+        ``reset_s`` becomes the cooldown, clamped to
+        ``[0, quota.MAX_COOLDOWN_S]``; ``None`` or non-positive falls back
+        to the configured ``cooldown_seconds``. Returns True only when this
+        call is what opened the circuit, so the caller alerts exactly once.
+        """
+        if not _is_spent(remaining):
+            return False
+        now = self._now()
+        hold = cooldown_for(reset_s, self.cooldown_seconds)
+        with self._lock:
+            entry = self._keys.setdefault(key, _Key())
+            if entry.opened_at is not None:
+                return False
+            entry.opened_at = now
+            entry.probe_taken = False
+            entry.until = now + hold
+            return True
 
     def force_open(self, key: str, until_s: float | None = None) -> None:
         """Stop calling ``key`` for ``until_s`` seconds, whatever its history.

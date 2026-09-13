@@ -38,6 +38,7 @@ from . import (
     messages_chars,
     normalize_arguments,
     provider_label,
+    report_quota,
     resource_label,
     warn_estimated_tokens,
 )
@@ -196,6 +197,7 @@ def _finish(
         return stream
     _report_call(report, response, kwargs, started_at, hooks)
     hooks.success(label)
+    report_quota(hooks, label, response)
     emit_tool_requests(hooks, read_tool_requests(response))
     return response
 

@@ -242,6 +242,29 @@ class GuardrailConfig:
     circuit_failure_threshold: int = 5
     circuit_window_seconds: float = 60.0
     circuit_cooldown_seconds: float = 30.0
+    # Opt-in (T144): let the circuit read the rate-limit headers the provider
+    # already sent, instead of only counting failures. It reads three things
+    # and nothing else — the remaining count across every bucket the provider
+    # publishes (Anthropic's four `anthropic-ratelimit-*`, OpenAI's requests
+    # and tokens), when they reset, and a 429's `Retry-After`. A bucket at
+    # zero opens the circuit until its reset, before the failure threshold is
+    # anywhere near; a 429's `Retry-After` sets that opening's cooldown
+    # instead of circuit_cooldown_seconds. No header may hold a circuit open
+    # longer than quota.MAX_COOLDOWN_S (one hour), whatever it says.
+    #
+    # The reach is narrower than it sounds, and the limit is in both SDKs, not
+    # in runbound: **a plain successful call carries no headers at all**. Both
+    # providers hand back a parsed model with nothing to read, and runbound
+    # will not change how your call is made to get at them. So a pre-emptive
+    # opening happens only from an error response (which always carries
+    # headers) or from a call your own code already made through
+    # `with_raw_response` / `.parse()`.
+    #
+    # Off by default because a header your gateway or proxy rewrites would
+    # otherwise stop your traffic by surprise; an unreadable header always
+    # says nothing rather than guessing. With it off the circuit behaves
+    # exactly as it did before this option existed.
+    circuit_reads_quota: bool = False
     max_sessions: int = 10_000  # keyed-session registry capacity (LRU)
     # Self-hosted endpoints. On your own GPUs the scarce resource is
     # concurrency, not dollars: max_inflight_calls is how many calls to one
