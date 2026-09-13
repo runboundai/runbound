@@ -160,7 +160,14 @@ def test_on_tool_start_puts_the_tool_in_the_report_as_undecorated(handler):
     handler.on_tool_start({"name": "search"}, "cats", run_id="run-1")
 
     assert runbound.tools() == [
-        {"name": "search", "decorated": False, "params": [], "doc": None, "module": None}
+        {
+            "name": "search",
+            "decorated": False,
+            "params": [],
+            "doc": None,
+            "module": None,
+            "rules": {},
+        }
     ]
 
 

@@ -26,7 +26,17 @@ from .config import GuardrailConfig
 from .detectors import DEFAULT_DETECTORS, BudgetDetector, LoopDetector, SpikeDetector
 from .events import PRIORITY, Anomaly, Event
 from .exceptions import CircuitOpen, GuardrailTripped, PolicyViolation
-from .policy import ToolCall, ToolPolicy, Violation, coerce, evaluate, merge
+from . import _coverage
+from .policy import (
+    ToolCall,
+    ToolPolicy,
+    Violation,
+    coerce,
+    conflicts,
+    evaluate,
+    from_decorators,
+    merge,
+)
 from .pricing import price_for
 from .shared import LocalState
 from .state import SessionState
@@ -173,6 +183,17 @@ class Engine:
         self._reports_circuits = bool(getattr(self.shared, "fleet", True))
         self._merged_key: tuple | None = None
         self._merged: ToolPolicy | None = None
+        # The configured policy with the @runbound.tool rules folded onto it,
+        # cached on (how many times the decorator registry has changed, which
+        # object config.tool_policy is). Decorators run after init(), so the
+        # fold has to be live; the cache is what keeps it from rebuilding —
+        # and re-keying self._merged above, which keys on id(local) — on every
+        # tool call the process makes.
+        self._local_key: tuple | None = None
+        self._local: ToolPolicy | None = None
+        # A tool whose rule both a decorator and init(tool_policy=...) state is
+        # warned about once per engine, not once per tool call.
+        self._policy_conflicts_warned: set[str] = set()
         # T136: models the admission budget estimate skipped for lack of a
         # price, warned about once per model per Engine — the same "once per
         # model, not process" scoping notify_door's alert-dedup set already
@@ -700,11 +721,72 @@ class Engine:
         return merged
 
     def _local_policy(self) -> ToolPolicy | None:
-        """The configured policy, coerced from a dict if it still is one.
+        """The service's own policy: what the decorators say, over what ``init()`` said.
+
+        A rule lives on the tool, as a keyword on ``@runbound.tool``, and those
+        decorators run *after* ``init()`` in every real app — the module
+        configures runbound at the top and defines its tools below. So the fold
+        happens here, on demand, rather than once at start-up where it would
+        see an empty registry and enforce nothing.
+
+        Cached on the registry's version and the configured policy's identity,
+        and the *same object* comes back while neither has moved: :meth:`_policy`
+        keys its org-policy merge on ``id()`` of what this returns, and a fresh
+        object per tool call would thrash it.
+
+        Fail-open at the seam: a fold that goes wrong leaves the configured
+        policy enforcing alone — the decorator's own mistakes were already
+        raised where they were written, at decoration time.
+        """
+        configured = self._configured_policy()
+        try:
+            key = (_coverage.tool_rules_version(), id(configured))
+            if self._local_key == key:
+                return self._local
+            policy = self._fold(configured)
+        except Exception:
+            _LOG.warning(
+                "runbound: the decorator rules could not be folded into the "
+                "tool policy; enforcing the configured one",
+                exc_info=True,
+            )
+            return configured
+        # The value before the key: a reader racing this sees either the old
+        # key (and refolds, harmlessly) or a key whose policy is already there,
+        # never a key paired with the previous fold's policy.
+        self._local = policy
+        self._local_key = key
+        return policy
+
+    def _fold(self, configured: ToolPolicy | None) -> ToolPolicy | None:
+        """``configured`` with every ``@runbound.tool`` rule folded onto it."""
+        rules = _coverage.tool_rules()
+        self._warn_conflicts(rules, configured)
+        return from_decorators(rules, configured)
+
+    def _warn_conflicts(self, rules: dict, configured: ToolPolicy | None) -> None:
+        """Say, once per tool, that a decorator is overruling ``init()``.
+
+        Silence would be the wrong answer: the customer wrote a rule on
+        ``init(tool_policy=...)`` and it is not the one being enforced.
+        """
+        for tool in conflicts(rules, configured):
+            if tool in self._policy_conflicts_warned:
+                continue
+            self._policy_conflicts_warned.add(tool)
+            _LOG.warning(
+                "runbound: tool %r has a rule on both @runbound.tool and "
+                "init(tool_policy=...); the decorator's rule is the one "
+                "enforced",
+                tool,
+            )
+
+    def _configured_policy(self) -> ToolPolicy | None:
+        """The ``init()`` policy, coerced from a dict if it still is one.
 
         ``init()`` coerces a dict policy during validation; an engine built
         around an unvalidated config coerces here instead, and one built around
-        something that is not a policy at all enforces nothing rather than
+        something that is not a policy at all contributes nothing rather than
         failing every tool call the host makes.
         """
         policy = self.config.tool_policy

@@ -9,6 +9,12 @@ one tool call breaks one of them, in a fixed order, with no I/O and no state.
 ``evaluate`` takes plain data in and returns plain data out — the engine owns
 the consequence, the wrappers own the hook.
 
+A customer states those rules on the tool itself, as keyword arguments to
+``@runbound.tool``; :class:`ToolRules` is one such statement and
+:func:`from_decorators` folds a registry of them into the very
+:class:`ToolPolicy` the customer could have written by hand. Nothing about
+:func:`evaluate` or :func:`merge` knows the difference, which is the point.
+
 **The one deliberate exception to fail-open.** Everywhere else in runbound a
 bug in guardrail code is logged and swallowed so the host's call proceeds. A
 customer's constraint predicate or approval callback is different: it is a
@@ -19,8 +25,11 @@ wave the call through. A predicate that raises therefore counts as a violation
 arguments it choked on, and raw arguments never leave this module.
 """
 
-from collections.abc import Callable
+import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, fields, replace
+
+_LOG = logging.getLogger("runbound")
 
 #: What a violation does. "block": refuse this call. "block_and_latch": refuse
 #: it and stop the session (honoring ``on_trip``). "dry_run": allow the call,
@@ -156,6 +165,222 @@ def coerce(policy: "ToolPolicy | dict | None") -> "ToolPolicy | None":
         public = [f.name for f in fields(ToolPolicy) if not f.name.startswith("_")]
         known = ", ".join(public)
         raise ValueError(f"tool_policy dict is not a ToolPolicy ({exc}); fields: {known}") from exc
+
+
+# --- rules stated on the decorator ------------------------------------------
+
+
+@dataclass(frozen=True)
+class ToolRules:
+    """The rule one ``@runbound.tool`` states about its own tool.
+
+    The keyword arguments of the decorator, kept together so the registry the
+    engine folds is a mapping of tool name to *this*, not five parallel dicts.
+    Every field is optional and an empty ``ToolRules`` states nothing at all —
+    a known tool with no rule, which is a perfectly good thing to be unless
+    ``require_rules`` is on.
+
+    ``reviewed`` is **not** :attr:`ToolPolicy.allow`. It means "this tool was
+    reviewed and is deliberately unrestricted" and exists only so a tool can
+    satisfy ``require_rules`` without being given a rule it does not need.
+    :func:`from_decorators` therefore never folds it anywhere — see that
+    function's docstring for what folding it would do.
+    """
+
+    blocked: bool = False
+    max_calls: int | None = None
+    constraint: Callable[[ToolCall], bool] | None = None
+    require_approval: Callable[[ToolCall], bool] | None = None
+    reviewed: bool = False
+
+    def stated(self) -> bool:
+        """Does this state a rule at all?
+
+        ``repeatable`` and ``name`` are not rules and are not here: one marks
+        polling and the other renames the tool, and neither removes any
+        freedom from the agent.
+        """
+        return bool(
+            self.blocked
+            or self.max_calls is not None
+            or self.constraint is not None
+            or self.require_approval is not None
+            or self.reviewed
+        )
+
+    def as_report(self) -> dict:
+        """The rules as the tool report carries them: JSON, and only what was said.
+
+        A predicate becomes ``"module:qualname"`` — enough for a console to
+        show which function governs a tool, and never the function itself: the
+        report goes over the wire, and a customer's code is never shipped or
+        called off-process. A rule that was not stated is absent rather than
+        null, so an unruled tool reports ``{}`` and its entry's hash does not
+        move when this key was added.
+        """
+        report: dict = {}
+        if self.blocked:
+            report["blocked"] = True
+        if self.max_calls is not None:
+            report["max_calls"] = self.max_calls
+        if self.constraint is not None:
+            report["constraint"] = _dotted(self.constraint)
+        if self.require_approval is not None:
+            report["require_approval"] = _dotted(self.require_approval)
+        if self.reviewed:
+            report["reviewed"] = True
+        return report
+
+
+def _dotted(func: Callable) -> str:
+    """``"module:qualname"`` for a callable, with never an address in it.
+
+    An entry whose text changed on every restart would resend the whole tool
+    report on every heartbeat of every worker and tell the console nothing, so
+    anything that will not name itself falls back to its *type's* name — the
+    same trade :func:`runbound._coverage._annotation` makes.
+    """
+    module = getattr(func, "__module__", None)
+    qualname = getattr(func, "__qualname__", None)
+    if not isinstance(module, str) or not isinstance(qualname, str):
+        kind = type(func)
+        module, qualname = kind.__module__, kind.__qualname__
+    return f"{module}:{qualname}"
+
+
+def from_decorators(
+    rules: Mapping[str, ToolRules], base: "ToolPolicy | dict | None" = None
+) -> "ToolPolicy | None":
+    """Fold the rules stated on the decorators onto the configured policy.
+
+    The result is an ordinary :class:`ToolPolicy` — ``blocked`` becomes a
+    ``deny`` entry (so the rule name in a refusal and in the ledger is the one
+    it always was), ``max_calls`` and ``constraint`` become that tool's entry
+    in those dicts, and ``require_approval`` puts the tool's name on the list
+    with one dispatching :attr:`~ToolPolicy.approval_callback` that routes each
+    tool's question to that tool's own callable.
+
+    **Where both sides name a tool, the decorator wins**, because the rule that
+    ships in the same diff as the function is the one that was reviewed with
+    it; a tool the decorator blocks is dropped from ``base``'s ``allow`` list,
+    exactly as :func:`merge` resolves the same disagreement. The caller is the
+    one that warns about it (see :func:`conflicts`) — this function is pure.
+
+    ``ToolRules.reviewed`` is folded **nowhere**. :attr:`ToolPolicy.allow` is an
+    inverting allow-list: putting one reviewed tool on it would make that tool
+    the only permitted one in the whole process and deny every other. The
+    decorator's ``reviewed=True`` says only "looked at, deliberately unrestricted",
+    and the fleet-wide allow-list stays a thing ``init(tool_policy=...)`` says.
+
+    Pure, and cheap to call again: ``base`` is neither read after this returns
+    nor mutated, and when no rule is stated ``base`` itself comes straight back
+    — the same object, so a caller caching on its identity does not thrash.
+    """
+    base = coerce(base)
+    stated = {
+        name: rule
+        for name, rule in (rules or {}).items()
+        if rule is not None and rule.stated()
+    }
+    if not stated:
+        return base
+
+    policy = ToolPolicy() if base is None else replace(base, **_copied(base))
+    approvals: dict[str, Callable] = {}
+    for name, rule in stated.items():
+        if rule.blocked and name not in policy.deny:
+            policy.deny.append(name)
+        if rule.max_calls is not None:
+            policy.max_calls[name] = rule.max_calls
+        if rule.constraint is not None:
+            policy.constraints[name] = rule.constraint
+        if rule.require_approval is not None:
+            approvals[name] = rule.require_approval
+            if name not in policy.require_approval:
+                policy.require_approval.append(name)
+    if policy.allow is not None:
+        policy.allow = [name for name in policy.allow if name not in policy.deny]
+    if approvals:
+        policy.approval_callback = _ApprovalDispatch(approvals, policy.approval_callback)
+    policy.validate()
+    return policy
+
+
+def conflicts(
+    rules: Mapping[str, ToolRules], base: "ToolPolicy | dict | None"
+) -> list[str]:
+    """Tools whose rule a decorator *replaces* something ``base`` said about, sorted.
+
+    :func:`from_decorators` resolves every one of these in the decorator's
+    favor and says nothing; this is what a caller warns with, so the customer
+    learns that the entry they wrote on ``init()`` is not the one enforced.
+
+    Deliberately narrow — only where the decorator actually takes something
+    away. A tool that both sides ``deny`` agree with each other, and a tool on
+    ``base``'s fleet-wide ``allow`` list that merely carries a decorator rule
+    is still on that list: neither is worth a warning, and a warning nobody
+    needs is how people learn to ignore them.
+    """
+    if base is None:
+        return []
+    try:
+        base = coerce(base)
+    except ValueError:
+        return []
+    return sorted(
+        name
+        for name, rule in (rules or {}).items()
+        if rule is not None and _replaces(name, rule, base)
+    )
+
+
+def _replaces(name: str, rule: ToolRules, base: ToolPolicy) -> bool:
+    """Does ``rule`` overrule what ``base`` states about this one tool?"""
+    return bool(
+        (rule.blocked and name in (base.allow or ()))
+        or (rule.max_calls is not None and name in base.max_calls)
+        or (rule.constraint is not None and name in base.constraints)
+        or (rule.require_approval is not None and name in base.require_approval)
+    )
+
+
+class _ApprovalDispatch:
+    """One :attr:`ToolPolicy.approval_callback` over many per-tool callables.
+
+    ``ToolPolicy`` asks one question — "may this call happen?" — of one
+    callback, while a decorator gives a different callable to each tool. This
+    routes on ``call.name``, falls through to whatever callback the customer
+    configured on ``init()`` for a tool no decorator claimed, and **refuses**
+    when there is neither: an approval gate nobody can answer must not wave the
+    call through (fail-CLOSED, see the module docstring). A callable that
+    raises is left to raise — :func:`evaluate` turns that into the same
+    refusal, reporting only the exception's type.
+    """
+
+    def __init__(
+        self, callbacks: Mapping[str, Callable], fallback: Callable | None
+    ) -> None:
+        self._callbacks = dict(callbacks)
+        self._fallback = fallback
+        self._warned: set[str] = set()
+
+    def __call__(self, call: ToolCall) -> bool:
+        callback = self._callbacks.get(call.name, self._fallback)
+        if callback is None:
+            self._no_approver(call.name)
+            return False
+        return bool(callback(call))
+
+    def _no_approver(self, tool: str) -> None:
+        """Say once per tool that its approval could not be asked of anyone."""
+        if tool in self._warned:
+            return
+        self._warned.add(tool)
+        _LOG.warning(
+            "runbound: tool %r requires approval and no approval callback is "
+            "registered for it; the call was refused",
+            tool,
+        )
 
 
 def merge(

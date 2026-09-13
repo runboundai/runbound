@@ -82,8 +82,8 @@ def test_the_three_demo_tools_arrive_with_their_parameters():
     assert all(item["decorated"] for item in report)
 
 
-def test_every_entry_has_exactly_the_five_agreed_keys_in_order():
-    """The plane reads this shape; a sixth key or a reordering is a contract break."""
+def test_every_entry_has_exactly_the_six_agreed_keys_in_order():
+    """The plane reads this shape; a seventh key or a reordering is a contract break."""
 
     @runbound.tool
     def search(query: str) -> list:
@@ -91,7 +91,8 @@ def test_every_entry_has_exactly_the_five_agreed_keys_in_order():
 
     (item,) = runbound.tools()
 
-    assert list(item) == ["name", "decorated", "params", "doc", "module"]
+    assert list(item) == ["name", "decorated", "params", "doc", "module", "rules"]
+    assert item["rules"] == {}, "a tool that states no rule reports no rules"
     assert item["doc"] == "Look something up."
     assert item["module"] == __name__
     assert list(item["params"][0]) == ["name", "annotation", "required"]
@@ -224,6 +225,7 @@ def test_a_requested_tool_nobody_decorated_is_reported_undecorated():
             "params": [],
             "doc": None,
             "module": None,
+            "rules": {},
         }
     ]
 

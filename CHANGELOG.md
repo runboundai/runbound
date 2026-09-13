@@ -334,6 +334,54 @@ Two more release-gating fixes from the same outside review.
   `before` was already tolerated. With `budget_admission` left off, every
   existing call path is unchanged.
 
+### Wave H (the rule lives on the tool)
+
+- **`@runbound.tool` states the rule, in the same line as the function.** No
+  policy file, no CLI, no second configuration surface to drift from the code:
+  `blocked=True`, `max_calls=n`, `constraint=predicate`,
+  `require_approval=predicate` and `reviewed=True` join the existing `name` and
+  `repeatable`. They fold into an ordinary `ToolPolicy` — `blocked` becomes a
+  `deny` entry, so the rule name in a refusal, an anomaly and the ledger is the
+  one it always was — and `policy.evaluate` and `policy.merge` are byte-for-byte
+  unchanged. The builder is `policy.from_decorators()`; the statement itself is
+  `policy.ToolRules`.
+- **The fold is live, not snapshotted at `init()`.** In a normal module `init()`
+  runs at the top and the tools are defined below it, so a policy folded once at
+  start-up would see an empty registry and enforce *nothing*. The decorators
+  write into a process-lifetime registry and `Engine._local_policy()` composes
+  on demand, cached on the registry's version and the configured policy's
+  identity — the same object comes back while neither has moved, so the org
+  merge above it does not re-key on every tool call.
+- **Each tool gets its own approval callback.** `ToolPolicy` asks one callback;
+  the decorator gives a different callable per tool, so the fold builds one
+  dispatcher that routes on the tool's name, falls through to the
+  `approval_callback` configured on `init()` for a tool no decorator claimed,
+  and **refuses** when there is neither — an approval nobody can answer is a
+  refusal, not a permission.
+- **`init(require_rules=True)` is the CI gate.** A `@runbound.tool` that states
+  no rule at all raises `ValueError` — named at `init()` for every such tool
+  already imported, and raised at decoration for every one declared afterwards,
+  which is where they normally are. Any CI step that imports the app fails with
+  it, so a tool cannot reach production without a stated rule. A tool that
+  genuinely needs none says so with `reviewed=True`.
+- **`reviewed=True` is not `ToolPolicy.allow`.** The decorator's `reviewed=True` means
+  "reviewed, deliberately unrestricted" and is folded nowhere;
+  `ToolPolicy.allow` is a fleet-wide *inverting* allow-list, and putting one
+  reviewed tool on it would deny every other tool in the process.
+- **`tool_policy=` on `init()` stays** for the two things a decorator cannot
+  say — the fleet-wide `allow` list and rules for framework tools that carry no
+  decorator of yours — plus `on_violation`, which is a property of the policy
+  and not of any one tool. Where both name the same tool the decorator wins,
+  with one warning naming it.
+- **The tool report carries the rules.** Each entry gains
+  `"rules": {...}` as the decorator stated them (`{}` when it stated none), with
+  a `constraint` or `require_approval` rendered as `"module:qualname"` — never
+  the callable, which is never shipped and never called off-process. This moves
+  `tools_hash`, which resends each worker's report once, by design.
+- An unenforceable decorator keyword (`max_calls=0`, a `constraint` that is not
+  callable, `blocked=True` with `reviewed=True`) raises `ValueError` at decoration,
+  where it was written, exactly as a bad `init()` argument does.
+
 ### Changed
 
 - README: a "Fleet mode" section (when the plane is contacted, what it adds,

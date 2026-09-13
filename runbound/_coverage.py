@@ -86,6 +86,20 @@ _TIMER: threading.Timer | None = None
 _TOOLS: dict[str, dict] = {}
 _TRUNCATION_LOGGED = False
 
+#: name -> the :class:`runbound.policy.ToolRules` its ``@runbound.tool`` stated,
+#: for every decorated tool including the ones that state nothing. The engine
+#: folds this into the policy it enforces (``Engine._local_policy``), so unlike
+#: everything else in this module it holds the customer's own callables — and
+#: for that reason it is *not* the store the report is built from: the report
+#: reads ``_TOOLS``, where the same rules live rendered as strings.
+#:
+#: Same lifetime as :data:`_DECORATED_TOOL_NAMES`: written at import, read for
+#: the life of the process, emptied only by :func:`reset_for_tests`. Decorators
+#: run long after ``init()`` in a normal app, so the engine reads it live and
+#: caches on :data:`_TOOL_RULES_VERSION`, which every write below bumps.
+_TOOL_RULES: dict = {}
+_TOOL_RULES_VERSION = 0
+
 
 def client_wrapped() -> None:
     """One more client guarded by :func:`runbound.wrap`."""
@@ -203,16 +217,48 @@ def providers_unguarded(imported: Sequence[str] | None = None) -> list[str]:
 # does.
 
 
-def tool_declared(name: str, func: Callable | None = None) -> None:
-    """Remember a tool the code declares, with its signature. Never raises."""
+def tool_declared(name: str, func: Callable | None = None, rules=None) -> None:
+    """Remember a tool the code declares, with its signature. Never raises.
+
+    ``rules`` is the :class:`runbound.policy.ToolRules` the decorator stated.
+    It is kept twice on purpose: rendered as strings in the report entry, which
+    goes over the wire, and as itself in :data:`_TOOL_RULES`, which never does
+    and is what the engine folds into the policy it enforces.
+    """
+    global _TOOL_RULES_VERSION
     try:
         if not isinstance(name, str) or not name:
             return
-        entry = _tool_entry(name, func)
+        entry = _tool_entry(name, func, rules)
         with _LOCK:
             _TOOLS[name] = entry
+            if rules is not None:
+                _TOOL_RULES[name] = rules
+                _TOOL_RULES_VERSION += 1
     except Exception:  # pragma: no cover - a report never costs a call
         _LOG.debug("runbound: could not record the tool %r", name, exc_info=True)
+
+
+def tool_rules_version() -> int:
+    """How many times the rule registry has changed, ever.
+
+    A plain int read, no lock: the engine checks it before every tool call to
+    decide whether the policy it cached is still the policy the decorators
+    describe, and taking a lock for that would put one on the call path.
+    """
+    return _TOOL_RULES_VERSION
+
+
+def tool_rules() -> dict:
+    """Every decorated tool's stated rules, name -> ``ToolRules``. A fresh copy."""
+    with _LOCK:
+        return dict(_TOOL_RULES)
+
+
+def unruled_tools() -> list[str]:
+    """Decorated tools that state no rule at all, sorted — what ``require_rules`` names."""
+    for_check = tool_rules()
+    return sorted(name for name, rule in for_check.items() if not rule.stated())
 
 
 def tool_requested(name: str) -> None:
@@ -239,6 +285,7 @@ def tool_requested(name: str) -> None:
                 "params": [],
                 "doc": None,
                 "module": None,
+                "rules": {},
             }
     except Exception:  # pragma: no cover
         _LOG.debug("runbound: could not record the request for %r", name, exc_info=True)
@@ -279,7 +326,11 @@ def tool_report_hash(report: list[dict] | None = None) -> str:
 
 def _copy_entry(entry: dict) -> dict:
     """One entry, deep enough that nothing shared stays shared."""
-    return {**entry, "params": [dict(param) for param in entry["params"]]}
+    return {
+        **entry,
+        "params": [dict(param) for param in entry["params"]],
+        "rules": dict(entry.get("rules") or {}),
+    }
 
 
 def _log_truncation(total: int) -> None:
@@ -296,15 +347,33 @@ def _log_truncation(total: int) -> None:
     )
 
 
-def _tool_entry(name: str, func: Callable | None) -> dict:
-    """The five keys the plane reads, in the order it reads them."""
+def _tool_entry(name: str, func: Callable | None, rules=None) -> dict:
+    """The six keys the plane reads, in the order it reads them.
+
+    ``rules`` is what the decorator stated, rendered by
+    :meth:`runbound.policy.ToolRules.as_report` — a predicate as its
+    ``"module:qualname"``, never the predicate. A tool with no rule reports an
+    empty dict, so the console can tell "no rule" from "not reported".
+    """
     return {
         "name": name,
         "decorated": True,
         "params": _params(func),
         "doc": _first_doc_line(func),
         "module": _module(func),
+        "rules": _rules_report(rules),
     }
+
+
+def _rules_report(rules) -> dict:
+    """``rules.as_report()``, or ``{}`` for anything that will not render itself."""
+    if rules is None:
+        return {}
+    try:
+        return dict(rules.as_report())
+    except Exception:  # pragma: no cover - a report never costs a call
+        _LOG.debug("runbound: could not render a tool's rules", exc_info=True)
+        return {}
 
 
 def _params(func: Callable | None) -> list[dict]:
@@ -520,7 +589,7 @@ def cancel_silence_timer() -> None:
 def reset_for_tests() -> None:
     """Put every counter back to zero and disarm the timer. Test-only."""
     global _WRAPPED_CLIENTS, _DECORATED_TOOLS, _TOOL_CALLS, _KEYED_SESSIONS
-    global _GUARDED_CALLS, _LAST_GUARDED_AT, _TRUNCATION_LOGGED
+    global _GUARDED_CALLS, _LAST_GUARDED_AT, _TRUNCATION_LOGGED, _TOOL_RULES_VERSION
     cancel_silence_timer()
     with _LOCK:
         _WRAPPED_CLIENTS = 0
@@ -532,4 +601,8 @@ def reset_for_tests() -> None:
         _SHAPES_SEEN.clear()
         _DECORATED_TOOL_NAMES.clear()
         _TOOLS.clear()
+        _TOOL_RULES.clear()
+        # Bumped, never zeroed: an engine that outlives this call must not
+        # find its cache key matching a registry that has just been emptied.
+        _TOOL_RULES_VERSION += 1
         _TRUNCATION_LOGGED = False

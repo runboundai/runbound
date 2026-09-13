@@ -32,7 +32,7 @@ import secrets
 import threading
 import time
 from collections import OrderedDict, deque
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 from uuid import uuid4
 
@@ -53,7 +53,7 @@ from .engine import (
 from .events import Anomaly, Event
 from .exceptions import GuardrailTripped
 from .plane_types import DETAIL_STRING_MAX, ExitDelta, PlaneStatus, key_hash, redact_key
-from .policy import ToolCall
+from .policy import ToolCall, ToolRules
 from .pricing import price_call
 from .shared import LocalState, build as _build_shared
 from .state import SessionState
@@ -218,6 +218,11 @@ def init(**kwargs: Any) -> None:
     ``ValueError`` naming where the setting went instead of that bare
     ``TypeError`` — delivery is not a setting on this call any more at all.
 
+    ``require_rules=True`` adds one more: every ``@runbound.tool`` already
+    imported that states no rule is named in a ``ValueError`` here, and every
+    one declared afterwards raises at its own decoration — the CI gate, since
+    in a normal module the tools are defined below this call, not above it.
+
     Calling it again reconfigures the SDK and starts a fresh session and an
     empty keyed-session registry.
 
@@ -246,6 +251,7 @@ def init(**kwargs: Any) -> None:
     global _ENGINE, _SHARED, _LOOP_IGNORE_TOOLS
     config = GuardrailConfig(**kwargs)
     config.validate()
+    _check_required_rules(config)
     # "Which plane am I talking to" is the first question in every support
     # conversation, and a customer should not have to read our source to
     # answer it. Said once, at INFO, naming the mode and — for a self-hosted
@@ -2617,9 +2623,17 @@ def _read_tokens(
 
 
 def tool(
-    fn: Callable | None = None, *, name: str | None = None, repeatable: bool = False
+    fn: Callable | None = None,
+    *,
+    name: str | None = None,
+    repeatable: bool = False,
+    blocked: bool = False,
+    max_calls: int | None = None,
+    constraint: Callable[[ToolCall], bool] | None = None,
+    require_approval: Callable[[ToolCall], bool] | None = None,
+    reviewed: bool = False,
 ) -> Callable:
-    """Record every call to a tool. Usable bare or with ``(name=..., ...)``.
+    """Record every call to a tool, and state the rule it must obey.
 
     ::
 
@@ -2631,6 +2645,46 @@ def tool(
 
         @runbound.tool(repeatable=True)
         def poll_job_status(job_id): ...
+
+    **The rule lives on the tool**, in the same line and the same diff as the
+    function it governs — there is no policy file and no CLI::
+
+        @runbound.tool(max_calls=1, constraint=under_500)
+        def issue_refund(user: str, amount: float): ...
+
+        @runbound.tool(blocked=True)          # the model may ask; it never runs
+        def send_email(to: str): ...
+
+        @runbound.tool(require_approval=ask_a_human)
+        def wire_money(account: str, amount: float): ...
+
+        @runbound.tool
+        def lookup_order(order_id: str): ...  # known, allowed, no rule
+
+    ``blocked=True`` refuses the tool outright (reported as the ``deny`` rule).
+    ``max_calls=n`` allows ``n`` attempts per session, counting the one being
+    judged. ``constraint`` and ``require_approval`` each take a
+    ``predicate(call) -> bool`` receiving a :class:`~runbound.policy.ToolCall`;
+    returning ``False`` — or raising, which is fail-**closed** — refuses the
+    call. Each tool's ``require_approval`` is its own: two tools ask two
+    different humans.
+
+    ``reviewed=True`` states that this tool was looked at and is deliberately
+    unrestricted. It is **not** ``ToolPolicy.allow``, which is a fleet-wide
+    inverting allow-list; it restricts nothing and exists so a tool that needs
+    no rule can still satisfy ``require_rules``.
+
+    Rules fold into the policy the engine enforces the moment they are
+    declared, so a tool decorated after :func:`init` — the usual ordering — is
+    enforced from its first call. Where a tool's rule is stated both here and
+    in ``init(tool_policy=...)``, this one wins and a warning says so.
+
+    With ``init(require_rules=True)`` a tool that states no rule at all raises
+    ``ValueError`` here, at decoration time: the CI gate, failing any step that
+    imports the app. An unenforceable keyword (``max_calls=0``, a
+    ``constraint`` that is not callable) raises here too, loudly, exactly as a
+    bad ``init()`` argument does — misconfiguration is the one thing in
+    runbound that is never swallowed.
 
     The ``tool_call`` event is emitted *before* the function runs, so a loop is
     broken on the repeat that would have made it — with ``on_anomaly="raise"``
@@ -2657,10 +2711,13 @@ def tool(
     Cancellation is not a tool failure and is re-raised untouched.
     """
 
+    rules = _tool_rules(blocked, max_calls, constraint, require_approval, reviewed)
+
     def decorate(func: Callable) -> Callable:
         tool_name = name or getattr(func, "__name__", "<tool>")
+        _require_rule(tool_name, rules)
         _coverage.tool_decorated(tool_name)
-        _coverage.tool_declared(tool_name, func)
+        _coverage.tool_declared(tool_name, func, rules)
 
         if inspect.iscoroutinefunction(func):
 
@@ -2698,6 +2755,95 @@ def tool(
         return wrapper
 
     return decorate if fn is None else decorate(fn)
+
+
+def _tool_rules(
+    blocked: bool,
+    max_calls: int | None,
+    constraint: Callable | None,
+    require_approval: Callable | None,
+    reviewed: bool,
+) -> ToolRules:
+    """The decorator's rule keywords, checked and packed. Raises on nonsense.
+
+    Checked here rather than at the fold because this is where the customer
+    wrote it: ``max_calls=0`` is a rule that can never be satisfied and
+    ``constraint="under_500"`` is a rule that can never be asked, and both
+    should fail the import that declares them, not the tool call that trips
+    over them months later.
+    """
+    for label, value in (("blocked", blocked), ("reviewed", reviewed)):
+        if not isinstance(value, bool):
+            raise ValueError(
+                f"@runbound.tool({label}=...) must be True or False, got {value!r}"
+            )
+    if blocked and reviewed:
+        raise ValueError(
+            "@runbound.tool(blocked=True, reviewed=True) contradicts itself: "
+            "blocked refuses the tool, reviewed says it is deliberately unrestricted"
+        )
+    if max_calls is not None and (
+        isinstance(max_calls, bool) or not isinstance(max_calls, int) or max_calls < 1
+    ):
+        raise ValueError(
+            f"@runbound.tool(max_calls=...) must be an int >= 1, got {max_calls!r}"
+        )
+    for label, value in (
+        ("constraint", constraint),
+        ("require_approval", require_approval),
+    ):
+        if value is not None and not callable(value):
+            raise ValueError(
+                f"@runbound.tool({label}=...) must be a callable taking a "
+                f"ToolCall and returning a bool, got {value!r}"
+            )
+    return ToolRules(
+        blocked=blocked,
+        max_calls=max_calls,
+        constraint=constraint,
+        require_approval=require_approval,
+        reviewed=reviewed,
+    )
+
+
+def _require_rule(tool_name: str, rules: ToolRules) -> None:
+    """Under ``require_rules``, refuse to decorate a tool that states no rule.
+
+    The CI gate. ``init(require_rules=True)`` names every unruled tool already
+    imported; this catches every one declared afterwards, which in a normal
+    module is all of them — ``init()`` runs at the top of the file and the
+    tools are defined below it.
+    """
+    with _LOCK:
+        engine = _ENGINE
+    if engine is None or not getattr(engine.config, "require_rules", False):
+        return
+    if rules.stated():
+        return
+    raise ValueError(_no_rule_message([tool_name]))
+
+
+def _no_rule_message(tools: Sequence[str]) -> str:
+    """What ``require_rules`` says about the tools that state no rule."""
+    return (
+        f"require_rules=True, but no rule is stated for: {', '.join(tools)}. "
+        "Give each one a rule on its @runbound.tool (blocked=True, max_calls=, "
+        "constraint=, require_approval=), or reviewed=True to say it was looked at "
+        "and is deliberately unrestricted."
+    )
+
+
+def _check_required_rules(config: GuardrailConfig) -> None:
+    """Fail an ``init(require_rules=True)`` that already has unruled tools.
+
+    Raised before anything is configured or started, so a process that cannot
+    pass its own gate never begins guarding traffic under it.
+    """
+    if not config.require_rules:
+        return
+    unruled = _coverage.unruled_tools()
+    if unruled:
+        raise ValueError(_no_rule_message(unruled))
 
 
 def _announce_call(

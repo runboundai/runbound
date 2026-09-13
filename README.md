@@ -647,11 +647,11 @@ a single file.
 The **tool report** is the one record built from your code rather than from
 your traffic: for every `@runbound.tool` in the process, its name, its
 parameters' names, each annotation rendered as a string, whether each parameter
-has a default (never *what* the default is), the first line of its docstring
-and its defining module — plus a `decorated: false` entry for every tool name a
-model asked for that no decorator declared, which is exactly the coverage gap
-worth seeing. Read it yourself with `runbound.tools()`; it is the same list the
-heartbeat carries.
+has a default (never *what* the default is), the first line of its docstring,
+its defining module and the `rules` its decorator stated — plus a
+`decorated: false` entry for every tool name a model asked for that no
+decorator declared, which is exactly the coverage gap worth seeing. Read it
+yourself with `runbound.tools()`; it is the same list the heartbeat carries.
 
 ```python
 [{"name": "issue_refund",
@@ -659,8 +659,14 @@ heartbeat carries.
   "params": [{"name": "user", "annotation": "str", "required": True},
              {"name": "amount", "annotation": "float", "required": True}],
   "doc": "Refund a customer.",
-  "module": "acme.tools"}]
+  "module": "acme.tools",
+  "rules": {"max_calls": 1, "constraint": "acme.tools:under_500"}}]
 ```
+
+A tool that states no rule reports `"rules": {}`. A `constraint` or
+`require_approval` travels as `"module:qualname"` and **never as the function
+itself**: your predicates run in your process, are never shipped, and are never
+called anywhere else.
 
 `tools_hash` — 16 hex characters of a sha256 over that list — rides every
 heartbeat; the list itself rides only when the hash changed, or when the plane
@@ -1429,30 +1435,77 @@ which refund went out; only something sitting on the tool call can refuse it.
 evaluated there: **we enforce the rules you state, we never judge the action,
 and no model is involved in the decision.**
 
-Five rules, evaluated in this order, and the first one broken is the one
-reported:
+### The rule lives on the tool
 
-| Rule | You give | A call is refused when |
-|---|---|---|
-| `deny` | tool names | the tool is on the list. The blunt one: this agent may never do this. |
-| `allow` | tool names, or `None` | `allow` is set and the tool is **not** on it. The only rule that inverts — set it and the listed tools are the only ones permitted. A tool in both lists is rejected at `init()`. |
-| `max_calls` | `{tool: int}` | the tool has been attempted more times than the limit **in this session**. The count includes the attempt being judged, so `1` means the first call runs and the second is refused. |
-| `constraints` | `{tool: predicate}` | your `predicate(call)` returns `False`. It receives a `ToolCall` — `name`, `args`, `kwargs`, `session_key`, `tags` — so it can decide on the real arguments, or on who is calling ("free-tier users may not do this"). |
-| `require_approval` | tool names + `approval_callback` | your `approval_callback(call)` returns `False`. Same `ToolCall`. Listing a tool without a callback is rejected at `init()`. |
+No policy file, no CLI, no second place to look. A tool's rule is a keyword on
+its decorator, so it sits in the same line — and lands in the same diff, and
+gets the same review — as the function it governs:
 
 ```python
 import runbound
-from runbound import GuardrailTripped, PolicyViolation, ToolPolicy
+
+runbound.init(on_anomaly="raise")             # governs detectors; policy is separate
+
+@runbound.tool(max_calls=1, constraint=under_500)
+def issue_refund(user: str, amount: float): ...
+
+@runbound.tool(blocked=True)                  # the model may ask for it; it never runs
+def send_email(to: str): ...
+
+@runbound.tool(require_approval=ask_a_human)
+def wire_money(account: str, amount: float): ...
+
+@runbound.tool
+def lookup_order(order_id: str): ...          # known, allowed, no rule
+```
+
+| Keyword | You give | A call is refused when |
+|---|---|---|
+| `blocked` | `True` | ever. The blunt one: this agent may never do this. Reported as the `deny` rule. |
+| `max_calls` | `int >= 1` | the tool has been attempted more times than the limit **in this session**. The count includes the attempt being judged, so `1` means the first call runs and the second is refused. |
+| `constraint` | `predicate(call) -> bool` | your predicate returns `False`. It receives a `ToolCall` — `name`, `args`, `kwargs`, `session_key`, `tags` — so it can decide on the real arguments, or on who is calling ("free-tier users may not do this"). |
+| `require_approval` | `predicate(call) -> bool` | your callback returns `False`. Same `ToolCall`. Each tool gets **its own** callback: two tools can ask two different people. |
+| `allow` | `True` | never. It states that this tool was reviewed and is deliberately unrestricted, so it satisfies `require_rules` below. It is **not** an allow-list and it restricts nothing. |
+
+The rules take effect the moment the decorator runs, which is normally *after*
+`init()` — your module configures runbound at the top and defines its tools
+below. A keyword that could never be enforced (`max_calls=0`, a `constraint`
+that is not callable) raises `ValueError` right there at decoration, the same
+way a bad `init()` argument does.
+
+### The CI gate: `require_rules=True`
+
+```python
+runbound.init(require_rules=True)
+```
+
+Now a `@runbound.tool` that states no rule at all is a `ValueError` — named at
+`init()` for every tool already imported, and raised at decoration for every
+one declared afterwards. Any CI step that imports your app fails with it, so a
+tool cannot reach production without a stated rule. A tool that genuinely needs
+none says so out loud with `reviewed=True`.
+
+### `tool_policy=` on `init()`: the fleet allow-list, and tools with no decorator
+
+Two things a decorator cannot say, so this stays:
+
+- **An allow-list across all tools.** `ToolPolicy.allow` is the one rule that
+  *inverts*: set it and the listed tools are the only ones permitted, which is
+  a statement about the whole process rather than about any one tool.
+- **A rule for a tool you did not write.** A framework's tools (LangChain's,
+  say) carry no decorator of yours; name them here.
+
+```python
+from runbound import ToolPolicy
 
 runbound.init(
-    on_anomaly="raise",                       # governs detectors; policy is separate
     tool_policy=ToolPolicy(
+        allow=["lookup_order", "issue_refund"],   # ONLY these tools may run
         deny=["wire_money"],
-        max_calls={"send_email": 1},
-        constraints={"issue_refund": lambda call: call.kwargs.get("amount", 0) <= 500},
+        max_calls={"framework_search": 5},
         require_approval=["delete_account"],
         approval_callback=lambda call: ask_a_human(call.name),
-        on_violation="block",                 # "block_and_latch" | "dry_run"
+        on_violation="block",                     # "block_and_latch" | "dry_run"
     ),
 )
 ```
@@ -1462,8 +1515,22 @@ of your own config file. It is coerced and validated at `init()`, and an unknown
 key raises there rather than silently dropping a rule you believed was enforced:
 
 ```python
-runbound.init(tool_policy={"deny": ["wire_money"], "max_calls": {"send_email": 1}})
+runbound.init(tool_policy={"deny": ["wire_money"], "max_calls": {"framework_search": 5}})
 ```
+
+`on_violation` belongs here and only here: it is what a *broken rule* does, a
+property of the policy rather than of any one tool.
+
+**Where both name the same tool, the decorator wins** — the rule that ships in
+the same diff as the function is the one that was reviewed with it — and a
+warning says so once, naming the tool. A tool the decorator blocks is dropped
+from an `allow` list here, exactly the way an org policy's deny resolves the
+same disagreement.
+
+The five rules are evaluated in a fixed order — `deny`, `allow`, `max_calls`,
+`constraint`, `approval` — and the first one broken is the one reported, so an
+explicitly blocked tool reads as "denied" however many other rules also cover
+it.
 
 **Catch a refusal apart from a runaway.** `PolicyViolation` is a subclass of
 `GuardrailTripped`, so code that already catches trips keeps working; catch it
@@ -1504,8 +1571,13 @@ wrong rule in `block` mode breaks a working agent. Ship with
 and every tool still runs. Read what it would have refused, fix the rules that
 were wrong, then change one word to `"block"`.
 
-Three honest notes:
+Four honest notes:
 
+- **An approval nobody can answer is a refusal.** Each tool's own
+  `require_approval` callback is asked first; a tool that has none falls
+  through to the `approval_callback` you configured on `init()`; if there is
+  neither, the call is refused, not permitted. Fail-**closed**, like every
+  other gate here.
 - **A gate that errors refuses the call.** Everywhere else in runbound a bug
   is swallowed so your call proceeds. A constraint or approval callback is the
   one exception: it is a permission gate you opted into, and a gate that cannot
@@ -1809,7 +1881,8 @@ keyword`.
 | `circuit_cooldown_seconds` | `float` | `30.0` | How long an open circuit stays open before one probe is let through. Must be positive. |
 | `on_trip` | `str` | `"latch"` | After a critical trip: `"latch"` keeps the session stopped until `clear()`/ttl; `"once"` stops that one call only. See [the reactions table](#what-happens-when-something-trips--every-choice-in-one-place). |
 | `latch_ttl_seconds` | `float \| None` | `None` | **Opt-in.** `None` = a tripped session stays tripped until `clear()`. A number = the latch expires that many seconds after it was set: every detector is re-armed and the session's next event is judged fresh, on the same cumulative counters — a session still over budget re-trips immediately, with the same detector. Re-admits; does not reset. |
-| `tool_policy` | `ToolPolicy \| dict \| None` | `None` | The rules for what your agent may do, enforced at every guarded tool call: `deny`, `allow`, `max_calls`, `constraints`, `require_approval` + `approval_callback`, and its own `on_violation`. A dict of those fields is coerced to a `ToolPolicy` and validated at `init()`. See [Action policy](#action-policy--rules-for-what-your-agent-may-do). |
+| `tool_policy` | `ToolPolicy \| dict \| None` | `None` | The rules for what your agent may do, enforced at every guarded tool call: `deny`, `allow`, `max_calls`, `constraints`, `require_approval` + `approval_callback`, and its own `on_violation`. A dict of those fields is coerced to a `ToolPolicy` and validated at `init()`. Per-tool rules belong on `@runbound.tool` instead; this is for the fleet-wide `allow` list, for tools that carry no decorator of yours, and for `on_violation`. Where both name a tool, the decorator wins and one warning says so. See [Action policy](#action-policy--rules-for-what-your-agent-may-do). |
+| `require_rules` | `bool` | `False` | The CI gate. `True`: a `@runbound.tool` that states no rule at all raises `ValueError` — at `init()` for every such tool already imported, and at decoration for every one declared afterwards. `reviewed=True` on the decorator says a tool was reviewed and needs none. |
 | `max_inflight_calls` | `int \| None` | `None` | **Opt-in.** How many guarded calls to one provider label may be in flight at once, process-wide. The call that would exceed it raises `GuardrailTripped` (detector `inflight`) before the request goes out, whatever `on_anomaly` says, and latches nothing. `None` counts nothing at all. See [Self-hosted models](#self-hosted-models). |
 | `estimate_tokens` | `bool` | `False` | **Opt-in.** When a response carries no usage at all, estimate tokens as `ceil(chars / 4)` over the request text and the answer, streams included. Never used when the endpoint reported usage. Logged once per process. For self-hosted servers that omit `usage`. |
 | `auto_wrap` | `bool` | `True` | Patches the OpenAI and Anthropic SDK classes at `init()`, so every client built afterwards is guarded without a `wrap()` call. The provider label is still read per call from that client's `base_url`, so per-endpoint circuits keep working. `False` leaves the classes untouched. Reversible with `runbound.unpatch()`. See [What the SDK actually sees](#what-the-sdk-actually-sees--and-what-it-never-sees). |

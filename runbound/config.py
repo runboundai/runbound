@@ -280,6 +280,14 @@ class GuardrailConfig:
     # validate(). Its own on_violation decides the reaction; on_anomaly governs
     # detectors and has no say over policy.
     tool_policy: ToolPolicy | dict | None = None
+    # The CI gate. True: a tool decorated with @runbound.tool that states no
+    # rule (blocked, max_calls, constraint, require_approval, or allow=True to
+    # say it was reviewed and needs none) is a ValueError — raised by init()
+    # for every such tool already imported, and by the decorator itself for
+    # every one declared afterwards, since decorators normally run after
+    # init(). Any CI step that imports the app fails with it, so a tool cannot
+    # reach production without a stated rule.
+    require_rules: bool = False
     # Fleet mode. control_plane_url turns it on: workers say hello at init,
     # ask at session entry and report at session exit, and share budgets,
     # latches and org policy through the plane. Everything below is off or
@@ -460,7 +468,8 @@ class GuardrailConfig:
         url with no token, a plane timeout outside ``(0, 2.0]`` seconds or a
         poll interval that is not positive, and an unknown ``on_halt`` mode. A
         ``tool_policy`` written as a dict is coerced to a :class:`ToolPolicy`
-        here and validated with it. Rejects a ``refusals`` profile whose entry
+        here and validated with it, and a non-bool ``require_rules`` is
+        rejected. Rejects a ``refusals`` profile whose entry
         for some key is not a dict, whose ``status`` is not an int in
         200-599, or whose ``message`` is not a string of at most 500
         characters — always naming the offending key. Rejects an unknown
@@ -756,10 +765,18 @@ class GuardrailConfig:
             )
 
     def _validate_policy(self) -> None:
-        """Coerce a dict policy into a real one, then let it check itself."""
+        """Coerce a dict policy into a real one, then let it check itself.
+
+        ``require_rules`` is a gate that fails a start-up, so a truthy string
+        or a stray ``1`` must not quietly arm or disarm it.
+        """
         self.tool_policy = coerce(self.tool_policy)
         if self.tool_policy is not None:
             self.tool_policy.validate()
+        if not isinstance(self.require_rules, bool):
+            raise ValueError(
+                f"require_rules must be a bool, got {self.require_rules!r}"
+            )
 
     def _validate_refusals(self) -> None:
         """Check ``refusals`` against the shape :mod:`runbound.responses` reads.
