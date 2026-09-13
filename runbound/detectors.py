@@ -21,8 +21,10 @@ whatever thread the agent happens to be on, so every multi-value read of
 import statistics
 from collections import deque
 
+from . import ladder
 from .config import SPIKE_CONFIRM_MAX, GuardrailConfig
 from .events import Anomaly, Event
+from .ladder import Effect, Observation, Transition
 from .state import ERROR_WINDOW_SECONDS, HASHED_KINDS, SessionState
 
 VELOCITY_WINDOW_SECONDS = 60.0
@@ -668,27 +670,84 @@ class SpikeDetector:
     ) -> Anomaly | None:
         """Where this call leaves the session on the ladder.
 
-        Below the limit the rungs are the familiar ones — the first abnormal
-        call is a notice (level 1, once per session), a confirmed spike is a
-        *limit* (level 2) that stops nothing. From there
-        :meth:`_at_limit` takes over.
+        Which rung, and why, is :func:`runbound.ladder.transition`'s to say;
+        this applies what it says — the allowance, the level, the session's
+        history entry — and reports the rungs that page a human.
+
+        The one thing left here is arithmetic the machine cannot do without
+        the session: spending the allowance, and noticing it has run out,
+        which is itself a fresh observation
+        (:attr:`~runbound.ladder.Observation.ALLOWANCE_GONE`) for the machine
+        to answer in its turn.
         """
-        confirmed = sum(self._flags[session_id]) >= config.spike_confirm
+        seen = ladder.observation(
+            abnormal=abnormal,
+            abnormal_recent=sum(self._flags[session_id]),
+            noticed=session_id in self._warned,
+            config=config,
+        )
         with state.lock:
             level = int(getattr(state, "spike_level", 0) or 0)
-        if level >= 2:
-            return self._at_limit(
-                state, config, session_id, abnormal, confirmed, metric, value, median
-            )
-        if confirmed:
-            return self._limit(state, config, session_id, metric, value, median)
-        if abnormal and session_id not in self._warned:
-            self._warned.add(session_id)
-            with state.lock:
-                state.spike_level = 1
+            move = ladder.transition(level, seen, config)
+            spending = Effect.SPEND_ALLOWANCE in move.effects
+            if spending and self._spend(state, config) <= 0:
+                move = ladder.transition(
+                    move.next_level, Observation.ALLOWANCE_GONE, config
+                )
+            if Effect.SET_ALLOWANCE in move.effects:
+                base = _base_allowance(state, config)
+                state.spike_allowance = base
+                state.spike_allowance_start = base
+            if Effect.HEAL in move.effects:
+                state.spike_allowance = None
+                state.spike_allowance_start = None
+            if not move.moved:
+                return None
+            state.spike_level = move.next_level
             state.record_ladder_transition(
-                0, 1, "first_abnormal", trigger=(metric, value, median, config.spike_factor)
+                level,
+                move.next_level,
+                move.reason,
+                trigger=(metric, value, median, config.spike_factor),
             )
+        return self._report(state, config, session_id, move, metric, value, median)
+
+    def _spend(self, state: SessionState, config: GuardrailConfig) -> int:
+        """Charge one abnormal call to the limit; returns what is left.
+
+        The caller holds ``state.lock``. A session limited before this
+        detector instance ever saw it carries no allowance of its own, so it
+        starts from its base.
+        """
+        allowance = state.spike_allowance
+        if allowance is None:
+            allowance = _base_allowance(state, config)
+        allowance -= 1
+        state.spike_allowance = allowance
+        return allowance
+
+    def _report(
+        self,
+        state: SessionState,
+        config: GuardrailConfig,
+        session_id: str,
+        move: Transition,
+        metric: str,
+        value: float,
+        median: float,
+    ) -> Anomaly | None:
+        """The anomaly a transition owes an on-call human, if any.
+
+        Three rungs speak: the first abnormal call (a notice, once per
+        session), the limit, and the close. Spending allowance and healing
+        are silent — they are the ladder working, not news.
+        """
+        if Effect.CLOSE in move.effects:
+            return self._close(state, config, session_id, move, metric, value, median)
+        if Effect.SET_ALLOWANCE in move.effects:
+            return self._limit(state, config, session_id, move, metric, value, median)
+        if move.reason == "first_abnormal":
+            self._warned.add(session_id)
             return _anomaly(
                 state,
                 config,
@@ -697,7 +756,7 @@ class SpikeDetector:
                 value,
                 median,
                 message_kind="watching",
-                extra={"level": 1},
+                extra={"level": move.next_level},
             )
         return None
 
@@ -706,11 +765,12 @@ class SpikeDetector:
         state: SessionState,
         config: GuardrailConfig,
         session_id: str,
+        move: Transition,
         metric: str,
         value: float,
         median: float,
     ) -> Anomaly:
-        """Confirmed spiking: limit the session. Nothing is stopped yet.
+        """Confirmed spiking: say so. Nothing is stopped yet.
 
         Re-emitted every time a healed session is confirmed again — that is
         new information for whoever is on call — with the allowance back at
@@ -720,17 +780,6 @@ class SpikeDetector:
         base = _base_allowance(state, config)
         episode = self._limits[session_id] = self._limits.get(session_id, 0) + 1
         self._warned.add(session_id)
-        with state.lock:
-            level_before = int(getattr(state, "spike_level", 0) or 0)
-            state.spike_level = 2
-            state.spike_allowance = base
-            state.spike_allowance_start = base
-            state.record_ladder_transition(
-                level_before,
-                2,
-                "confirmed",
-                trigger=(metric, value, median, config.spike_factor),
-            )
         return _anomaly(
             state,
             config,
@@ -740,7 +789,7 @@ class SpikeDetector:
             median,
             message_kind="limited",
             extra={
-                "level": 2,
+                "level": move.next_level,
                 "action": "limit",
                 "allowance": base,
                 "confirmed": True,
@@ -748,54 +797,12 @@ class SpikeDetector:
             },
         )
 
-    def _at_limit(
-        self,
-        state: SessionState,
-        config: GuardrailConfig,
-        session_id: str,
-        abnormal: bool,
-        confirmed: bool,
-        metric: str,
-        value: float,
-        median: float,
-    ) -> Anomaly | None:
-        """A limited session's next call: burn, heal, or close.
-
-        Every further abnormal call costs one of the session's allowance and
-        is otherwise silent. A normal call whose trailing window no longer
-        confirms a spike heals the session back to watching, allowance
-        forgotten. An allowance spent to zero closes the session.
-        """
-        with state.lock:
-            allowance = state.spike_allowance
-            if allowance is None:
-                allowance = _base_allowance(state, config)
-            if not abnormal:
-                if not confirmed:
-                    state.spike_level = 1
-                    state.spike_allowance = None
-                    state.spike_allowance_start = None
-                    state.record_ladder_transition(2, 1, "healed")
-                return None
-            allowance -= 1
-            state.spike_allowance = allowance
-            if allowance > 0:
-                state.record_ladder_transition(2, 2, "allowance_spent")
-                return None
-            state.spike_level = 3
-            state.record_ladder_transition(
-                2,
-                3,
-                "allowance_spent",
-                trigger=(metric, value, median, config.spike_factor),
-            )
-        return self._close(state, config, session_id, metric, value, median)
-
     def _close(
         self,
         state: SessionState,
         config: GuardrailConfig,
         session_id: str,
+        move: Transition,
         metric: str,
         value: float,
         median: float,
@@ -822,7 +829,7 @@ class SpikeDetector:
             median,
             message_kind="rollover",
             extra={
-                "level": 3,
+                "level": move.next_level,
                 "action": "rollover",
                 "allowance": base,
                 "strikes": strikes,

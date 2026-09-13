@@ -45,7 +45,14 @@ STAND_IN = DIGEST[:REDACTED_HASH_CHARS] + REDACTED_ELLIPSIS
 
 #: Pieces of the key that must not appear anywhere in an outbound record. The
 #: whole key, the part that identifies the human, and the bare account number.
-FRAGMENTS = (KEY, "user:leaky", "leaky-9999", "leaky", "9999")
+# Every distinctive piece of KEY, and nothing that could occur by chance.
+# The bare "9999" used to be here and had to go: a wire record carries
+# timestamps, costs and token counts, so those four digits can turn up in a
+# payload that leaked nothing at all -- and a privacy assertion that cries
+# wolf is worse than no assertion, because the next person re-runs it
+# instead of investigating. "leaky-9999" still pins the numeric tail; it
+# just cannot be produced by an epoch or a float.
+FRAGMENTS = (KEY, "user:leaky", "leaky-9999", "leaky")
 
 
 def session(key: str = KEY, **tags) -> SessionState:

@@ -36,7 +36,7 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 from uuid import uuid4
 
-from . import _coverage, autowrap, responses
+from . import _coverage, autowrap, ladder, responses
 from .config import GuardrailConfig
 from .engine import (
     BUDGET_DETECTOR,
@@ -52,6 +52,7 @@ from .engine import (
 )
 from .events import Anomaly, Event
 from .exceptions import GuardrailTripped
+from .ladder import Effect, Transition
 from .plane_types import DETAIL_STRING_MAX, ExitDelta, PlaneStatus, key_hash, redact_key
 from .policy import ToolCall, ToolRules
 from .pricing import price_call
@@ -1343,6 +1344,11 @@ def _rolled_over(key: str, state: SessionState) -> SessionState:
     ``on_spike="limit"`` has a ladder at all: every other configuration walks
     straight past this, into the entry check it has always had.
 
+    What a closed key's entry costs — one more strike and a cooldown, or the
+    last strike and a block — is :func:`runbound.ladder.transition`'s to say;
+    this reads the facts it needs (is the session closed, how many strikes
+    has the key spent) and applies the effects it hands back.
+
     Fail-open: anything that goes wrong is logged and the old state is entered
     exactly as it would have been without the ladder.
     """
@@ -1358,7 +1364,15 @@ def _rolled_over(key: str, state: SessionState) -> SessionState:
         strikes = _rollover_strikes(state, latched)
         if strikes is None:
             return state
-        return _roll_over(key, state, latched, strikes, engine.config)
+        strikes = min(strikes, engine.config.spike_max_strikes)
+        move = ladder.transition(
+            _ladder_level(state),
+            ladder.entry_observation(strikes, engine.config),
+            engine.config,
+        )
+        if Effect.ROLLOVER not in move.effects:
+            return state
+        return _roll_over(key, state, latched, strikes, engine.config, move)
     except Exception:
         _LOG.warning(
             "runbound could not roll session %r over; continuing on the old one",
@@ -1389,6 +1403,12 @@ def _rollover_strikes(state: SessionState, latched: Anomaly) -> int | None:
     return strikes if strikes > carried else None
 
 
+def _ladder_level(state: SessionState) -> int:
+    """The rung this session sits on, read the way every counter is read."""
+    with state.lock:
+        return int(getattr(state, "spike_level", 0) or 0)
+
+
 def _cooldown_served(state: SessionState) -> None:
     """Retire a cooldown this session has now outlived.
 
@@ -1407,14 +1427,18 @@ def _roll_over(
     anomaly: Anomaly,
     strikes: int,
     config: GuardrailConfig,
+    move: Transition,
 ) -> SessionState:
     """Retire ``old`` and put the key's next session in its place, latched.
 
     Either the swap happens whole — new generation, strike recorded, fresh
     session registered and latched — or the key is left exactly as it was
     found and the failure is re-raised for the caller to fail open on.
+
+    ``move`` is the ladder's answer for this entry (``strikes`` already
+    capped at ``spike_max_strikes``); it carries the
+    :class:`~runbound.ladder.Effect`\\ s :func:`_latch_rollover` applies.
     """
-    strikes = min(strikes, config.spike_max_strikes)
     with _LOCK:
         generation = _GENERATIONS.get(key, 0)
         previous = (_REGISTRY.pop(key, None), generation, _STRIKES.get(key))
@@ -1425,7 +1449,7 @@ def _roll_over(
         except Exception:
             _restore(key, previous)
             raise
-    _latch_rollover(fresh, old, key, anomaly, strikes, config)
+    _latch_rollover(fresh, old, key, anomaly, strikes, config, move)
     return fresh
 
 
@@ -1448,13 +1472,16 @@ def _latch_rollover(
     anomaly: Anomaly,
     strikes: int,
     config: GuardrailConfig,
+    move: Transition,
 ) -> None:
     """Start the fresh session stopped: a cooldown, or the final block.
 
-    Below ``spike_max_strikes`` the session is latched on the rollover anomaly
-    itself for ``spike_cooldown_seconds`` — the key is refused for that
-    long and then served again, on tighter terms. At the last strike there is
-    no expiry: the key stays blocked until the business clears it.
+    Which of the two is ``move``'s to say — :attr:`~runbound.ladder.Effect.BLOCK`
+    is the ladder's terminus. Below ``spike_max_strikes`` the session is
+    latched on the rollover anomaly itself for ``spike_cooldown_seconds`` —
+    the key is refused for that long and then served again, on tighter terms.
+    At the last strike there is no expiry: the key stays blocked until the
+    business clears it.
 
     ``old``'s ladder facts — its history, heal count, and the timestamps of
     its last limit and close — move to ``fresh`` here, with one more entry
@@ -1464,7 +1491,7 @@ def _latch_rollover(
     allowance start fresh, because a new session judges its own calls from
     scratch.
     """
-    blocked = strikes >= config.spike_max_strikes
+    blocked = Effect.BLOCK in move.effects
     with old.lock:
         old_level = int(getattr(old, "spike_level", 0) or 0)
         history = deque(getattr(old, "ladder_history", ()), maxlen=10)
@@ -1483,7 +1510,8 @@ def _latch_rollover(
         fresh.spike_closed_at = closed_at
         fresh.spike_trigger = trigger
         fresh.spike_limited_at = limited_at
-        fresh.record_ladder_transition(old_level, 0, "blocked" if blocked else "rollover")
+        fresh.spike_level = move.next_level
+        fresh.record_ladder_transition(old_level, move.next_level, move.reason)
     if blocked:
         _LOG.info(
             "runbound: session for key %r rolled over (strike %d of %d); "
