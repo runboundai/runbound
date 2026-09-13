@@ -2169,7 +2169,7 @@ you run only Anthropic, older versions are fine.
 | Provider | sync | async | stream | tool calls | usage | live-tested |
 |---|---|---|---|---|---|---|
 | OpenAI | yes [^sdk] | yes [^sdk] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
-| Anthropic | yes [^sdk] | yes [^conformance] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
+| Anthropic | yes [^sdk] | yes [^conformance] | yes [^stream] | yes [^sdk] | yes [^sdk] | yes [^live] |
 | Azure OpenAI | | | | | | |
 | Ollama / vLLM / OpenAI-compatible | yes [^ollama] | | yes [^ollama] | yes [^ollama] | yes [^ollama] | yes [^ollama] |
 | Gemini | | | | | | |
@@ -2195,6 +2195,20 @@ you run only Anthropic, older versions are fine.
     too, by recorded event streams from the real `anthropic` SDK replayed
     through the wrapper in the same private conformance kit (recorded against
     the real SDK; not part of this repository) — recorded, not live.
+[^live]: Live, over the network, against the real hosted Anthropic API on
+    `claude-haiku-4-5`, 2026-09-14: nineteen scenarios, every one a PASS with
+    the numbers it observed — cost accounting against the response's own
+    usage object, sync and async, streamed and abandoned mid-stream,
+    model-requested and decorated tool loops, policy deny, a budget trip and
+    the refusal at the door after it, `max_steps` as turns, a spike watched
+    and still served, the in-flight cap against a second concurrent stream,
+    an invalid model name that does *not* count against the provider's
+    circuit, extended thinking read and priced, a cache hit priced at the
+    cached rate, `record_call` parity, and a latch healing on its TTL. The
+    run cost $0.031. Like the recorded fixtures above, it lives in a private
+    conformance kit in the development monorepo and is not part of this
+    repository. Anthropic only: there is no OpenAI leg yet, which is why that
+    row's cell is still empty.
 [^ollama]: Live, over the network, against a real running Ollama server —
     sync only, includes a streaming scenario (`max_inflight_calls` while a
     stream is in flight), a decorated and an undecorated tool loop, and real
