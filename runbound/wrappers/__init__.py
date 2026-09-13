@@ -13,8 +13,10 @@ interface a new provider has to satisfy::
 what they read: they price nothing, decide nothing, and store nothing.
 
 ``hooks`` is the other half of that: what to call *around* a request —
-``before(provider, model=None)`` before it goes out (which may refuse it),
-then ``success(provider)`` or ``error(model, exc, duration_s, provider)``,
+``before(provider, model=None, request=None)`` before it goes out (which may
+refuse it — ``request`` is the raw call kwargs, read by ``Engine.admit``'s
+opt-in ``budget_admission`` estimate; T136), then ``success(provider)`` or
+``error(model, exc, duration_s, provider)``,
 ``release(provider)`` when the call is over however it ended, and
 ``tool_request(name, args_hash)`` for each tool call the model asked for in
 what came back. A streamed call that is garbage collected before it ends
@@ -101,7 +103,9 @@ class _NoHooks:
     #: These hooks never estimate: they have no configuration to read it from.
     estimate_tokens = False
 
-    def before(self, provider: str, model: str | None = None) -> None:
+    def before(
+        self, provider: str, model: str | None = None, request: dict | None = None
+    ) -> None:
         return None
 
     def success(self, provider: str) -> None:
@@ -272,7 +276,7 @@ def guarded_create(
 
     def create(*args: Any, **kwargs: Any) -> Any:
         label = label_for(args)
-        call_before(hooks, label, _request_model(kwargs))
+        call_before(hooks, label, _request_model(kwargs), kwargs)
         started_at = _now()
         streaming = False
         try:
@@ -292,7 +296,7 @@ def guarded_create(
 
     async def acreate(*args: Any, **kwargs: Any) -> Any:
         label = label_for(args)
-        call_before(hooks, label, _request_model(kwargs))
+        call_before(hooks, label, _request_model(kwargs), kwargs)
         started_at = _now()
         streaming = False
         try:
@@ -323,21 +327,34 @@ def guarded_create(
     return installed
 
 
-def call_before(hooks: Hooks, provider: str, model: str | None) -> None:
-    """Call ``hooks.before``, passing the model when the call site knows it.
+def call_before(
+    hooks: Hooks, provider: str, model: str | None, request: dict | None = None
+) -> None:
+    """Call ``hooks.before``, passing the model and request kwargs it can use.
 
-    Mirrors :func:`_call_report`'s tolerance for an older signature: only a
-    ``TypeError`` raised by the call itself — no frame of ``before`` on its
-    traceback — falls back to the one-argument form hooks written before the
-    model parameter existed still expect. Anything else, including a
-    deliberate :class:`~runbound.exceptions.CircuitOpen`, propagates.
+    ``request`` is the raw call kwargs (T136) — what ``Engine.admit`` reads
+    to estimate an opt-in admission budget. Three shapes, tried in decreasing
+    order of how much a hook understands: today's (``provider``, ``model=``,
+    ``request=``), the one before T136 added ``request`` (``provider``,
+    ``model=`` only), and the original, one-argument ``before`` from before
+    the model parameter existed. Mirrors :func:`_call_report`'s tolerance for
+    an older signature at each step: only a ``TypeError`` raised by the call
+    itself — no frame of ``before`` on its own traceback — falls back a step;
+    anything else, including a deliberate
+    :class:`~runbound.exceptions.CircuitOpen` or
+    :class:`~runbound.exceptions.GuardrailTripped`, propagates.
     """
     try:
-        hooks.before(provider, model=model)
+        hooks.before(provider, model=model, request=request)
     except TypeError as exc:
         if exc.__traceback__ is not None and exc.__traceback__.tb_next is not None:
             raise
-        hooks.before(provider)
+        try:
+            hooks.before(provider, model=model)
+        except TypeError as exc2:
+            if exc2.__traceback__ is not None and exc2.__traceback__.tb_next is not None:
+                raise
+            hooks.before(provider)
 
 
 async def _await_pending_delay(hooks: Hooks) -> None:

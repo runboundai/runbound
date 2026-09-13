@@ -266,8 +266,12 @@ class GuardrailConfig:
     # "once": stop that one call only; the next call is evaluated afresh.
     on_trip: str = "latch"  # "latch" | "once"
     # None: a tripped session stays tripped until clear(). A number of seconds:
-    # the latch expires that long after it was set and the session resumes,
-    # so a per-hour budget or a false-positive trip heals without a restart.
+    # the latch expires that long after it was set, re-admitting the session
+    # (every detector rearmed, T137) without a restart or a clear() call — its
+    # next event is judged fresh, on the same cumulative counters, so a
+    # session still over budget re-trips immediately with the same detector.
+    # This re-admits; it does not reset. A windowed budget that actually
+    # zeroes on a schedule is a different, unbuilt feature.
     latch_ttl_seconds: float | None = None
     on_anomaly: str = "warn"  # "warn" | "raise" | "callback"
     callback: Callable[[Anomaly], None] | None = None
@@ -357,6 +361,17 @@ class GuardrailConfig:
     # fallback pair was given, else like "zero", and logged once either way.
     on_unpriced_model: str = "zero"
     unpriced_price_per_1m_usd: tuple[float, float] | None = None
+    # Opt-in (T136), off by default: budget_usd's post-call wall is the
+    # identity of this product — deterministic, never an estimate — so an
+    # admission check that guesses a call's cost *before* it goes out is
+    # something a customer chooses, not something turned on for them. When
+    # True, Engine.admit() refuses a call whose estimated cost would push
+    # total_cost_usd + spend_offset_usd past budget_usd, using the same price
+    # table the post-call check uses. admission_output_tokens is the assumed
+    # output size when a request states no max_tokens/max_completion_tokens/
+    # max_output_tokens cap; it is never used when a request names one.
+    budget_admission: bool = False
+    admission_output_tokens: int = 1024
     # Tool names exempt from the loop window by policy rather than by
     # decorator: a name here is treated like @runbound.tool(repeatable=True)
     # for both tool_call and tool_request events, whoever runs it. Mark
@@ -446,8 +461,10 @@ class GuardrailConfig:
         ``on_unpriced_model`` mode, an ``unpriced_price_per_1m_usd`` that is
         not a 2-tuple of non-negative numbers or ``None``, and that mode set
         to ``"estimate"`` with no such pair to estimate from. Rejects a
-        ``loop_ignore_tools`` that is not a tuple of ``str``, and an unknown
-        ``stale_halt`` or ``on_plane_loss`` mode.
+        non-bool ``budget_admission`` and an ``admission_output_tokens`` that
+        is not a positive int. Rejects a ``loop_ignore_tools`` that is not a
+        tuple of ``str``, and an unknown ``stale_halt`` or ``on_plane_loss``
+        mode.
         """
         self._normalize_connection()
         self._validate_reaction()
@@ -460,6 +477,7 @@ class GuardrailConfig:
         self._validate_policy()
         self._validate_refusals()
         self._validate_unpriced()
+        self._validate_admission()
         self._validate_loop_ignore_tools()
         self._validate_fleet_modes()
 
@@ -827,6 +845,18 @@ class GuardrailConfig:
             raise ValueError(
                 'on_unpriced_model="estimate" requires unpriced_price_per_1m_usd '
                 "to be set to (usd_per_1M_input, usd_per_1M_output)"
+            )
+
+    def _validate_admission(self) -> None:
+        """The opt-in admission budget check (T136) and its output guess."""
+        if not isinstance(self.budget_admission, bool):
+            raise ValueError(
+                f"budget_admission must be a bool, got {self.budget_admission!r}"
+            )
+        tokens = self.admission_output_tokens
+        if isinstance(tokens, bool) or not isinstance(tokens, int) or tokens <= 0:
+            raise ValueError(
+                f"admission_output_tokens must be a positive int, got {tokens!r}"
             )
 
     def _validate_loop_ignore_tools(self) -> None:

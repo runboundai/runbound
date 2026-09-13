@@ -475,6 +475,34 @@ def _responses_chunk_requests(chunk: Any, requests: _StreamRequests) -> None:
         )
 
 
+# --- the request's own output-token cap, for admission (T136) --------------
+
+#: Checked in the order a request is likeliest to carry it: the older chat
+#: completions ``max_tokens``, the newer ``max_completion_tokens``, then the
+#: Responses API's ``max_output_tokens``.
+_OUTPUT_CAP_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def request_output_cap(kwargs: dict) -> int | None:
+    """The output-token cap this request stated, if any.
+
+    The first present, positive value among :data:`_OUTPUT_CAP_FIELDS` wins.
+    ``None`` for a request with no cap at all, or one that cannot be read —
+    the caller's definition of "the request stated no limit."
+    """
+    try:
+        for name in _OUTPUT_CAP_FIELDS:
+            value = kwargs.get(name)
+            if value is None:
+                continue
+            value = int(value)
+            if value > 0:
+                return value
+        return None
+    except (TypeError, ValueError):
+        return None
+
+
 # --- text, for the opt-in token estimator -----------------------------------
 
 

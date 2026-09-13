@@ -205,6 +205,24 @@ def _request_chars(request_kwargs: dict) -> int:
     return total + (len(system) if isinstance(system, str) else 0)
 
 
+def request_output_cap(kwargs: dict) -> int | None:
+    """The output-token cap this request stated (T136 admission).
+
+    Anthropic's ``messages.create`` requires ``max_tokens`` on every request
+    (unlike OpenAI's optional caps), so this reads that field alone. ``None``
+    when it is missing or unreadable — fail-open, never a reason to treat a
+    well-formed request as capless.
+    """
+    try:
+        value = kwargs.get("max_tokens")
+        if value is None:
+            return None
+        value = int(value)
+        return value if value > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _response_chars(response: Any) -> int:
     """Characters of text a messages response answered with."""
     try:

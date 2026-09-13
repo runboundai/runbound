@@ -1,13 +1,14 @@
 """Tests for the auto-expiring latch (``latch_ttl_seconds``).
 
-A latch must not be *necessarily* permanent. A per-hour or per-day budget
-should heal itself once the window has passed, and a false-positive spike trip
+A latch must not be *necessarily* permanent. A false-positive spike trip
 should not need a restart or a manual :func:`runbound.clear`. Without a ttl
 the latch behaves exactly as it always has: permanent until cleared.
 
-Healing gives the session another window, not a clean slate: detectors fire
-once per session, so a healed session resumes but will not re-alert on the same
-condition. :func:`runbound.clear` remains the way to re-arm them.
+Healing is re-admission, not a clean slate (T137): the engine rearms every
+detector for this session id, but no counter is reset — a session still over
+budget when the ttl elapses is over budget on its very next event, and
+re-trips immediately, with the same detector. ``latch_ttl_seconds`` is not a
+windowed budget; only :func:`runbound.clear` resets the counters themselves.
 """
 
 import logging
@@ -18,6 +19,7 @@ import runbound
 from runbound import api
 from runbound import engine as engine_module
 from runbound.config import GuardrailConfig
+from runbound.detectors import BudgetDetector, LoopDetector
 from runbound.engine import Engine
 from runbound.events import Anomaly, Event
 from runbound.exceptions import GuardrailTripped
@@ -212,23 +214,31 @@ def test_healing_is_logged_at_info(clock, caplog):
     assert "s1" in caplog.text
 
 
-def test_entering_a_healed_session_no_longer_raises(clock):
+def test_entering_a_healed_session_no_longer_raises_but_its_own_event_does(clock):
+    """The door heals silently (T137): a still-over-budget session re-trips
+    on its own first event afterward, not at entry — entry has no event of
+    its own to judge, only the body does.
+    """
     runbound.init(budget_usd=BUDGET, on_anomaly="raise", latch_ttl_seconds=TTL)
     latch_the_key()
     spend_at_breach = api._REGISTRY["user:abuser"].total_cost_usd
     clock.advance(TTL + 1)
 
-    body_ran = False
-    with runbound.session("user:abuser"):  # entry-driven healing
-        body_ran = True
-        api._record_llm_call("gpt-4o", 2000, 500)
+    entered = False
+    with pytest.raises(GuardrailTripped) as excinfo:
+        with runbound.session("user:abuser"):  # entry-driven healing: no raise here
+            entered = True
+            api._record_llm_call("gpt-4o", 2000, 500)  # still over budget: re-trips
 
-    assert body_ran is True
+    assert entered is True
+    assert excinfo.value.anomaly.detector == "budget"
     assert api._REGISTRY["user:abuser"].total_cost_usd > spend_at_breach
 
 
 def test_healing_happens_on_the_event_path_too_in_callback_mode(clock):
-    """Only ``"raise"`` checks the latch at the door; every mode heals on an event."""
+    """Every mode heals on an event (not just ``"raise"`` at the door), and a
+    session still over budget re-trips immediately once healed (T137).
+    """
     seen: list[Anomaly] = []
     runbound.init(
         budget_usd=BUDGET,
@@ -241,10 +251,10 @@ def test_healing_happens_on_the_event_path_too_in_callback_mode(clock):
     assert len(seen) == 2  # the breaching call and one re-application
 
     clock.advance(TTL + 1)
-    chat()
+    chat()  # healed, then re-trips on this same call: still over budget
 
-    assert len(seen) == 2  # healed: no further re-application
-    assert runbound.is_tripped("user:abuser") is None
+    assert len(seen) == 3  # the healed session's own new trip
+    assert runbound.is_tripped("user:abuser").detector == "budget"
 
 
 def test_is_tripped_reports_a_healed_session_as_running(clock):
@@ -272,13 +282,14 @@ def test_is_tripped_without_a_key_heals_the_default_session(clock):
 # --- what healing does and does not undo -------------------------------------
 
 
-def test_a_healed_session_keeps_its_counters_and_its_memoized_detectors(clock):
-    """Another window, not a clean slate.
+def test_a_healed_session_keeps_its_counters_but_rearms_its_detectors(clock):
+    """Another window, not a clean slate (T137).
 
-    The budget detector already fired for this session id, so it stays quiet
-    even though the session is still over budget: the ttl buys the user a
-    fresh window of service, and :func:`runbound.clear` is what re-arms the
-    detectors so they can stop the same user again on their own merits.
+    A heal never resets a counter — only :func:`runbound.clear` does that —
+    but it does rearm every detector, so a session still over budget re-trips
+    on its very next event, with the same detector: the wall
+    ``latch_ttl_seconds`` promises, not a session that runs free until
+    someone calls ``clear()``.
     """
     runbound.init(budget_usd=BUDGET, on_anomaly="raise", latch_ttl_seconds=TTL)
     latch_the_key()
@@ -287,13 +298,14 @@ def test_a_healed_session_keeps_its_counters_and_its_memoized_detectors(clock):
     assert over_budget > BUDGET
 
     clock.advance(TTL + 1)
-    for _ in range(5):
-        chat()  # none of these raise
+    with pytest.raises(GuardrailTripped) as excinfo:
+        chat()  # healed, then re-trips on this same call: still over budget
 
+    assert excinfo.value.anomaly.detector == "budget"
     healed = api._REGISTRY["user:abuser"]
     assert healed is tripped  # the same session, not a new one
     assert healed.total_cost_usd > over_budget  # counters were never reset
-    assert runbound.is_tripped("user:abuser") is None
+    assert runbound.is_tripped("user:abuser").detector == "budget"  # re-latched
 
 
 def test_clear_still_works_independently_of_the_ttl(clock):
@@ -393,3 +405,54 @@ def test_a_positive_ttl_or_none_is_accepted(value):
 def test_init_rejects_a_non_positive_ttl():
     with pytest.raises(ValueError, match="latch_ttl_seconds"):
         runbound.init(latch_ttl_seconds=0)
+
+
+# --- T137 acceptance, stated with the task's own numbers ---------------------
+
+
+def test_an_over_budget_session_with_ttl_1_retrips_on_its_next_event(clock):
+    """``latch_ttl_seconds=1``: an over-budget session re-trips, same detector."""
+    config = GuardrailConfig(budget_usd=BUDGET, on_anomaly="raise", latch_ttl_seconds=1.0)
+    config.validate()
+    engine = Engine(config, detectors=[BudgetDetector()])
+    session = SessionState("s1")
+
+    with pytest.raises(GuardrailTripped) as first:
+        engine.process(session, llm_call_event(1, cost=BUDGET + 0.01))
+    assert first.value.anomaly.detector == "budget"
+
+    clock.advance(1.01)
+
+    with pytest.raises(GuardrailTripped) as second:
+        engine.process(session, llm_call_event(2, ts=2.0, cost=0.0))
+
+    assert second.value.anomaly.detector == "budget"  # the same detector
+    assert session.total_cost_usd == pytest.approx(BUDGET + 0.01)  # never reset
+
+
+def test_a_loop_latch_heals_and_a_new_repeat_retrips(clock):
+    """A loop latch heals (T137) and a *new* repeat of the same call re-trips."""
+    config = GuardrailConfig(on_anomaly="raise", loop_threshold=3, latch_ttl_seconds=1.0)
+    config.validate()
+    engine = Engine(config, detectors=[LoopDetector()])
+    session = SessionState("s1")
+
+    for step in (1, 2):
+        engine.process(session, tool_event(step))
+    with pytest.raises(GuardrailTripped) as first:
+        engine.process(session, tool_event(3))  # the third repeat trips it
+    assert first.value.anomaly.detector == "loop"
+
+    clock.advance(1.01)
+
+    with pytest.raises(GuardrailTripped) as second:
+        engine.process(session, tool_event(4))  # one more repeat: re-trips
+
+    assert second.value.anomaly.detector == "loop"
+    assert session.tripped_by is second.value.anomaly
+
+
+def llm_call_event(step: int, ts: float | None = None, cost: float = 0.0) -> Event:
+    return Event(
+        kind="llm_call", ts=float(ts if ts is not None else step), step=step, cost_usd=cost
+    )

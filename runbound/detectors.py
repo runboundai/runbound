@@ -64,6 +64,19 @@ class _FireOnceDetector:
     ) -> Anomaly | None:
         raise NotImplementedError
 
+    def rearm(self, session_id: str) -> None:
+        """Forget that ``session_id`` already fired (T137).
+
+        Called by the engine when a latch's ``latch_ttl_seconds`` expires and
+        the session heals: the fire-once memo must not silence a condition
+        that still holds, or the session would run with no wall at all until
+        someone calls :func:`runbound.clear`. Rearming is not resetting —
+        ``state.total_cost_usd`` and friends are untouched, so a session that
+        is still over budget re-trips on its very next event, with the same
+        detector. A session id this detector never fired for is a no-op.
+        """
+        self._fired.discard(session_id)
+
 
 class LoopDetector(_FireOnceDetector):
     """Catches an agent repeating the same tool call with the same arguments.
@@ -459,6 +472,16 @@ class TimeoutDetector(_FireOnceDetector):
                 return anomaly
         return None
 
+    def rearm(self, session_id: str) -> None:
+        """Forget both clocks' fire-once memos for ``session_id`` (T137).
+
+        Overrides :meth:`_FireOnceDetector.rearm` because this detector keeps
+        a second memo (``_fired_lifetime``) the base class does not know
+        about; a heal must clear both walls, not just the run-scoped one.
+        """
+        super().rearm(session_id)
+        self._fired_lifetime.discard(session_id)
+
     @staticmethod
     def _evaluate_scope(
         state: SessionState,
@@ -601,6 +624,23 @@ class SpikeDetector:
                 state, config, "warn", metric, value, median, message_kind="watching"
             )
         return None
+
+    def rearm(self, session_id: str) -> None:
+        """Forget that ``session_id`` was already warned or confirmed (T137).
+
+        Only the two-phase fire-once memos are cleared — ``_warned`` and
+        ``_confirmed`` — so a session whose calls are still abnormal reports
+        again on its next one. ``_flags`` (the trailing abnormality window)
+        is left alone: it describes the *current* condition, not this
+        detector's memory of having reported it, and a healed session should
+        be judged on the calls it has actually just made, not made to warm up
+        from an empty window. ``_limits`` (the ladder's episode counter) and
+        ``_closed`` are also left alone: a ladder-closed session is retired by
+        :func:`runbound.session`'s own rollover, on its own cooldown, never by
+        ``latch_ttl_seconds`` — see :func:`_ladder_active`.
+        """
+        self._warned.discard(session_id)
+        self._confirmed.discard(session_id)
 
     def _confirm(self, session_id: str) -> bool:
         """Claim the critical phase for a session; False if already claimed.

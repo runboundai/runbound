@@ -213,6 +213,52 @@ def test_a_second_abnormal_call_confirms_the_spike_then_the_detector_goes_quiet(
     assert feed(detector, state, llm_event(step + 3, duration=55.0), config) is None
 
 
+def test_rearm_lets_a_still_spiking_session_report_again():
+    """A healed latch must not leave a still-spiking session silent (T137).
+
+    ``rearm`` clears the fire-once memos (``_warned``/``_confirmed``) but not
+    the trailing abnormality window (``_flags``): a session whose calls are
+    *still* abnormal reports again on its very next one, without needing to
+    warm the window back up from nothing.
+    """
+    detector, state, config = SpikeDetector(), session(), GuardrailConfig()  # confirm=2
+    step = warm(detector, state, config)
+
+    feed(detector, state, llm_event(step, duration=40.0), config)  # warn
+    confirmed = feed(detector, state, llm_event(step + 1, duration=45.0), config)
+    assert confirmed.severity == "critical"
+    assert feed(detector, state, llm_event(step + 2, duration=50.0), config) is None  # quiet
+
+    detector.rearm(state.session_id)
+
+    reconfirmed = feed(detector, state, llm_event(step + 3, duration=55.0), config)
+
+    assert reconfirmed is not None
+    assert reconfirmed.severity == "critical"
+    assert reconfirmed.details["confirmed"] is True
+
+
+def test_rearm_does_not_reopen_a_ladder_closed_session():
+    """The abuse ladder's close is a separate state machine (T137, on_spike="limit").
+
+    ``latch_ttl_seconds`` heals a plain latch; a session the *ladder* closed
+    is retired by its own rollover, on its own cooldown — ``rearm`` must not
+    accidentally resurrect it.
+    """
+    detector = SpikeDetector()
+    detector._closed.add("s1")
+
+    state = session()
+    step = warm(detector, state, GuardrailConfig(on_spike="limit"))
+    config = GuardrailConfig(on_spike="limit")
+
+    assert feed(detector, state, llm_event(step, duration=40.0), config) is None
+
+    detector.rearm("s1")
+
+    assert feed(detector, state, llm_event(step + 1, duration=45.0), config) is None
+
+
 def test_a_lone_spike_that_returns_to_normal_says_nothing_more():
     detector, state, config = SpikeDetector(), session(), GuardrailConfig()
     step = warm(detector, state, config)

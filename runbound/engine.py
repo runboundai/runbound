@@ -25,8 +25,9 @@ from .circuit import CircuitBreaker, is_provider_failure
 from .config import GuardrailConfig
 from .detectors import DEFAULT_DETECTORS, BudgetDetector, LoopDetector, SpikeDetector
 from .events import PRIORITY, Anomaly, Event
-from .exceptions import GuardrailTripped, PolicyViolation
+from .exceptions import CircuitOpen, GuardrailTripped, PolicyViolation
 from .policy import ToolCall, ToolPolicy, Violation, coerce, evaluate, merge
+from .pricing import price_for
 from .shared import LocalState
 from .state import SessionState
 
@@ -172,6 +173,13 @@ class Engine:
         self._reports_circuits = bool(getattr(self.shared, "fleet", True))
         self._merged_key: tuple | None = None
         self._merged: ToolPolicy | None = None
+        # T136: models the admission budget estimate skipped for lack of a
+        # price, warned about once per model per Engine — the same "once per
+        # model, not process" scoping notify_door's alert-dedup set already
+        # gives on_unpriced_model="refuse" (see _alert), kept separate here
+        # because this is a plain log line, never an anomaly: no call was
+        # refused, so there is nothing to alert observers about.
+        self._admission_unpriced_warned: set[str] = set()
 
     def process(self, session: SessionState, event: Event) -> None:
         """Record ``event`` into ``session``, then detect, alert and react.
@@ -203,7 +211,7 @@ class Engine:
         session.record(event)
         self._notify_event(session, event)
 
-        latched = _latched(session, self.config)
+        latched = _latched(session, self.config, self.detectors)
         if latched is not None:
             self._reapply(session, latched)
             return
@@ -375,6 +383,213 @@ class Engine:
                 exc_info=True,
             )
             return True
+
+    def admit(
+        self,
+        session: SessionState,
+        provider: str,
+        model: str | None,
+        request: dict | None,
+    ) -> None:
+        """Circuit, unpriced model, in-flight cap, then — when
+        ``config.budget_admission`` — the budget estimate. Raises
+        ``GuardrailTripped``/``CircuitOpen``; never latches on an admission
+        refusal.
+
+        T136 gives a name to what already existed in embryo inside
+        :meth:`~runbound.api._Hooks.before` — the circuit and unpriced-model
+        checks move here unchanged — and adds the one thing that was missing:
+        an opt-in estimate of what this call would cost, refused before it
+        goes out rather than discovered after. The in-flight cap stays where
+        it always lived, in the api's own registry (a process-wide resource
+        this engine does not own), called by ``before`` immediately after
+        this returns without raising — from the caller's side the four still
+        run in the stated order, because a circuit or unpriced refusal here
+        never lets ``before`` reach the in-flight check at all.
+
+        Every phase is independently fail-open: a bug checking the circuit,
+        the price table or the estimate logs a warning and lets the call
+        through rather than skip the phases after it or refuse a call for a
+        reason of our own making. Only a phase's own deliberate refusal
+        raises.
+
+        The budget estimate never latches on purpose: it is a guess, and a
+        cheaper call minutes from now may fit even though this one would not
+        have — latching here would turn an estimate into a wall, which is
+        exactly the imprecision ``budget_admission`` is opt-in to avoid
+        importing into the default path. The post-call ``budget`` detector is
+        the wall; this is the door in front of it.
+        """
+        self._admit_circuit(provider)
+        self._admit_unpriced(session, model)
+        if self.config.budget_admission:
+            self._admit_budget(session, model, request)
+
+    def _admit_circuit(self, provider: str) -> None:
+        """The first admission phase: is this provider's circuit open?
+
+        Ported from the api's own ``_Hooks.before`` unchanged: only
+        ``on_provider_failure="open"`` ever refuses here (see
+        :meth:`circuit_allows`), and building the refusal's anomaly is
+        covered by the same fail-open as reading the circuit itself — a
+        broken describer must not block a call the breaker would have let
+        through.
+        """
+        try:
+            allowed = self.circuit_allows(provider)
+            anomaly = None if allowed else self._circuit_open_anomaly(provider)
+        except Exception:
+            _LOG.warning(
+                "runbound could not check the circuit for %r; the call proceeds",
+                provider,
+                exc_info=True,
+            )
+            return
+        if anomaly is not None:
+            raise CircuitOpen(anomaly, provider)
+
+    def _circuit_open_anomaly(self, provider: str) -> Anomaly:
+        """Describe the refusal :meth:`_admit_circuit` is about to raise."""
+        state = self.circuit.state(provider)
+        cooldown = self.config.circuit_cooldown_seconds
+        return Anomaly(
+            detector=CIRCUIT_DETECTOR,
+            severity="critical",
+            message=(
+                f"Provider {provider!r} circuit is open; failing fast "
+                f"(cooldown {cooldown:.0f}s)"
+            ),
+            details={
+                "provider": provider,
+                "host": provider_host(provider),
+                "state": state,
+                "cooldown_seconds": cooldown,
+            },
+        )
+
+    def _admit_unpriced(self, session: SessionState, model: str | None) -> None:
+        """The second admission phase: does ``on_unpriced_model="refuse"`` apply?
+
+        Ported from the api's own ``_check_unpriced_refusal``/
+        ``_alert_unpriced_model`` unchanged: a no-op unless that mode is set
+        and ``model`` is known before the request goes out; latches nothing
+        (nothing ran yet) and is alerted once per model per Engine, via the
+        same ``notify_door``/``_alert`` dedup every other door refusal uses.
+        A broken alert must not swallow the refusal itself, so alerting has
+        its own, inner fail-open.
+        """
+        try:
+            config = self.config
+            if config.on_unpriced_model != "refuse" or not model:
+                return
+            if price_for(model, config.custom_prices) is not None:
+                return
+            anomaly = Anomaly(
+                detector=BUDGET_DETECTOR,
+                severity="critical",
+                message=(
+                    f"Model {model!r} has no known price and "
+                    'on_unpriced_model="refuse"; refusing before the request '
+                    "goes out"
+                ),
+                details={"reason": "unpriced_model", "model": model},
+            )
+        except Exception:
+            _LOG.warning(
+                "runbound could not check pricing for model %r; the call proceeds",
+                model,
+                exc_info=True,
+            )
+            return
+        try:
+            self.notify_door(session, anomaly)
+            _LOG.warning("[runbound] %s", anomaly.message)
+        except Exception:
+            _LOG.warning(
+                "runbound could not alert on an unpriced-model refusal", exc_info=True
+            )
+        raise GuardrailTripped(anomaly)
+
+    def _admit_budget(
+        self, session: SessionState, model: str | None, request: dict | None
+    ) -> None:
+        """The opt-in phase: would this call's estimated cost cross the budget?
+
+        Estimate = ``estimated_tokens(chars of the request's messages)`` at
+        the model's input rate, plus the request's own output-token cap (else
+        ``config.admission_output_tokens``) at its output rate — the same
+        price table :mod:`runbound.pricing` prices the call with after the
+        fact. Remaining = ``budget_usd`` minus what this session (and the rest
+        of the fleet, via ``spend_offset_usd``) has already spent. A no-op
+        without ``budget_usd`` — there is nothing to estimate against — and
+        for an unpriced model, warned once per model per Engine rather than
+        refused: inventing a limit the customer never set is worse than
+        skipping this one opt-in check for a call the post-call wall still
+        watches.
+
+        Never latches (see :meth:`admit`): raises straight from here, never
+        through :meth:`_react`/:meth:`_latch`.
+        """
+        config = self.config
+        if config.budget_usd is None:
+            return
+        try:
+            price = price_for(model, config.custom_prices)
+            if price is None:
+                self._warn_admission_unpriced(model)
+                return
+            price_in, price_out = price
+            with session.lock:
+                remaining = config.budget_usd - (
+                    session.total_cost_usd + session.spend_offset_usd
+                )
+            output_tokens = _admission_output_cap(request)
+            if output_tokens is None:
+                output_tokens = config.admission_output_tokens
+            input_tokens = _estimated_tokens(_admission_request_chars(request))
+            cost_in = (input_tokens / 1_000_000.0) * price_in
+            cost_out = (output_tokens / 1_000_000.0) * price_out
+            estimate = cost_in + cost_out
+            if estimate <= remaining:
+                return
+            anomaly = _admission_anomaly(
+                session, model, estimate, remaining, config.budget_usd
+            )
+        except Exception:
+            _LOG.warning(
+                "runbound could not estimate the admission cost for model %r; "
+                "the call proceeds",
+                model,
+                exc_info=True,
+            )
+            return
+        try:
+            self.notify_door(session, anomaly)
+            _LOG.warning("[runbound] %s", anomaly.message)
+        except Exception:
+            _LOG.warning(
+                "runbound could not alert on an admission refusal", exc_info=True
+            )
+        raise GuardrailTripped(anomaly)
+
+    def _warn_admission_unpriced(self, model: str | None) -> None:
+        """Say once per model per Engine that admission skipped this call.
+
+        A plain log line, not an anomaly: nothing was refused, so there is
+        nothing for an observer to react to. ``model`` may be ``None`` (a
+        provider that only reveals it in the response); that is its own
+        single entry in the warned set, which is exactly right — one warning
+        for "admission cannot see this call's model" is enough.
+        """
+        if model in self._admission_unpriced_warned:
+            return
+        self._admission_unpriced_warned.add(model)
+        _LOG.warning(
+            "runbound: no price known for model %r; skipping the admission "
+            "budget estimate for this call (the post-call budget check still "
+            "applies)",
+            model,
+        )
 
     def record_llm_success(self, provider: str) -> None:
         """Report a model call that worked: ``provider``'s circuit closes.
@@ -592,6 +807,17 @@ class Engine:
             # (this set is rebuilt by init(), not truly process-wide), however
             # many sessions or endpoints hit the same unpriced name.
             key = (anomaly.detector, "unpriced_model", _detail(anomaly, "model", None))
+        if anomaly.detector == BUDGET_DETECTOR and _detail(anomaly, "rule", None) == (
+            "admission"
+        ):
+            # An admission refusal (T136) is its own kind of "budget" news:
+            # the ordinary key already includes the session id, but not the
+            # rule, so without this an admission refusal and a later
+            # post-call budget trip in the same session would dedupe against
+            # each other — only the first of the two would ever reach an
+            # observer. Adding "admission" keeps them apart; alerted once per
+            # session either way, as the ordinary key already ensures.
+            key += ("admission",)
         if anomaly.detector == POLICY_DETECTOR:
             # A policy anomaly is per rule and per tool: an agent refused a
             # second tool, or refused the same tool for a different reason, is
@@ -858,6 +1084,129 @@ def _policy_anomaly(
     )
 
 
+def _admission_anomaly(
+    session: SessionState,
+    model: str | None,
+    estimate: float,
+    remaining: float,
+    budget_usd: float,
+) -> Anomaly:
+    """Describe the refusal :meth:`Engine._admit_budget` is about to raise."""
+    key = getattr(session, "key", None)
+    whose = f" for session {key!r}" if key else ""
+    return Anomaly(
+        detector=BUDGET_DETECTOR,
+        severity="critical",
+        message=(
+            f"Admission refused{whose}: estimated ${estimate:.4f} for model "
+            f"{model!r} would exceed budget_usd (${remaining:.4f} left of "
+            f"${budget_usd:.4f})"
+        ),
+        details={
+            "session_id": getattr(session, "session_id", ""),
+            "key": key,
+            "tags": dict(getattr(session, "tags", None) or {}),
+            "reason": "admission",
+            "rule": "admission",
+            "model": model,
+            "estimated_cost_usd": estimate,
+            "remaining_usd": remaining,
+            "budget_usd": budget_usd,
+        },
+    )
+
+
+#: Characters an estimated token stands for (T136's own copy of the constant
+#: `wrappers.CHARS_PER_TOKEN` uses — duplicated, not imported, because engine.py
+#: must not depend on the wrapper package; see `_admission_request_chars`).
+_ADMISSION_CHARS_PER_TOKEN = 4
+
+#: Output-token cap fields, checked in the order a request is likeliest to
+#: carry one: `max_tokens` (Anthropic, and OpenAI's older chat completions),
+#: `max_completion_tokens` (OpenAI's newer chat completions), then
+#: `max_output_tokens` (OpenAI's Responses API). Mirrors
+#: `wrappers.openai_wrapper.request_output_cap` and
+#: `wrappers.anthropic_wrapper.request_output_cap`.
+_ADMISSION_OUTPUT_CAP_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
+
+
+def _estimated_tokens(chars: int) -> int:
+    """``ceil(chars / 4)`` for the admission estimate — T136's own copy of
+    ``wrappers.estimated_tokens`` (see ``_admission_request_chars``)."""
+    try:
+        return -(-max(int(chars), 0) // _ADMISSION_CHARS_PER_TOKEN)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _admission_field(obj, name: str):
+    """Read ``name`` off an attribute-style or mapping-style object.
+
+    ``None`` for anything missing or that raises — a request is someone
+    else's dict (or SDK param object), and may be shaped any way at all.
+    """
+    try:
+        if isinstance(obj, dict):
+            return obj.get(name)
+        return getattr(obj, name, None)
+    except Exception:
+        return None
+
+
+def _admission_request_chars(request: dict | None) -> int:
+    """Characters of message text an admission estimate is based on.
+
+    Deliberately narrow: only the ``messages`` shape both OpenAI's chat
+    completions and Anthropic's ``messages.create`` use, because an admission
+    estimate is stated as one (see ``budget_admission`` in config.py) — a
+    request shaped differently (the Responses API's ``input``, say) simply
+    estimates 0 input chars rather than guessing at a shape this module was
+    not taught. This is engine.py's own minimal reader, not
+    ``wrappers.messages_chars``: the wrapper package imports the engine
+    (indirectly, through the api), so the engine must not import it back —
+    see the module docstring's dependency direction.
+    """
+    if not isinstance(request, dict):
+        return 0
+    messages = request.get("messages")
+    if not isinstance(messages, (list, tuple)):
+        return 0
+    total = 0
+    for message in messages:
+        content = _admission_field(message, "content")
+        if isinstance(content, str):
+            total += len(content)
+        elif isinstance(content, (list, tuple)):
+            for part in content:
+                text = _admission_field(part, "text")
+                if isinstance(text, str):
+                    total += len(text)
+    return total
+
+
+def _admission_output_cap(request: dict | None) -> int | None:
+    """The output-token cap ``request`` stated, if any (T136).
+
+    Checked in :data:`_ADMISSION_OUTPUT_CAP_FIELDS` order; the first present,
+    positive value wins. ``None`` for a request with no cap at all, or one
+    that cannot be read — the caller's definition of "the request stated no
+    limit," which is exactly when ``config.admission_output_tokens`` applies.
+    """
+    if not isinstance(request, dict):
+        return None
+    for field_name in _ADMISSION_OUTPUT_CAP_FIELDS:
+        value = request.get(field_name)
+        if value is None:
+            continue
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            continue
+        if value > 0:
+            return value
+    return None
+
+
 def _is_dry_run(violation: Violation) -> bool:
     """Is this violation one the org is still rolling out?
 
@@ -933,20 +1282,34 @@ def _latch(session: SessionState, anomaly: Anomaly, config: GuardrailConfig) -> 
     return True
 
 
-def _latched(session: SessionState, config: GuardrailConfig | None = None) -> Anomaly | None:
+def _latched(
+    session: SessionState,
+    config: GuardrailConfig | None = None,
+    detectors: Sequence | None = None,
+) -> Anomaly | None:
     """The anomaly ``session`` is latched on, or ``None`` if it is healthy.
 
     With a ``config`` that sets ``latch_ttl_seconds``, a latch older than that
-    many seconds expires here: it is cleared and the session resumes, so a
-    per-hour budget or a false-positive spike trip heals itself instead of
-    needing a restart or a manual ``clear()``. Without one — the default — the
-    latch is permanent, exactly as it has always been.
+    many seconds expires here: it is cleared and every detector is re-armed
+    for this session id (T137), so the session is judged fresh on its very
+    next event. Without one — the default — the latch is permanent, exactly
+    as it has always been.
 
-    Healing grants another window, not a clean slate. Detectors fire once per
-    session id, so a healed session keeps its counters and stays quiet about
-    the condition it already reported; only ``clear()`` re-arms them. The latch
-    itself is armed again, so a *different* critical anomaly still stops the
-    session.
+    This is re-admission, not a clean slate: nothing here resets a counter.
+    ``latch_ttl_seconds`` re-admits a session and its next event is judged on
+    the same cumulative counters, so a session still over budget re-trips
+    immediately, with the same detector — the wall that promise requires. A
+    windowed budget that actually zeroes on a schedule is a different,
+    unbuilt feature. Only ``clear()`` resets the counters themselves. The
+    latch is armed again regardless, so a *different* critical anomaly can
+    still stop the session even where the same one no longer applies.
+
+    ``detectors`` is the live engine's own list, handed in so the rearm
+    reaches the same instances ``process()`` is about to call ``check()`` on
+    next; callers that only want to *read* the latch's state without an
+    engine at hand (or that healed it moments ago through another call site)
+    may omit it — the latch still clears, just with no detector to rearm,
+    which only matters the first time any caller observes the expiry.
     """
     with session.lock:
         anomaly = session.tripped_by
@@ -954,10 +1317,36 @@ def _latched(session: SessionState, config: GuardrailConfig | None = None) -> An
             return anomaly
         session.tripped_by = None
         session.tripped_at = None
+    _rearm_detectors(detectors, session.session_id)
     _LOG.info(
         "runbound: latch expired for session %s; resuming", session.session_id
     )
     return None
+
+
+def _rearm_detectors(detectors: Sequence | None, session_id: str) -> None:
+    """Tell every detector that can rearm itself to forget ``session_id``.
+
+    Fail-open, per detector: one broken ``rearm`` must not stop the others
+    from clearing their own memory, and must never propagate into the caller
+    healing the latch. A detector with no ``rearm`` (a customer's own, or a
+    test double) is silently skipped rather than required to implement it.
+    """
+    if not detectors:
+        return
+    for detector in detectors:
+        rearm = getattr(detector, "rearm", None)
+        if rearm is None:
+            continue
+        try:
+            rearm(session_id)
+        except Exception:
+            _LOG.warning(
+                "runbound detector %r could not rearm for session %s",
+                getattr(detector, "name", detector),
+                session_id,
+                exc_info=True,
+            )
 
 
 def _latch_expired(session: SessionState, config: GuardrailConfig | None) -> bool:

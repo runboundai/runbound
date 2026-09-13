@@ -668,3 +668,73 @@ def test_budget_message_reports_the_fleet_total():
     anomaly = BudgetDetector().check(state, event, config)
 
     assert "5.10" in anomaly.message
+
+
+# --------------------------------------------------------------------------
+# rearm() — a healed latch re-arms detection (T137)
+# --------------------------------------------------------------------------
+
+
+def test_rearm_lets_a_fire_once_detector_report_the_same_session_again():
+    config = GuardrailConfig(budget_usd=1.0)
+    detector = BudgetDetector()
+    event = llm_event(step=1, ts=1.0, cost=2.0)
+    state = replay([event])
+
+    assert detector.check(state, event, config) is not None
+    assert detector.check(state, event, config) is None  # fired once, now quiet
+
+    detector.rearm(state.session_id)
+
+    assert detector.check(state, event, config) is not None  # re-armed: fires again
+
+
+def test_rearm_is_a_noop_for_a_session_id_that_never_fired():
+    detector = BudgetDetector()
+    detector.rearm("never-seen")  # must not raise
+
+
+def test_rearm_only_affects_the_named_session():
+    config = GuardrailConfig(budget_usd=1.0)
+    detector = BudgetDetector()
+    event = llm_event(step=1, ts=1.0, cost=2.0)
+    state_a = replay([event], session_id="a")
+    state_b = replay([event], session_id="b")
+
+    assert detector.check(state_a, event, config) is not None
+    assert detector.check(state_b, event, config) is not None
+
+    detector.rearm("a")
+
+    assert detector.check(state_a, event, config) is not None  # rearmed
+    assert detector.check(state_b, event, config) is None  # untouched
+
+
+def test_timeout_rearm_clears_both_the_run_and_lifetime_memos():
+    """TimeoutDetector keeps two independent fire-once memos; rearm clears both."""
+    config = GuardrailConfig(max_session_seconds=10.0, max_session_lifetime_seconds=10.0)
+    detector = TimeoutDetector()
+    event = tool_event(step=1, ts=100.0)
+    state = replay([event])
+    state.run_started_at = 0.0
+    state.started_at = 0.0
+
+    first = detector.check(state, event, config)
+    assert first is not None and first.details["scope"] == "run"
+
+    second = detector.check(state, event, config)
+    assert second is not None and second.details["scope"] == "lifetime"
+
+    assert detector.check(state, event, config) is None  # both memos now set
+
+    detector.rearm(state.session_id)
+
+    anomaly = detector.check(state, event, config)
+    assert anomaly is not None
+    assert anomaly.details["scope"] == "run"  # the run wall re-fires first
+
+
+def test_every_default_detector_tolerates_rearm_of_an_unknown_session():
+    """Every shipped detector answers to ``rearm`` without raising."""
+    for cls in DEFAULT_DETECTORS:
+        cls().rearm("nobody-home")

@@ -428,12 +428,15 @@ with runbound.session(f"user:{user_id}", tags={"service": "support-bot"}):
   `runbound.clear(key)` (fresh budget, fresh baseline, detectors re-armed).
 - **The latch is permanent by default — and that is a choice you can change.**
   Out of the box a tripped session stays tripped until you `clear()` it or the
-  process restarts. If your budget is really "per hour" or "per day", or you
-  want a false-positive trip to heal on its own, **opt in** with
-  `latch_ttl_seconds=3600`: the latch lifts that long after it was set and the
-  session resumes with its counters intact (the detector that tripped stays
-  quiet about the same condition; a *different* problem still stops it).
-  Nothing expires unless you set this.
+  process restarts. If a false-positive trip should heal on its own, **opt
+  in** with `latch_ttl_seconds=3600`: the latch lifts that long after it was
+  set, every detector is re-armed, and the session's next event is judged
+  fresh — on the same cumulative counters. Re-admits, does not reset: a
+  session still over budget re-trips immediately, with the same detector,
+  which is the wall the setting promises. It is **not** a windowed budget
+  that zeroes on a schedule — that is a different, unbuilt feature — and
+  nothing expires unless you set this. `runbound.clear(key)` is the one call
+  that actually zeroes the counters.
 - **Key and tags reach your alerts.** Slack messages carry a `key: ... | tags:
   ...` line, PagerDuty puts `session_key` and `session_tags` in
   `custom_details`, and a spike anomaly carries them in
@@ -974,6 +977,13 @@ tie](#which-anomaly-wins-a-tie).
 | `error_storm` | An agent retrying into a wall: a provider answering 429 while every layer above it retries | `error_storm_limit` (default **10**, `None` disables) | More than `error_storm_limit` failed calls — failed model calls *and* failed tools — in the trailing 60 seconds. Severity `critical`. The one detector that is on by default with a number. See [Retry storms](#retry-storms-and-the-provider-circuit-breaker). |
 | `timeout` | A run that stopped being work an hour ago, with no single call looking wrong | `max_session_seconds`, `max_session_lifetime_seconds` | `event.ts - session.run_started_at > max_session_seconds` (`details["scope"] == "run"`), on any event kind, on the monotonic clock; or, if set, `event.ts - session.started_at > max_session_lifetime_seconds` (`details["scope"] == "lifetime"`). Each fires independently, once per session. Severity `critical`. See [Time and fan-out limits](#time-and-fan-out-limits). |
 
+**`budget_usd` stops after the call that crossed it** — exact, and the
+default. `budget_admission=True` (opt-in, off by default) also refuses a
+call *before it goes out* whose **estimated** cost would cross `budget_usd`
+— an estimate, stated as such, never the default: see [Admission: an
+opt-in pre-call budget
+check](#admission-an-opt-in-pre-call-budget-check-budget_admission).
+
 ### Which anomaly wins a tie
 
 When more than one detector fires critical on the same event, exactly one
@@ -1045,6 +1055,55 @@ should read `turns` or `event_count` by name instead.
 - A **fan-out limit** is enforced on `session()` entry, before the block's body
   runs at all.
 
+### Admission: an opt-in pre-call budget check (`budget_admission`)
+
+The `budget` detector above is exact and is the default for a reason: it
+looks at a running total this process actually holds, and it never guesses.
+That is also its one limitation — like every wrapped-LLM detector, it trips
+**after** the call that crossed the limit returns, because usage only exists
+then (see "Where in the call the trip happens," above). Most of the time
+that is the right trade: precision over prediction.
+
+Sometimes it is not — a single call can cost real money before its usage is
+ever known, and you would rather refuse it than pay for it. `budget_admission`
+is that choice, and it is **opt-in, off by default**: estimation is not
+deterministic, and this product's identity is that it is. Set it and the
+engine gains a fourth check, run before every wrapped call goes out (after
+the circuit and `on_unpriced_model="refuse"`, alongside the in-flight cap —
+see `Engine.admit`):
+
+```python
+runbound.init(budget_usd=5.0, budget_admission=True, on_anomaly="raise")
+```
+
+The estimate: characters across the request's `messages`, divided by four
+(the same rough token estimator used everywhere else in runbound), priced at
+the model's input rate; plus the request's own output-token cap —
+`max_tokens`, `max_completion_tokens` or `max_output_tokens`, whichever it
+set — or, if it set none, `admission_output_tokens` (default **1024**),
+priced at the output rate. Same static price table (or `custom_prices`) the
+post-call check uses. The call is refused, with `GuardrailTripped` (detector
+`budget`, `details["rule"] == "admission"`), when that estimate would push
+`total_cost_usd + spend_offset_usd` past `budget_usd`.
+
+Three things make this a door, not a second wall:
+
+- **It never latches.** A refused estimate says nothing about the *next*
+  call — a cheaper one, seconds later, may fit easily — so latching here
+  would turn a guess into a permanent wall. The session is untouched:
+  totals unchanged, nothing tripped, free to try again immediately.
+- **An unpriced model skips it, not refuses it.** A model with no known
+  price (`custom_prices` or the built-in table) cannot be estimated, and
+  refusing a call for a cost runbound cannot compute would be the SDK
+  inventing a limit you never set. It is warned once per model instead, and
+  the post-call `budget` check still watches the call once it returns.
+- **It is alerted once per session**, kept apart from an ordinary post-call
+  `budget` trip in the same session by `details["rule"]`, so neither shadows
+  the other.
+
+With `budget_admission` left at its default (`False`), nothing here runs at
+all — every call behaves exactly as it did before this setting existed.
+
 ---
 
 ## What happens when something trips — every choice, in one place
@@ -1068,12 +1127,13 @@ keyword on this call.
 |---|---|---|---|
 | `on_anomaly` | `"warn"` / `"raise"` / `"callback"` | `"warn"` | The reaction to a critical anomaly. **warn**: log a warning, the agent keeps running. **raise**: raise `GuardrailTripped` on the agent's thread (`exc.anomaly` is the full `Anomaly`; `try/finally` still runs). **callback**: call your `callback(anomaly)` — your own kill switch; if it raises, that is logged and swallowed. |
 | `on_trip` | `"latch"` / `"once"` | `"latch"` | What a critical trip does to the session **afterwards**. **latch**: the session stays stopped — every later call is refused (raise / callback again, no re-alert), and under `"raise"` even entering `session(key)` raises, so a blocked user costs zero model calls until `clear()` or `latch_ttl_seconds`. **once**: stop that one call only; the next call is evaluated afresh (a caught exception lets the user continue — pick this only if you handle blocking yourself). |
-| `latch_ttl_seconds` | `None` / seconds | `None` | Only matters with `on_trip="latch"`. **None**: the latch is permanent until `clear()`. **A number**: the latch expires that many seconds after it was set and the session resumes. Opt-in — nothing expires unless you set it. |
+| `latch_ttl_seconds` | `None` / seconds | `None` | Only matters with `on_trip="latch"`. **None**: the latch is permanent until `clear()`. **A number**: the latch expires that many seconds after it was set — every detector is re-armed and the session's next event is judged fresh, on the same cumulative counters. This **re-admits, it does not reset**: a session still over budget re-trips immediately, with the same detector; only `clear()` zeroes the counters themselves. Opt-in — nothing expires unless you set it. |
 | `on_spike` | `"notify"` / `"trip"` / `"limit"` | `"notify"` | What a *confirmed* spike does (a first spike is always notify-only). **notify**: log and alert, never stop — thinking mode alone is not an incident. **trip**: treat it as critical and follow `on_anomaly` / `on_trip`. **limit**: climb [the abuse ladder](#the-abuse-ladder-on_spikelimit) instead of slamming the door — a confirmed spike costs the session an allowance of `spike_limit_calls` abnormal calls, and only an exhausted allowance closes it, with a cooldown and a strike (requires `on_trip="latch"`, which enforces the cooldown). Explicit hard caps (`max_call_seconds`, `max_tokens_out_per_call`) always trip regardless — you set that number on purpose. |
 | `on_loop` | `None` / `"break"` / `"throttle"` / `"escalate"` | `None` | The reaction to a loop only (details [below](#when-a-loop-is-detected)). **None**: follow `on_anomaly`. **break**: raise immediately, whatever `on_anomaly` says. **throttle**: sleep before each repeat, never raise — a blocking `time.sleep()` on a sync call, and under a running event loop the engine hands the delay to the async wrapper instead, which `await asyncio.sleep()`s it, so the loop is never blocked either way. **escalate**: warn first, raise at `loop_hard_threshold`. |
 | `on_provider_failure` | `"notify"` / `"open"` | `"notify"` | What a provider that keeps failing does to your calls. **notify**: count the failures and alert once when `circuit_failure_threshold` of them land inside `circuit_window_seconds` — nothing is ever blocked. **open**: also refuse calls — the wrapped client raises `CircuitOpen` (a `GuardrailTripped`, with `.provider`) **before** touching the provider for `circuit_cooldown_seconds`, then lets exactly one probe through; a successful probe closes the circuit. Your app catches it and picks its own fallback — [we never route](#retry-storms-and-the-provider-circuit-breaker). The circuit is per provider and process-wide, so it stops nobody's session and latches nothing. |
 | `max_active_sessions`, `max_session_depth`, `max_child_sessions` | `None` / a number | `None` | The fan-out limits. A `session()` block that would take the run past one of them raises `GuardrailTripped` (detector `fanout`) **at the door, before its body runs**. **This row ignores `on_anomaly`** — like the per-call caps, these are numbers you stated — and it **latches nothing**: what was wrong is the shape of the run, not this end-user, so the next block is judged on its own. See [Time and fan-out limits](#time-and-fan-out-limits). |
 | `max_inflight_calls` | `None` / a number | `None` | How many calls to one endpoint may be in flight at once. The call that would take a provider label past it raises `GuardrailTripped` (detector `inflight`) **before the request goes out**. **This row ignores `on_anomaly`** — the number is one you stated — and **latches nothing**: the moment a slot frees up the next call goes through. Alerted once per endpoint. See [Self-hosted models](#self-hosted-models). |
+| `budget_admission`, `admission_output_tokens` | `bool`, `int` | `False`, `1024` | **Opt-in.** When `True`, `Engine.admit` also refuses a call **before it goes out** whose *estimated* cost would push `budget_usd` past its limit — `GuardrailTripped` (detector `budget`, `details["rule"] == "admission"`). **This row ignores `on_anomaly`** and **never latches**: an estimate is not a wall, and a cheaper call may still fit. An unknown model skips the estimate (warned once per model) rather than refuse a cost nobody stated. Alerted once per session. `admission_output_tokens` is the assumed output size when a request states no `max_tokens` / `max_completion_tokens` / `max_output_tokens` cap. With `budget_admission` left off, nothing here runs. See [Admission](#admission-an-opt-in-pre-call-budget-check-budget_admission). |
 | `max_steps`, `max_events` | `None` / a number | `None` | Unlike the two rows above, both are ordinary detectors (`steps`, `events`): `critical`, follow `on_anomaly` and `on_trip` like `budget` does. **They count different things, not the same thing at two thresholds**: `max_steps` counts model turns (`llm_call` events) only, `max_events` counts every recorded event. Set both if you want an independent wall on each. See [max_steps and max_events](#max_steps-and-max_events-steps-are-turns-events-are-events). |
 | `max_session_seconds`, `max_session_lifetime_seconds` | `None` / seconds | `None` | The two wall clocks. Also ordinary detectors (`timeout`), like the row above: `critical`, follows `on_anomaly` and `on_trip` like `budget` does. `max_session_seconds` measures the *run* — reset on every `session(key)` entry — and fires with `details["scope"] == "run"`; `max_session_lifetime_seconds` measures since the session's first-ever creation and fires with `details["scope"] == "lifetime"`. Each fires once per session, independently of the other. See [Time and fan-out limits](#time-and-fan-out-limits). |
 | `on_halt` | `"raise"` / `"warn"` | `"raise"` | What an org-wide halt from [the control plane](#fleet-mode--one-truth-across-all-your-workers-control-plane) does to this worker. **raise**: every guarded `session()` block is refused **at the door** with `GuardrailTripped` (detector `halt`) — that is what a kill switch is for. **warn**: nothing is refused; the halt is logged at most once a minute, so you can prove the switch reaches your workers before you let it stop them. **This row ignores `on_anomaly`** and **latches nothing**: by default the halt lifts by itself 60 s after the last contact with the plane — see `stale_halt` below for the other choice. |
@@ -1703,7 +1763,7 @@ keyword`.
 | `circuit_window_seconds` | `float` | `60.0` | The trailing window those failures are counted in. Must be positive. |
 | `circuit_cooldown_seconds` | `float` | `30.0` | How long an open circuit stays open before one probe is let through. Must be positive. |
 | `on_trip` | `str` | `"latch"` | After a critical trip: `"latch"` keeps the session stopped until `clear()`/ttl; `"once"` stops that one call only. See [the reactions table](#what-happens-when-something-trips--every-choice-in-one-place). |
-| `latch_ttl_seconds` | `float \| None` | `None` | **Opt-in.** `None` = a tripped session stays tripped until `clear()`. A number = the latch expires that many seconds after it was set and the session resumes. |
+| `latch_ttl_seconds` | `float \| None` | `None` | **Opt-in.** `None` = a tripped session stays tripped until `clear()`. A number = the latch expires that many seconds after it was set: every detector is re-armed and the session's next event is judged fresh, on the same cumulative counters — a session still over budget re-trips immediately, with the same detector. Re-admits; does not reset. |
 | `tool_policy` | `ToolPolicy \| dict \| None` | `None` | The rules for what your agent may do, enforced at every guarded tool call: `deny`, `allow`, `max_calls`, `constraints`, `require_approval` + `approval_callback`, and its own `on_violation`. A dict of those fields is coerced to a `ToolPolicy` and validated at `init()`. See [Action policy](#action-policy--rules-for-what-your-agent-may-do). |
 | `max_inflight_calls` | `int \| None` | `None` | **Opt-in.** How many guarded calls to one provider label may be in flight at once, process-wide. The call that would exceed it raises `GuardrailTripped` (detector `inflight`) before the request goes out, whatever `on_anomaly` says, and latches nothing. `None` counts nothing at all. See [Self-hosted models](#self-hosted-models). |
 | `estimate_tokens` | `bool` | `False` | **Opt-in.** When a response carries no usage at all, estimate tokens as `ceil(chars / 4)` over the request text and the answer, streams included. Never used when the endpoint reported usage. Logged once per process. For self-hosted servers that omit `usage`. |
@@ -1728,6 +1788,8 @@ keyword`.
 | `custom_prices` | `dict[str, tuple[float, float]]` | `{}` | `model -> (usd per 1M input tokens, usd per 1M output tokens)`. Overrides the built-in table, and is consulted before it. |
 | `on_unpriced_model` | `"zero"` \| `"estimate"` \| `"refuse"` | `"zero"` | What a model with **no** price — not in the built-in table, not in `custom_prices` — costs a dollar budget. **zero**: counted as $0.00, same as always, with a once-per-model warning **on by default** so the blind spot is not a silent one. **estimate**: priced from `unpriced_price_per_1m_usd` instead; the event/anomaly carries `priced="estimated"`. **refuse**: the call is refused at the door (detector `budget`, `details={"reason": "unpriced_model", "model": ...}`), before it goes out, whatever `on_anomaly` says — a choice you stated on purpose, so it is not negotiable per anomaly. A model only discovered unpriced after the fact (`record_call()`, or a model name known only from the response) is priced like `"estimate"` when a fallback pair was given, else like `"zero"`, and logged once either way. |
 | `unpriced_price_per_1m_usd` | `tuple[float, float] \| None` | `None` | The `(usd per 1M input, usd per 1M output)` fallback pair `on_unpriced_model="estimate"` prices from. Required when that mode is set; a 2-tuple of non-negative numbers otherwise it is rejected at `init()`. |
+| `budget_admission` | `bool` | `False` | **Opt-in.** Refuse a call *before it goes out* whose estimated cost would cross `budget_usd` — see [Admission](#admission-an-opt-in-pre-call-budget-check-budget_admission). Off leaves every call path exactly as it was before this setting existed. |
+| `admission_output_tokens` | `int` | `1024` | The assumed output size `budget_admission`'s estimate uses when a request states no `max_tokens` / `max_completion_tokens` / `max_output_tokens` cap. Must be a positive int. Ignored when a request names its own cap. |
 | `loop_ignore_tools` | `tuple[str, ...]` | `()` | Tool names exempt from the loop window by policy rather than by decorator — equivalent to `@runbound.tool(repeatable=True)` for every call to that name, whoever runs it (executed or model-requested). They still count toward `tool_calls()` and any `max_calls` in your action policy. For marking a tool that is *meant* to repeat (polling a job, checking a status) — not for tuning around a real loop. |
 | `refusals` | `dict \| None` | `None` | **Opt-in.** Your own HTTP status and sentence for a refusal, by detector (including `"plane"`) or `"default"`. Validated at `init()` — a bad status or an over-length message raises `ValueError` naming the key. A control-plane profile overrides this field by field; unset, `BUILTIN` answers. See [What the end user sees](#what-the-end-user-sees--your-words-your-status). |
 

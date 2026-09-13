@@ -290,6 +290,50 @@ them.
   are T146's own addition, together with the plane-side router, ledger and
   migration this SDK release does not touch.
 
+### Wave F (T136–T137): admission, and a healed latch that re-arms
+
+Two more release-gating fixes from the same outside review.
+
+- **T137 — a healed latch re-arms detection.** `latch_ttl_seconds` expired a
+  latch, but every detector still fires only once per session id and no
+  counter was ever reset — so a session that was still over budget when the
+  ttl elapsed ran with *no budget wall at all* afterward, the opposite of
+  what the setting promises. On heal, the engine now calls a new
+  `rearm(session_id)` on every detector (`_FireOnceDetector.rearm`,
+  overridden by `TimeoutDetector` for its second, lifetime-scoped memo, and
+  by `SpikeDetector` for its two-phase warn/confirm memos), so a session
+  whose condition still holds re-trips on its very next event, with the same
+  detector. This is re-admission, not a clean slate: no counter is reset —
+  only `runbound.clear()` does that — so `latch_ttl_seconds` is not a
+  windowed budget (that stays a separate, unbuilt feature). The stale claim
+  that a healed session "stays quiet about the condition it already
+  reported" is gone from the docs and the code's own docstrings.
+- **T136 — admission: a named phase, and an opt-in pre-call budget
+  estimate.** The circuit check and the `on_unpriced_model="refuse"` door
+  refusal — previously inline in the api's `_Hooks.before` — are now
+  `Engine.admit(session, provider, model, request)`, one named phase every
+  wrapped call passes through before it goes out. Opt-in and **off by
+  default** — `budget_admission: bool = False` — because estimation is not
+  deterministic and this product's identity is: `budget_usd`'s post-call
+  wall stays the default reaction, exact and unchanged. Set
+  `budget_admission=True` to also refuse a call whose *estimated* cost would
+  cross `budget_usd` before it goes out: `estimated_tokens(chars of the
+  request's messages)` at the model's input rate, plus the request's own
+  output-token cap (`max_tokens` / `max_completion_tokens` /
+  `max_output_tokens`, read by a new `request_output_cap(kwargs)` in each
+  wrapper) or, absent one, the new `admission_output_tokens: int = 1024`, at
+  the output rate — the same price table the post-call check prices with. An
+  unknown model skips the estimate for that call and warns once per model,
+  rather than inventing a limit the customer never set (the post-call wall
+  still watches it). A refused admission **never latches** — a cheaper call
+  minutes later may still fit — and is alerted once per session
+  (`details["rule"] == "admission"` keeps it from being deduped against an
+  unrelated post-call `budget` trip in the same session). `call_before` (and
+  `_Hooks.before`) now also pass the request's raw kwargs through, tolerant
+  of hooks written before this release the same way an older, model-less
+  `before` was already tolerated. With `budget_admission` left off, every
+  existing call path is unchanged.
+
 ### Changed
 
 - README: a "Fleet mode" section (when the plane is contacted, what it adds,

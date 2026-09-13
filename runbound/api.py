@@ -40,7 +40,6 @@ from . import _coverage, autowrap, responses
 from .config import GuardrailConfig
 from .engine import (
     BUDGET_DETECTOR,
-    CIRCUIT_DETECTOR,
     ERROR_MAX_CHARS,
     HALT_DETECTOR,
     INFLIGHT_DETECTOR,
@@ -52,10 +51,10 @@ from .engine import (
     take_pending_delay as _engine_take_pending_delay,
 )
 from .events import Anomaly, Event
-from .exceptions import CircuitOpen, GuardrailTripped
+from .exceptions import GuardrailTripped
 from .plane_types import ExitDelta, PlaneStatus, key_hash
 from .policy import ToolCall
-from .pricing import price_call, price_for
+from .pricing import price_call
 from .shared import LocalState, build as _build_shared
 from .state import SessionState
 from .wrappers import PROVIDERS
@@ -1272,7 +1271,7 @@ def _rolled_over(key: str, state: SessionState) -> SessionState:
             engine = _ENGINE
         if engine is None or engine.config.on_spike != "limit":
             return state
-        latched = _latched(state, engine.config)
+        latched = _latched(state, engine.config, engine.detectors)
         if latched is None:
             _cooldown_served(state)
             return state
@@ -1471,7 +1470,7 @@ def _refuse_if_tripped(state: SessionState) -> None:
             engine = _ENGINE
         if engine is None or engine.config.on_anomaly != "raise":
             return
-        tripped = _latched(state, engine.config)
+        tripped = _latched(state, engine.config, engine.detectors)
     except Exception:
         _LOG.warning(
             "runbound could not check the latch for session %r; continuing",
@@ -1546,7 +1545,7 @@ def is_tripped(key: str | None = None) -> Anomaly | None:
             state = current_session()
         if state is None or engine is None:
             return None
-        return _latched(state, engine.config)
+        return _latched(state, engine.config, engine.detectors)
     except Exception:
         _LOG.warning("runbound could not read the latch for %r", key, exc_info=True)
         return None
@@ -1618,7 +1617,7 @@ def session_status(key: str) -> dict | None:
             generation = _GENERATIONS.get(key, 0)
         if engine is None or state is None:
             return None
-        tripped = _latched(state, engine.config)
+        tripped = _latched(state, engine.config, engine.detectors)
         with state.lock:
             now = time.monotonic()
             status = {
@@ -1929,7 +1928,7 @@ class _Hooks:
     The wrappers know how to read someone else's SDK; everything about what a
     failure *means* lives here and in the engine. The moments::
 
-        before(provider, model=None)         # may raise CircuitOpen/GuardrailTripped
+        before(provider, model=None, request=None)  # may raise CircuitOpen/GuardrailTripped
         success(provider)                    # the call worked
         error(model, exc, duration_s, provider)  # the call failed
         release(provider)                    # the call is over, however it ended
@@ -1950,8 +1949,8 @@ class _Hooks:
     Every one of them is fail-open: before :func:`init`, or if anything inside
     runbound goes wrong, the host's call proceeds exactly as if none of this
     were installed. The deliberate exceptions are
-    :class:`~runbound.exceptions.CircuitOpen`, the in-flight and
-    unpriced-model refusals from :meth:`before`, and a
+    :class:`~runbound.exceptions.CircuitOpen`, the in-flight, unpriced-model
+    and (T136, opt-in) admission-budget refusals from :meth:`before`, and a
     :class:`~runbound.exceptions.GuardrailTripped` raised by detection in
     :meth:`error` or :meth:`tool_request` — the product doing its job.
     :meth:`abandoned` is the one exception to "GuardrailTripped propagates":
@@ -1975,57 +1974,54 @@ class _Hooks:
         except Exception:
             return False
 
-    def before(self, provider: str, model: str | None = None) -> None:
-        """Vet a call before it goes out: the circuit, the price, then the cap.
+    def before(
+        self,
+        provider: str,
+        model: str | None = None,
+        request: dict | None = None,
+    ) -> None:
+        """Vet a call before it goes out: admission, then the in-flight cap.
 
-        The circuit is the retry-storm fix: failing fast costs a microsecond,
-        while the call it replaces costs a timeout and, often, a retry loop
-        around it. Only ``on_provider_failure="open"`` refuses anything; under
-        the default the circuit is counted and reported and this is a no-op.
+        ``Engine.admit`` (T136) is the named admission phase: the circuit,
+        then ``on_unpriced_model="refuse"``, then — opt-in, ``budget_admission``
+        — an estimate of what this call would cost. It is handed the session
+        this call is being made under (:func:`current_session`) and
+        ``request``, the raw call kwargs a wrapper's ``create`` was given (an
+        older wrapper, or the ``@runbound.llm`` decorator, which has no
+        kwargs dict, passes ``None`` — admission's estimate then falls back to
+        ``config.admission_output_tokens`` alone with no request text to
+        count, still correct, just less informed).
 
-        runbound does not fall back to another provider — routing is the
-        application's decision — so the app catches
-        :class:`~runbound.exceptions.CircuitOpen` (a
-        :class:`~runbound.exceptions.GuardrailTripped`) and does what it
-        likes. No alert is sent here: the on-call was paged when the circuit
-        opened, not once per refused call.
+        ``max_inflight_calls`` runs after, unchanged from before T136: on a
+        self-hosted endpoint the scarce resource is GPU concurrency, not
+        dollars, and a call that would take this label past the cap is
+        refused here — before the request goes out and whatever
+        ``on_anomaly`` says, because the number is one the customer stated. A
+        refused call takes no slot; an allowed one takes exactly one, given
+        back by :meth:`release`. It stays a separate, api-owned step (not
+        part of ``admit``) because it is process-wide bookkeeping the engine
+        does not otherwise keep — see ``_reserve_inflight``.
 
-        Then, when ``model`` is given, ``on_unpriced_model="refuse"``: a model
-        with no static or custom price is refused here, before the request
-        goes out, whatever ``on_anomaly`` says — the customer chose this mode
-        precisely to stop such calls rather than merely count them. Latches
-        nothing (nothing ran) and is alerted once per model per Engine (the
-        alert dedup set is rebuilt by :func:`init`, so this is not truly
-        process-wide), not per session, because an unpriced model is a fact
-        about the model. With
-        no ``model`` (an older wrapper call site, or a provider that only
-        reveals it in the response) this step is skipped; pricing still
-        catches the call after the fact when it is recorded.
-
-        Then ``max_inflight_calls``: on a self-hosted endpoint the scarce
-        resource is GPU concurrency, not dollars, and a call that would take
-        this label past the cap is refused here — before the request goes out
-        and whatever ``on_anomaly`` says, because the number is one the
-        customer stated. A refused call takes no slot; an allowed one takes
-        exactly one, given back by :meth:`release`.
+        Raises :class:`~runbound.exceptions.CircuitOpen` or
+        :class:`~runbound.exceptions.GuardrailTripped` for a refusal at any
+        phase; every phase is otherwise fail-open, and a call with no engine
+        at all (before :func:`init`) is not vetted, exactly as before.
         """
         try:
             with _LOCK:
                 engine = _ENGINE
             if engine is None:
                 return
-            allowed = engine.circuit_allows(provider)
-            anomaly = None if allowed else _circuit_open_anomaly(engine, provider)
+            session = current_session()
         except Exception:
             _LOG.warning(
-                "runbound could not check the circuit for %r; the call proceeds",
+                "runbound could not look up the session for %r; the call proceeds",
                 provider,
                 exc_info=True,
             )
             return
-        if anomaly is not None:
-            raise CircuitOpen(anomaly, provider)
-        _check_unpriced_refusal(engine, model)
+        if session is not None:
+            engine.admit(session, provider, model, request)
         _reserve_inflight(engine, provider)
 
     def release(self, provider: str) -> None:
@@ -2181,84 +2177,6 @@ def _is_loop_ignored(tool_name: str) -> bool:
         return tool_name in _LOOP_IGNORE_TOOLS
     except Exception:
         return False
-
-
-def _check_unpriced_refusal(engine: Engine, model: str | None) -> None:
-    """Refuse before the request goes out when the model has no price.
-
-    A no-op unless ``on_unpriced_model="refuse"`` and ``model`` is known.
-    Mirrors :func:`_reserve_inflight`: ignores ``on_anomaly`` (the customer
-    stated this rule), latches nothing (nothing ran yet), and pages once per
-    model per Engine (the alert is deduped on a set :func:`init` rebuilds, so
-    this is not truly process-wide) rather than per session or per call.
-    """
-    try:
-        if engine.config.on_unpriced_model != "refuse" or not model:
-            return
-        if price_for(model, engine.config.custom_prices) is not None:
-            return
-        anomaly = _unpriced_model_anomaly(model)
-    except Exception:
-        _LOG.warning(
-            "runbound could not check pricing for model %r; the call proceeds",
-            model,
-            exc_info=True,
-        )
-        return
-    _alert_unpriced_model(engine, anomaly)
-    raise GuardrailTripped(anomaly)
-
-
-def _unpriced_model_anomaly(model: str) -> Anomaly:
-    """Describe the refusal :func:`_check_unpriced_refusal` is about to raise."""
-    return Anomaly(
-        detector=BUDGET_DETECTOR,
-        severity="critical",
-        message=(
-            f"Model {model!r} has no known price and on_unpriced_model=\"refuse\"; "
-            "refusing before the request goes out"
-        ),
-        details={"reason": "unpriced_model", "model": model},
-    )
-
-
-def _alert_unpriced_model(engine: Engine, anomaly: Anomaly) -> None:
-    """Page once per model, then stay quiet however often it is refused.
-
-    Fail-open, like :func:`_alert_inflight`: a refusal is never lost to a
-    broken alerter.
-    """
-    try:
-        with _LOCK:
-            state = _SESSION
-        state = _CURRENT.get() or state
-        if state is not None:
-            engine.notify_door(state, anomaly)
-        _LOG.warning("[runbound] %s", anomaly.message)
-    except Exception:
-        _LOG.warning(
-            "runbound could not alert on an unpriced-model refusal", exc_info=True
-        )
-
-
-def _circuit_open_anomaly(engine: Engine, provider: str) -> Anomaly:
-    """Describe the refusal a wrapper is about to raise."""
-    state = engine.circuit.state(provider)
-    cooldown = engine.config.circuit_cooldown_seconds
-    return Anomaly(
-        detector=CIRCUIT_DETECTOR,
-        severity="critical",
-        message=(
-            f"Provider {provider!r} circuit is open; failing fast "
-            f"(cooldown {cooldown:.0f}s)"
-        ),
-        details={
-            "provider": provider,
-            "host": provider_host(provider),
-            "state": state,
-            "cooldown_seconds": cooldown,
-        },
-    )
 
 
 #: Circuit states from worst to best. A shape prefix answers with the worst of
