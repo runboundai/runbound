@@ -329,7 +329,7 @@ def read_usage(response: Any, request_kwargs: dict) -> tuple[str | None, int, in
 def read_reasoning(response: Any) -> int:
     """Thinking tokens a reasoning model burned, or 0.
 
-    Reported on top of ``tokens_out``, under
+    A subset of ``tokens_out``, not an addition to it, under
     ``usage.completion_tokens_details.reasoning_tokens`` for chat completions
     and ``usage.output_tokens_details.reasoning_tokens`` for the Responses API.
     Models that do not reason omit the whole details object, and an SDK object

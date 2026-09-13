@@ -54,8 +54,16 @@ PROVIDER = "anthropic"
 
 _INPUT_FIELDS = ("input_tokens", "prompt_tokens")
 _OUTPUT_FIELDS = ("output_tokens", "completion_tokens")
-#: No Anthropic usage object counts thinking tokens separately today; these are
-#: the names a future one would plausibly use, read for free if it ever does.
+#: Extended thinking, counted (T173). ``anthropic`` 1.5.0 reports it as
+#: ``usage.output_tokens_details.thinking_tokens`` — a *subset* of
+#: ``output_tokens``, not an addition to it, exactly as OpenAI's
+#: ``completion_tokens_details.reasoning_tokens`` is a subset of
+#: ``completion_tokens``. Earlier releases published no count at all, and the
+#: docstrings here said so until the conformance kit replayed a real 1.5.0
+#: response and found 115 thinking tokens the wrapper was reporting as zero.
+#: The top-level names stay in the list: a usage object that ever states the
+#: count without nesting it is read for free.
+_DETAILS_FIELDS = ("output_tokens_details", "completion_tokens_details")
 _REASONING_FIELDS = ("thinking_tokens", "reasoning_tokens")
 #: Cache tokens (T139): unlike OpenAI, Anthropic's `input_tokens` EXCLUDES
 #: both of these — they are separate, additive counts — so `read_usage` folds
@@ -292,13 +300,27 @@ def read_usage(response: Any, request_kwargs: dict) -> tuple[str | None, int, in
 
 
 def read_reasoning(response: Any) -> int:
-    """Thinking tokens on a messages response, 0 — as today's API always is.
+    """Extended-thinking tokens on a messages response, or 0 (T173).
 
-    Anthropic bills extended thinking inside ``output_tokens`` and reports no
-    separate count, so this reads 0 unless a future usage object grows one of
-    ``_REASONING_FIELDS``.
+    Anthropic bills thinking *inside* ``output_tokens`` and states how many of
+    them it was in ``usage.output_tokens_details.thinking_tokens``. This is a
+    subset of :func:`read_usage`'s ``tokens_out``, never an addition to it —
+    the caller reports both and prices only ``tokens_out``, or a thinking call
+    would be billed twice.
+
+    0 when the details object is absent (a model that did not think, or a
+    release that published no count), unreadable, or explicitly zero.
     """
-    return _tokens(_field(response, "usage"), _REASONING_FIELDS)
+    return _reasoning(_field(response, "usage"))
+
+
+def _reasoning(usage: Any) -> int:
+    """Thinking tokens on one usage object: nested first, then top level."""
+    for name in _DETAILS_FIELDS:
+        tokens = _tokens(_field(usage, name), _REASONING_FIELDS)
+        if tokens:
+            return tokens
+    return _tokens(usage, _REASONING_FIELDS)
 
 
 def read_cached(response: Any) -> int:
@@ -395,15 +417,11 @@ def _chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
         usage.tokens_cached_in = max(usage.tokens_cached_in, cache_read)
         usage.tokens_cache_write_in = max(usage.tokens_cache_write_in, cache_write)
         usage.tokens_out = max(usage.tokens_out, _tokens(message_usage, _OUTPUT_FIELDS))
-        usage.tokens_reasoning = max(
-            usage.tokens_reasoning, _tokens(message_usage, _REASONING_FIELDS)
-        )
+        usage.tokens_reasoning = max(usage.tokens_reasoning, _reasoning(message_usage))
     elif kind == "message_delta":
         delta_usage = _field(chunk, "usage")
         usage.tokens_out = max(usage.tokens_out, _tokens(delta_usage, _OUTPUT_FIELDS))
-        usage.tokens_reasoning = max(
-            usage.tokens_reasoning, _tokens(delta_usage, _REASONING_FIELDS)
-        )
+        usage.tokens_reasoning = max(usage.tokens_reasoning, _reasoning(delta_usage))
 
 
 def _tokens(usage: Any, names: tuple[str, ...]) -> int:

@@ -2115,7 +2115,7 @@ you run only Anthropic, older versions are fine.
 | Provider | sync | async | stream | tool calls | usage | live-tested |
 |---|---|---|---|---|---|---|
 | OpenAI | yes [^sdk] | yes [^sdk] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
-| Anthropic | yes [^sdk] | yes [^async] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
+| Anthropic | yes [^sdk] | yes [^conformance] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
 | Azure OpenAI | | | | | | |
 | Ollama / vLLM / OpenAI-compatible | yes [^ollama] | | yes [^ollama] | yes [^ollama] | yes [^ollama] | yes [^ollama] |
 | Gemini | | | | | | |
@@ -2127,13 +2127,20 @@ you run only Anthropic, older versions are fine.
     cell for OpenAI, are proven against the real `openai` and `anthropic` SDK
     classes, over a fake HTTP transport (no live network) —
     `tests/test_real_sdk.py`.
-[^async]: Anthropic async is proven only against a fake async client
-    (`tests/test_async_wrappers.py`), not the real `anthropic` SDK —
-    `tests/test_real_sdk.py` exercises real-SDK async for OpenAI only.
+[^conformance]: Anthropic async — plain, tool-calling, extended-thinking,
+    cached-prompt and error responses — is proven against responses recorded
+    from the real `anthropic` SDK and replayed through the wrapper, in a
+    private conformance kit in the development monorepo (recorded against the
+    real SDK; not part of this repository), alongside the fake-async-client
+    tests in `tests/test_async_wrappers.py`. Recorded fixtures prove the
+    wrapper reads a real recorded response correctly; they are not a live
+    end-to-end run, which is why the live-tested cell is still empty.
 [^stream]: Sync for both providers, async for OpenAI — including
     abandoned-stream accounting: `tests/test_streaming.py`,
-    `tests/test_streams_abandoned.py`. Async Anthropic streaming has no
-    test; the wrapper handles it by shape.
+    `tests/test_streams_abandoned.py`. Async Anthropic streaming is covered
+    too, by recorded event streams from the real `anthropic` SDK replayed
+    through the wrapper in the same private conformance kit (recorded against
+    the real SDK; not part of this repository) — recorded, not live.
 [^ollama]: Live, over the network, against a real running Ollama server —
     sync only, includes a streaming scenario (`max_inflight_calls` while a
     stream is in flight), a decorated and an undecorated tool loop, and real

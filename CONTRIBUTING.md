@@ -62,6 +62,27 @@ Bug reports and feature requests are welcome. For a bug, please include:
   `POST /v1/clear`) need extra scrutiny, since a third party's server can
   implement this protocol too — breaking it silently breaks anyone who did.
 
+## Adding a provider
+
+One five-function wrapper module per provider, never a universal parser. The
+five are the ones `runbound/wrappers/anthropic_wrapper.py` exposes —
+`matches`, `is_wrapped`, `install`, `read_usage` and `read_tool_requests` —
+plus the small readers that hang off them (`read_reasoning`, `read_cached`,
+`read_cache_write`, the stream chunk readers). Providers change independently,
+so each gets its own module that knows where *that* provider puts `create` and
+what *that* provider calls its usage fields; a shared parser would make one
+provider's rename everybody's bug. The `openai` and `anthropic` packages are
+never imported — detection is duck-typing alone, and the SDK stays
+dependency-free.
+
+A new provider arrives as a module **plus recorded fixtures**. The fixtures are
+recorded from the real provider SDK and replayed through the wrapper in a
+private conformance kit (`runbound-conformance/`) in the development monorepo,
+before any cell in this README's compatibility matrix is filled in — a
+checkmark in that table means a test proves it, and "the shape looks right" is
+not a test. Please open an issue before starting a new provider so we can agree
+the surface and get the fixtures recorded.
+
 ## License
 
 By contributing, you agree that your contribution is licensed under this

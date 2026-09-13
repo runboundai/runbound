@@ -16,9 +16,13 @@ class Event:
     change. ``args_hash`` is a sha256 hex digest of canonicalized arguments;
     raw arguments are never stored.
 
-    ``tokens_out`` stays the provider's completion count; reasoning (thinking)
-    tokens are carried separately in ``tokens_reasoning`` so a caller can see
-    the billed split, and are added to it only where total output work matters.
+    ``tokens_out`` is the provider's completion count. ``tokens_reasoning``
+    is the *subset* of it that was reasoning (thinking) — OpenAI's
+    ``completion_tokens_details.reasoning_tokens``, Anthropic's
+    ``output_tokens_details.thinking_tokens`` (T173) — carried separately so a
+    caller can see the split. It is never added to ``tokens_out``, priced, or
+    counted against a cap: doing so would bill and measure a thinking call
+    twice (see ``SessionState.record``).
 
     ``tokens_cached_in`` (T139) is the subset of ``tokens_in`` that was served
     from the provider's prompt cache — never additional tokens on top of
@@ -84,7 +88,7 @@ class Event:
     args_hash: str | None = None  # sha256 hex of canonicalized args
     error: str | None = None
     duration_s: float = 0.0  # wall time the call took, 0.0 when unmeasured
-    tokens_reasoning: int = 0  # thinking tokens, on top of tokens_out
+    tokens_reasoning: int = 0  # thinking tokens, a subset of tokens_out
     loop_exempt: bool = False  # counts for tool_calls()/max_calls, not the loop window
     priced: str | None = None  # "estimated" when cost_usd came from the unpriced fallback
     partial: bool = False  # an llm_call reported by an abandoned-stream finalizer

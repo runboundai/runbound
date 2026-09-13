@@ -1981,8 +1981,9 @@ def _record_llm_call(
 ) -> None:
     """Price a model call and emit its ``llm_call`` event.
 
-    ``duration_s`` is how long the call took and ``tokens_reasoning`` the
-    thinking tokens it burned on top of ``tokens_out``; both default to the
+    ``duration_s`` is how long the call took and ``tokens_reasoning`` how many
+    of ``tokens_out`` were thinking tokens — a subset of it, not an addition,
+    so pass the provider's completion count whole; both default to the
     "not measured" zero, so a caller that only knows the token counts still
     reports a complete event. ``tokens_cached_in`` (T139) is the subset of
     ``tokens_in`` that was a provider cache *read* hit, and
