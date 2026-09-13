@@ -26,14 +26,54 @@ jobs:
   # the one that actually runs it, against genuine openai/anthropic clients on
   # a mock HTTP transport — so a shape change in someone else's SDK fails here
   # rather than in a customer's agent.
+  #
+  # It is a matrix because one point is not compatibility. Both ends of the
+  # supported Python range, and both ends of each provider SDK's supported
+  # range, crossed: 8 combinations.
+  #
+  # The floors are pinned; "latest" is deliberately unpinned, because the job
+  # exists to be broken by a release we have not seen yet. Each floor is the
+  # OLDEST version this whole test file passes on, established by installing
+  # every candidate and running it (T142), not by reading a changelog:
+  #
+  #   openai==1.66.5 — 1.65.x has no `client.responses` at all (3 failures),
+  #     and 1.66.0–1.66.3 answer the Responses API with an untyped
+  #     `usage.input_tokens_details`, so the cached-token assertion fails.
+  #     1.66.5 is the first release green end to end.
+  #   anthropic==1.0.0 — the httpx2 line. anthropic 0.x type-checks its
+  #     `http_client` against `httpx.Client` and refuses an `httpx2.Client`,
+  #     and a modern `openai` puts httpx2 in the environment, so 0.x cannot
+  #     share an interpreter with the openai end of this matrix. (0.125.0 and
+  #     older still pass when they are the only SDK installed on httpx —
+  #     measured — but that is not a cell of this matrix.)
+  #
+  # `httpx` is installed by name on purpose: the current openai and anthropic
+  # both depend on httpx2, and this test file skips itself entirely without
+  # httpx. The version check below is what stops a resolver failure from
+  # turning into a silently green, silently skipped job.
   real-sdks:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+        openai: ["1.66.5", "latest"]
+        anthropic: ["1.0.0", "latest"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
       - name: Install
-        run: pip install -e ".[test]" openai anthropic httpx
+        env:
+          OPENAI_VERSION: ${{ matrix.openai }}
+          ANTHROPIC_VERSION: ${{ matrix.anthropic }}
+        run: |
+          pin() { if [ "$2" = latest ]; then echo "$1"; else echo "$1==$2"; fi; }
+          pip install -e ".[test]" httpx \
+            "$(pin openai "$OPENAI_VERSION")" "$(pin anthropic "$ANTHROPIC_VERSION")"
+      - name: Say what actually resolved
+        run: |
+          python -c "import openai, anthropic, httpx; print('openai', openai.__version__, '| anthropic', anthropic.__version__, '| httpx', httpx.__version__)"
       - name: Test against the real SDKs
         run: python -m pytest -q tests/test_real_sdk.py -p no:cacheprovider

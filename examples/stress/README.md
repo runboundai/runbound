@@ -6,11 +6,14 @@ abuser, a forgiven abuser, and a genuine user asking a genuinely hard
 question.
 
 Two files, no fixtures, no mocks of runbound: `attack.py` talks to `app.py`
-over the wire and asserts what an operator would see.
+over the wire and asserts what an operator would see. A third file in this
+directory, `bench.py`, is a separate thing entirely — what the guard costs per
+call, [measured](#benchpy--what-the-guard-costs-per-call).
 
 ```
 examples/stress/app.py       the chatbot: one /chat endpoint, one session block
 examples/stress/attack.py    the driver: four acts, PASS/FAIL, exit 1 on any FAIL
+examples/stress/bench.py     unrelated to the attack: what the guard costs per call
 ```
 
 The integration under test is two lines of `app.py`:
@@ -187,3 +190,58 @@ one process per user-facing service, or set the per-worker budget to
   mallory's dumps blow through it in six turns. Pick your own.
 - **The driver asserts against FAKE-mode behavior.** Under REAL mode treat
   the PASS/FAIL lines as a rough guide and read the numbers instead.
+
+---
+
+## `bench.py` — what the guard costs per call
+
+The attack harness above answers "does it stop the right user". This one
+answers the other question an operator asks: "what does it cost me on every
+call that is fine". No network, no API key, no FastAPI — a real
+`openai.OpenAI` client whose HTTP layer is an `httpx.MockTransport`, which is
+the same arrangement `tests/test_real_sdk.py` uses.
+
+```bash
+pip install openai httpx
+python -m examples.stress.bench             # 1000 / 1000 / 32x32, ~3 seconds
+python -m examples.stress.bench --calls 5000 --threads 64 --per-thread 64
+```
+
+Three legs, each timing a guarded run against an unguarded twin of exactly
+the same work:
+
+1. **LLM calls** — 1000 guarded `chat.completions.create`, interleaved
+   one-for-one with 1000 unguarded ones so that anything drifting over the run
+   drifts through both samples.
+2. **Tool calls** — 1000 calls of a `@runbound.tool`-decorated function
+   against the same function undecorated, arguments varying per call so the
+   loop detector has nothing to find.
+3. **Contention** — 32 threads inside **one keyed session**: one
+   `SessionState`, one lock, every thread accounting through it. This is the
+   contended path, and it is in the benchmark on purpose.
+
+What it prints is a **quantile shift**: `p50(guarded) − p50(unguarded)` and
+the same at p99. Not a paired per-call subtraction — the same call cannot
+happen twice — so read it as "the guard moves a typical call by this much",
+not "this call cost exactly this much extra".
+
+Two things about the output are worth knowing before you see them:
+
+- **The p99 shift on a single thread can come out negative**, and does. The
+  guard's cost is tens of microseconds; the transport's own tail is hundreds.
+  Below zero means the guard is inside the noise there, not that it made
+  anything faster. `bench.py` says so on the line under the number.
+- **The last line is an accounting check**, not decoration: it prints how many
+  steps runbound actually recorded. A benchmark of a wrapper that quietly
+  failed to wrap would report a wonderfully low overhead, and this is what
+  catches that.
+
+`bench.py` runs `runbound.init(auto_wrap=False)` and calls `wrap()` by hand.
+That is the one deviation from how you would configure it in production, and
+it is forced: `auto_wrap` patches the provider *classes*, so with it on there
+is no unguarded client left in the process to compare against. `wrap()` does
+to that one client exactly what `auto_wrap` does to all of them.
+
+The number measured on the author's machine, and the machine, are in the
+SDK README under "Guarantees and limitations". Yours will differ — that is
+why the script ships instead of only the number.

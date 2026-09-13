@@ -2101,6 +2101,17 @@ Filled in only where a test proves it — a checkmark with no footnote is a
 claim we are not making. An empty cell means "probably works by shape, not
 proven here," not "does not work."
 
+**Which versions.** CI runs the real-SDK suite on Python 3.10 and 3.13
+against `openai` 1.66.5 and latest, and `anthropic` 1.0.0 and latest — eight
+combinations, with "latest" deliberately unpinned so a release nobody has
+seen yet breaks the job rather than a customer's agent. `openai` 1.66.5 is a
+genuine floor: 1.65.0 has no Responses API at all, and 1.66.0–1.66.3 return
+`input_tokens_details` as a plain dict. **The `anthropic` 1.0.0 pin is not
+a floor** — it is an artefact of testing both providers in one interpreter.
+Modern `openai` pulls in `httpx2`, and pre-1.0 `anthropic` type-rejects an
+`httpx2` client; on its own, `anthropic` 0.125.0 passes the same suite. If
+you run only Anthropic, older versions are fine.
+
 | Provider | sync | async | stream | tool calls | usage | live-tested |
 |---|---|---|---|---|---|---|
 | OpenAI | yes [^sdk] | yes [^sdk] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
@@ -2487,6 +2498,28 @@ exception that escapes on purpose is `GuardrailTripped`, and only if you chose
 
 The one deliberate exception to fail-open is `init()` itself: bad configuration
 raises immediately, at startup, where you will see it.
+
+**Overhead is measured, and the method is the promise — not the number.** On
+one machine (Apple M2, 8 cores, macOS 26.0, CPython 3.13.14, `openai` 3.13.0
+over an `httpx.MockTransport` with no network in the way), over six runs of
+`examples/stress/bench.py`, a guarded LLM call cost **34–35 µs more than the
+same call unguarded, at p50**; a `@runbound.tool` call **6.7–6.9 µs**; and
+with **32 threads sharing one keyed session** — one `SessionState`, one
+lock — **36–42 µs at p50 and 110–190 µs at p99**. Sharing the lock barely
+moves the median and shows up in the tail, which is where a queue for a lock
+should show up. On a single thread the p99 shift came out *below zero*: at the tail the
+guard is smaller than the transport's own jitter, so there is nothing there to
+measure.
+
+Your CPU, your Python and your provider SDK are not those, so treat that as an
+order of magnitude and not a service level. What we will stand behind is how it
+was arrived at: `examples/stress/bench.py` times 1000 guarded calls
+interleaved with 1000 unguarded ones, then 1000 decorated tool calls against
+the same function undecorated, then 32 threads on one keyed session, and prints
+the shift between the two samples at each quantile. It needs no network and no
+API key — run it on your own hardware and quote your own number. For scale: a
+real provider call is tens to hundreds of milliseconds, so 34 µs is under a
+tenth of a percent of the call it is guarding.
 
 Honest limitations today:
 
