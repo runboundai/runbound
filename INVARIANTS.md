@@ -7,7 +7,8 @@ scenario that assert it today. Where nothing asserts a promise yet, this
 file says so — "not yet asserted" is a finding, not something to quietly
 drop.
 
-Plain-English reading of the two bounded terms used throughout:
+Plain-English reading of the terms used throughout — two bounds and the
+word this file never lets stand in for either:
 
 - **single-process exact** — the check is a plain comparison against a
   number this process actually holds; there is no slack in it.
@@ -15,6 +16,12 @@ Plain-English reading of the two bounded terms used throughout:
   window (network round trips, a cache) where two workers can briefly
   disagree; the bound states the worst that window can cost you, in
   concrete units (a number of turns, a number of seconds), not "eventually."
+- **estimated** — a number runbound computed because nobody handed it a real
+  one: `chars/4` tokens when an endpoint reports no usage, dollars from a
+  static list-price table, the opt-in admission estimate. An estimate is
+  never called exact anywhere, and the full list of which numbers are which
+  is the README's [What is exact and what is
+  estimated](README.md#what-is-exact-and-what-is-estimated) table.
 
 ---
 
@@ -33,7 +40,15 @@ So a worker can be stale for up to the cache window plus batch latency.
 **The bound.** Single process: exact — `total_cost_usd > budget_usd` is a
 plain comparison against the running total this process holds, strictly
 greater than, so exactly at the limit does not trip; the detector trips on
-the very event that crosses the limit.
+the very event that crosses the limit. That means the wall **stops the
+session after the call that crossed it**, not before: a wrapped model call's
+usage exists only once it has returned, so the call that went over is paid
+for and the next one is the one prevented. `budget_admission=True` (opt-in,
+off by default) is the other column — a pre-call *estimate* that refuses a
+call before it goes out, never latches, and is bounded by the estimate's
+accuracy rather than by arithmetic. The dollars on both sides of that line
+come from a static price table, so the comparison is exact and the total it
+compares is an estimate of the bill (see the README table named above).
 Fleet: for one key, worst-case overspend over `budget_usd` is the sum over
 workers of (the spend of that worker's one in-flight block + the spend of
 any blocks it admitted during its staleness window).
@@ -145,6 +160,16 @@ matching limits.
   `::test_allow_is_the_intersection_when_both_sides_set_one`,
   `::test_the_lower_limit_carries_the_origin_of_the_side_that_set_it`,
   `::test_a_dry_run_remote_never_changes_the_local_mode`.
+- The *merge never permits what either side refuses* half, as a property
+  rather than as examples: `tests/test_policy_merge_properties.py` generates
+  500 random policy pairs from a fixed seed (stdlib `random`; no new test
+  dependency) and, over 11,900 (tool, attempt-count) probes, asserts that a
+  call either input refuses is refused by the merged policy too — plus that
+  the merged `on_violation` is never looser than either side's. It generates
+  remote policies wire-shaped (no callables, since none can travel) and asks
+  a remote approval rule of the local callback, which is what the merged
+  policy does with it. It says nothing about propagation over time; that is
+  the half below.
 - The *version-never-goes-backward* half is verified by the control plane's
   own test suite: versions climb per scope and never repeat, and a
   transition that walks backward is refused.
