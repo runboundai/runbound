@@ -1865,6 +1865,8 @@ def _record_llm_call(
     tokens_out: int,
     duration_s: float = 0.0,
     tokens_reasoning: int = 0,
+    tokens_cached_in: int = 0,
+    tokens_cache_write_in: int = 0,
     *,
     partial: bool = False,
     tokens_estimated: bool = False,
@@ -1874,7 +1876,13 @@ def _record_llm_call(
     ``duration_s`` is how long the call took and ``tokens_reasoning`` the
     thinking tokens it burned on top of ``tokens_out``; both default to the
     "not measured" zero, so a caller that only knows the token counts still
-    reports a complete event.
+    reports a complete event. ``tokens_cached_in`` (T139) is the subset of
+    ``tokens_in`` that was a provider cache *read* hit, and
+    ``tokens_cache_write_in`` (T139) the subset that wrote a new cache entry
+    (Anthropic only; always 0 from OpenAI). Both default to 0, so every
+    caller written before either existed (``record_call()``, an older
+    wrapper, a 5- or 6-argument ``@runbound.llm``) still reports a complete
+    event, just with nothing to price at a cache rate.
 
     Priced by :func:`~runbound.pricing.price_call` under
     ``config.on_unpriced_model``: an unpriced model is $0.00 (warned once per
@@ -1882,7 +1890,11 @@ def _record_llm_call(
     under "estimate", and — since the door (:meth:`_Hooks.before`) is what
     actually refuses under "refuse" — whichever of those two a call that
     reaches here anyway falls back to. The event's ``priced`` field is
-    ``"estimated"`` exactly when the fallback pair was used.
+    ``"estimated"`` exactly when the fallback pair was used. ``tokens_cached_in``
+    prices at the model's published cached-*read* rate when there is one, and
+    ``tokens_cache_write_in`` at its published cache-*write* rate — a premium,
+    never the read discount — each falling back to the plain input rate when
+    unpublished (never a guessed rate either way).
 
     ``partial`` and ``tokens_estimated`` are for a call that never actually
     finished — an abandoned stream reported by :meth:`_Hooks.abandoned` — and
@@ -1902,6 +1914,8 @@ def _record_llm_call(
         tokens_in,
         tokens_out,
         engine.config.custom_prices,
+        tokens_cached_in=tokens_cached_in,
+        tokens_cache_write_in=tokens_cache_write_in,
         on_unpriced_model=engine.config.on_unpriced_model,
         unpriced_price_per_1m_usd=engine.config.unpriced_price_per_1m_usd,
     )
@@ -1913,6 +1927,7 @@ def _record_llm_call(
         cost_usd=cost,
         duration_s=duration_s,
         tokens_reasoning=tokens_reasoning,
+        tokens_cached_in=tokens_cached_in,
         priced=("estimated" if estimated else None),
         partial=partial,
         tokens_estimated=tokens_estimated,

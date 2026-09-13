@@ -348,8 +348,14 @@ class GuardrailConfig:
     # than fall back to local detection alone). Read by RemoteState/plane.py.
     stale_halt: str = "release"  # "release" | "hold"
     on_plane_loss: str = "guard_locally"  # "guard_locally" | "refuse"
-    custom_prices: dict[str, tuple[float, float]] = field(default_factory=dict)
-    # model -> (usd_per_1M_input_tokens, usd_per_1M_output_tokens)
+    custom_prices: dict[
+        str, tuple[float, float] | tuple[float, float, float] | tuple[float, float, float, float]
+    ] = field(default_factory=dict)
+    # model -> (usd_per_1M_input_tokens, usd_per_1M_output_tokens), optionally
+    # extended with a cached-input *read* rate (T139) and, further, a
+    # cache-*write* rate: (..., usd_per_1M_cached_input, usd_per_1M_cache_write).
+    # Always wins over the built-in runbound.pricing.PRICES table, which is
+    # exactly how a price that changed since PRICES_AS_OF gets fixed.
     # What a model with neither a static nor a custom price does to a call.
     # "zero" (default) counts it as free, same as always, and warns once per
     # model per process so a dollar budget's blind spot is not a silent one.

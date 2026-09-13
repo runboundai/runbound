@@ -197,8 +197,8 @@ green because it has nothing to read. `runbound.coverage()` and
 
 | Data point | Where it comes from | Blind if you skip… |
 |---|---|---|
-| Tokens in / out / reasoning | `response.usage` on a guarded call — `prompt_tokens`/`input_tokens`, `completion_tokens`/`output_tokens`, and `*_tokens_details.reasoning_tokens`. `estimate_tokens=True` only fills in when the server sends no usage at all. | a guarded client. Use `record_call()` or `@runbound.llm` for calls runbound did not make. |
-| Estimated cost | Those tokens × the static price table, or your `custom_prices`. | anything that makes tokens blind — and it reads `$0.00` for a model with no price. |
+| Tokens in / out / reasoning / cached | `response.usage` on a guarded call — `prompt_tokens`/`input_tokens`, `completion_tokens`/`output_tokens`, `*_tokens_details.reasoning_tokens`, and the cached-input count (OpenAI's `prompt_tokens_details.cached_tokens`/`input_tokens_details.cached_tokens`, Anthropic's `cache_read_input_tokens` — see [Cached input tokens](#cached-input-tokens)). `estimate_tokens=True` only fills in when the server sends no usage at all, and never guesses a cache hit. | a guarded client. Use `record_call()` or `@runbound.llm` for calls runbound did not make — neither reports cached tokens, so those calls price every input token at the full rate. |
+| Estimated cost | Those tokens × the static price table, or your `custom_prices` — cached tokens at the table's cached rate where it has one, else the full input rate. | anything that makes tokens blind — and it reads `$0.00` for a model with no price. |
 | Call duration | A stopwatch around the guarded call. | a guarded client. Also blind under the LangChain handler, which reports no timing. |
 | Provider errors → `error_storm`, circuits | The exception raised inside the guarded call. | any call runbound did not make. `record_call(..., error=exc)` reports one by hand. |
 | Tool calls the **model asked for** → loops | Parsed off the response: `tool_calls`, Responses `function_call` items, Anthropic `tool_use` blocks. | a guarded client. |
@@ -1082,7 +1082,10 @@ the model's input rate; plus the request's own output-token cap —
 `max_tokens`, `max_completion_tokens` or `max_output_tokens`, whichever it
 set — or, if it set none, `admission_output_tokens` (default **1024**),
 priced at the output rate. Same static price table (or `custom_prices`) the
-post-call check uses. The call is refused, with `GuardrailTripped` (detector
+post-call check uses — always at the model's plain input rate, even for a
+model with a published cached-input rate: admission runs before the request
+goes out, with no way to know yet how many of its tokens will be a cache
+hit, so it never assumes the discount. The call is refused, with `GuardrailTripped` (detector
 `budget`, `details["rule"] == "admission"`), when that estimate would push
 `total_cost_usd + spend_offset_usd` past `budget_usd`.
 
@@ -1785,7 +1788,7 @@ keyword`.
 | `on_halt` | `str` | `"raise"` | What an org-wide halt does here: `"raise"` refuses every guarded `session()` block at the door (detector `halt`); `"warn"` keeps serving and logs it once a minute. What happens to an *enforced* halt once the plane link itself goes stale is `stale_halt`, below. |
 | `stale_halt` | `"release"` \| `"hold"` | `"release"` | **release**: a halt stops being enforced 60 s after the last contact with the plane. **hold**: it stays enforced until a heartbeat says otherwise. See [the reactions table](#what-happens-when-something-trips--every-choice-in-one-place). |
 | `on_plane_loss` | `"guard_locally"` \| `"refuse"` | `"guard_locally"` | What a `session()` entry does when the plane could not answer at all (timeout, error, a degraded link with no fresh cached decision): **guard_locally** falls back to local detection; **refuse** refuses the entry itself (detector `plane`), latching nothing. An invalid token always guards locally, in both modes — it is a configuration error, not plane loss. |
-| `custom_prices` | `dict[str, tuple[float, float]]` | `{}` | `model -> (usd per 1M input tokens, usd per 1M output tokens)`. Overrides the built-in table, and is consulted before it. |
+| `custom_prices` | `dict[str, tuple[float, float] \| tuple[float, float, float] \| tuple[float, float, float, float]]` | `{}` | `model -> (usd per 1M input tokens, usd per 1M output tokens)`, or add a third `usd per 1M cached-input (read) tokens` and, further, a fourth `usd per 1M cache-write tokens` to state your own cache rates. Overrides the built-in table, and is consulted before it — the fix for a price `runbound.pricing.as_of()` says is stale. |
 | `on_unpriced_model` | `"zero"` \| `"estimate"` \| `"refuse"` | `"zero"` | What a model with **no** price — not in the built-in table, not in `custom_prices` — costs a dollar budget. **zero**: counted as $0.00, same as always, with a once-per-model warning **on by default** so the blind spot is not a silent one. **estimate**: priced from `unpriced_price_per_1m_usd` instead; the event/anomaly carries `priced="estimated"`. **refuse**: the call is refused at the door (detector `budget`, `details={"reason": "unpriced_model", "model": ...}`), before it goes out, whatever `on_anomaly` says — a choice you stated on purpose, so it is not negotiable per anomaly. A model only discovered unpriced after the fact (`record_call()`, or a model name known only from the response) is priced like `"estimate"` when a fallback pair was given, else like `"zero"`, and logged once either way. |
 | `unpriced_price_per_1m_usd` | `tuple[float, float] \| None` | `None` | The `(usd per 1M input, usd per 1M output)` fallback pair `on_unpriced_model="estimate"` prices from. Required when that mode is set; a 2-tuple of non-negative numbers otherwise it is rejected at `init()`. |
 | `budget_admission` | `bool` | `False` | **Opt-in.** Refuse a call *before it goes out* whose estimated cost would cross `budget_usd` — see [Admission](#admission-an-opt-in-pre-call-budget-check-budget_admission). Off leaves every call path exactly as it was before this setting existed. |
@@ -1911,6 +1914,47 @@ with `custom_prices` when you need exact numbers):
 
 Dated releases resolve by longest prefix, so `gpt-4o-mini-2024-07-18` prices as
 `gpt-4o-mini`, not `gpt-4o`.
+
+**These prices were last checked on `runbound.pricing.as_of()`** —
+`"2026-09-12"` today. A price that changed after that date is wrong until
+this table is updated; `custom_prices` always wins over it, which is how you
+fix a stale number without waiting for a release.
+
+#### Cached input tokens
+
+A repeated system prompt, a long few-shot block, a chatbot's growing
+history — anything the provider recognizes as a repeat of something it just
+saw — is billed as a **cache hit**, at a discount runbound now reads and
+prices correctly: OpenAI at 50% of its input rate, Anthropic at 10%. Before
+this, runbound had no reader for either field and priced every cached token
+at the full input rate — a chatbot with a large cached system prompt was
+over-charged on nearly every call, which trips `budget_usd` **before the
+money is actually gone**, the one direction a dollar wall must never err in.
+
+Nothing to configure: every guarded OpenAI and Anthropic call already reads
+its own cache fields (`prompt_tokens_details.cached_tokens` /
+`input_tokens_details.cached_tokens` for OpenAI, `cache_read_input_tokens`
+for Anthropic) and prices the discount automatically, streamed or not. A
+model with no published cached rate (`gpt-4-turbo`, `gpt-3.5-turbo` — both
+predate prompt caching) prices every token at the full input rate instead of
+guessing a discount that was never published.
+
+Anthropic also bills a **cache write** (`cache_creation_input_tokens`) at a
+125% premium — writing a new cache entry costs more than an ordinary input
+token, not less. runbound counts a cache write inside `tokens_in` (so
+`total_tokens` stays honest) *and* prices it at its own published rate
+(50%/10% for a read, 125% for a write are the two directions a cache-pricing
+mistake can run, and only one of them is safe: under-counting a read trips
+`budget_usd` early, before the money is gone — annoying, but safe;
+under-counting a write does the opposite, letting a customer spend past a
+budget they set, which this product cannot afford). A model with no
+published cache-write rate falls back to the plain input rate, same as an
+unpublished read rate — never a guessed number, in either direction.
+
+`budget_admission`'s pre-call estimate (below) has no way to know before a
+call how many of its tokens will be cache hits, so it estimates every call
+at the plain input rate — conservative, the same direction an unpriced
+model's estimate already leans.
 
 **Local and free models: use token limits, not dollars** (or price your own
 hardware — see [Self-hosted models](#self-hosted-models)). By default an

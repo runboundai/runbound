@@ -88,8 +88,11 @@ DEFAULT_HOST = "default"
 CHARS_PER_TOKEN = 4
 
 #: What a wrapper hands the API layer:
-#: (model, tokens_in, tokens_out, duration_s, tokens_reasoning).
-Report = Callable[[str | None, int, int, float, int], None]
+#: (model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in,
+#: tokens_cache_write_in). ``tokens_cached_in`` and ``tokens_cache_write_in``
+#: (T139) are both slices of ``tokens_in``, never additional — see
+#: :func:`_call_report`'s fallback for a ``report`` that predates either.
+Report = Callable[[str | None, int, int, float, int, int, int], None]
 
 
 class _NoHooks:
@@ -596,23 +599,48 @@ def _call_report(
     tokens_out: int,
     duration_s: float,
     tokens_reasoning: int,
+    tokens_cached_in: int = 0,
+    tokens_cache_write_in: int = 0,
 ) -> None:
-    """Hand one call's usage to ``report``, tolerating a 3-argument ``report``.
+    """Hand one call's usage to ``report``, tolerating an older ``report``.
 
-    Callbacks written before timing existed take ``(model, tokens_in,
-    tokens_out)`` and reject the two extra arguments while binding them, before
-    any of their own code runs. Only that binding failure — a ``TypeError``
-    raised with no frame of ``report`` on its traceback — falls back to the old
-    three-argument call; a ``TypeError`` from inside ``report`` propagates, so a
-    broken callback is never invoked twice.
+    Four shapes are tried, newest first, each falling back to the last only
+    on a binding failure: the current 7-argument form (T139 added
+    ``tokens_cache_write_in`` for Anthropic's cache-write premium), the
+    6-argument form that predates it (T139's own ``tokens_cached_in``), the
+    5-argument form before that, and the 3-argument ``(model, tokens_in,
+    tokens_out)`` form from before timing existed at all. Only a
+    ``TypeError`` raised with no frame of ``report`` on its traceback counts
+    as "did not accept this shape" — one from inside ``report`` propagates,
+    so a broken callback is never invoked twice.
     """
     try:
-        report(model, tokens_in, tokens_out, duration_s, tokens_reasoning)
+        report(
+            model,
+            tokens_in,
+            tokens_out,
+            duration_s,
+            tokens_reasoning,
+            tokens_cached_in,
+            tokens_cache_write_in,
+        )
     except TypeError as exc:
         if exc.__traceback__ is not None and exc.__traceback__.tb_next is not None:
             raise
-        _LOG.debug("runbound: report() predates call timing; reporting tokens only")
-        report(model, tokens_in, tokens_out)  # type: ignore[call-arg]
+        _LOG.debug("runbound: report() predates cache-write reporting; trying 6 args")
+        try:
+            report(model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in)
+        except TypeError as exc2:
+            if exc2.__traceback__ is not None and exc2.__traceback__.tb_next is not None:
+                raise
+            _LOG.debug("runbound: report() predates cached-token reporting; trying 5 args")
+            try:
+                report(model, tokens_in, tokens_out, duration_s, tokens_reasoning)
+            except TypeError as exc3:
+                if exc3.__traceback__ is not None and exc3.__traceback__.tb_next is not None:
+                    raise
+                _LOG.debug("runbound: report() predates call timing; reporting tokens only")
+                report(model, tokens_in, tokens_out)  # type: ignore[call-arg]
 
 
 def log_guarded_surfaces(surfaces: Sequence[tuple[str, bool]]) -> None:
@@ -672,6 +700,8 @@ class _StreamUsage:
     tokens_in: int = 0
     tokens_out: int = 0
     tokens_reasoning: int = 0
+    tokens_cached_in: int = 0  # T139: subset of tokens_in served from cache (read)
+    tokens_cache_write_in: int = 0  # T139: subset of tokens_in that wrote a cache entry
 
 
 #: Reads one chunk into the running :class:`_StreamUsage`. Provider-supplied.
@@ -702,7 +732,15 @@ class _UsageParseTracker:
     be believed, not re-estimated as if it had said nothing at all.
     """
 
-    _TOKEN_FIELDS = frozenset({"tokens_in", "tokens_out", "tokens_reasoning"})
+    _TOKEN_FIELDS = frozenset(
+        {
+            "tokens_in",
+            "tokens_out",
+            "tokens_reasoning",
+            "tokens_cached_in",
+            "tokens_cache_write_in",
+        }
+    )
 
     def __init__(self, usage: "_StreamUsage") -> None:
         self.__dict__["_usage"] = usage
@@ -1129,6 +1167,8 @@ class _StreamGuard:
                 self._usage.tokens_out,
                 _elapsed(self._started_at),
                 self._usage.tokens_reasoning,
+                self._usage.tokens_cached_in,
+                self._usage.tokens_cache_write_in,
             )
             if not self._ledger.failed:
                 self._hooks.success(self._provider)

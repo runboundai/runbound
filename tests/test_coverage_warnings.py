@@ -608,7 +608,9 @@ def test_a_different_family_does_not_inherit_the_base_price(model, unwarned, cap
     ],
 )
 def test_a_dated_variant_still_prices_as_its_base_model(dated, base):
-    price_in, price_out = PRICES[base]
+    # T139: base models here now carry a third (cached_in) PRICES element;
+    # this test only needs the plain input/output pair.
+    price_in, price_out = PRICES[base][0], PRICES[base][1]
     expected = (1_000 / 1e6) * price_in + (2_000 / 1e6) * price_out
     assert estimate_cost(dated, 1_000, 2_000) == pytest.approx(expected)
 

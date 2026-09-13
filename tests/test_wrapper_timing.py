@@ -67,6 +67,18 @@ class ExplodingDetails:
         raise RuntimeError("this SDK object is angry")
 
 
+class ExplodingCachedDetails:
+    """A usage object whose *input*-side details field raises on access."""
+
+    def __init__(self, **fields):
+        for key, value in fields.items():
+            setattr(self, key, value)
+
+    @property
+    def prompt_tokens_details(self):
+        raise RuntimeError("this SDK object is angry")
+
+
 class FakeResponse:
     def __init__(self, model=None, usage=None):
         self.model = model
@@ -416,10 +428,226 @@ def test_anthropic_stream_reads_thinking_tokens_off_message_delta(clock):
     assert (usage.tokens_in, usage.tokens_out, usage.tokens_reasoning) == (10, 20, 7)
 
 
+# --- cached input tokens (T139) ----------------------------------------------
+
+
+def test_openai_cached_tokens_are_read_and_counted_inside_tokens_in(clock):
+    runbound.init()
+    usage = FakeUsage(
+        prompt_tokens=1200,
+        completion_tokens=50,
+        prompt_tokens_details=FakeUsage(cached_tokens=1000),
+    )
+    client = runbound.wrap(_openai_client(SlowCompletions(clock, usage=usage)))
+    spy = _recorder()
+
+    client.chat.completions.create(model="gpt-4o", messages=[])
+
+    event = spy.events[0]
+    assert (event.tokens_in, event.tokens_out, event.tokens_cached_in) == (1200, 50, 1000)
+
+
+def test_openai_responses_api_reads_its_own_cached_details_field(clock):
+    """The Responses API names the details object ``input_tokens_details``."""
+    usage = FakeUsage(
+        input_tokens=1200,
+        output_tokens=50,
+        input_tokens_details=FakeUsage(cached_tokens=1000),
+    )
+    response = FakeResponse(usage=usage)
+    assert openai_wrapper.read_cached(response) == 1000
+
+
+def test_openai_cached_tokens_arrive_on_the_final_stream_chunk(clock):
+    runbound.init()
+    usage = FakeUsage(
+        prompt_tokens=1200,
+        completion_tokens=50,
+        prompt_tokens_details=FakeUsage(cached_tokens=1000),
+    )
+    chunks = [FakeChunk(text="a"), FakeChunk(usage=usage)]
+    completions = StreamingCompletions(chunks, clock, elapsed=0.0, per_chunk=0.0)
+    client = runbound.wrap(_openai_client(completions))
+    spy = _recorder()
+
+    list(client.chat.completions.create(model="gpt-4o", messages=[], stream=True))
+
+    event = spy.events[0]
+    assert (event.tokens_in, event.tokens_cached_in) == (1200, 1000)
+
+
+def test_openai_without_cached_details_reports_zero(clock):
+    runbound.init()
+    usage = FakeUsage(prompt_tokens=10, completion_tokens=20)
+    client = runbound.wrap(_openai_client(SlowCompletions(clock, usage=usage)))
+    spy = _recorder()
+
+    client.chat.completions.create(model="gpt-4o", messages=[])
+
+    assert spy.events[0].tokens_cached_in == 0
+
+
+def test_malformed_cached_details_reads_as_zero_and_the_call_survives(clock):
+    runbound.init()
+    usage = ExplodingCachedDetails(prompt_tokens=10, completion_tokens=20)
+    client = runbound.wrap(_openai_client(SlowCompletions(clock, usage=usage)))
+    spy = _recorder()
+
+    response = client.chat.completions.create(model="gpt-4o", messages=[])
+
+    assert response.content == "hello"
+    event = spy.events[0]
+    assert (event.tokens_in, event.tokens_cached_in) == (10, 0)
+
+
+def test_anthropic_cache_read_and_write_tokens_fold_into_tokens_in(clock):
+    """Anthropic's ``input_tokens`` excludes both cache fields (T139): the
+    event's ``tokens_in`` must include them, but only the read count is
+    reported as ``tokens_cached_in`` — a write is not a discount."""
+    runbound.init()
+    usage = FakeUsage(
+        input_tokens=200,
+        output_tokens=80,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=300,
+    )
+    client = runbound.wrap(_anthropic_client(SlowMessages(clock, usage=usage)))
+    spy = _recorder()
+
+    client.messages.create(model="claude-sonnet-4-5", messages=[])
+
+    event = spy.events[0]
+    assert (event.tokens_in, event.tokens_out, event.tokens_cached_in) == (1500, 80, 1000)
+
+
+def test_anthropic_without_cache_fields_reports_zero_cached(clock):
+    runbound.init()
+    usage = FakeUsage(input_tokens=1000, output_tokens=500)
+    client = runbound.wrap(_anthropic_client(SlowMessages(clock, usage=usage)))
+    spy = _recorder()
+
+    client.messages.create(model="claude-sonnet-4-5", messages=[])
+
+    event = spy.events[0]
+    assert (event.tokens_in, event.tokens_cached_in) == (1000, 0)
+
+
+def test_anthropic_stream_reads_cache_tokens_off_message_start(clock):
+    usage = wrappers._StreamUsage(model="claude-sonnet-4-5")
+    start = FakeUsage(
+        type="message_start",
+        message=FakeUsage(
+            model="claude-sonnet-4-5",
+            usage=FakeUsage(
+                input_tokens=200, cache_read_input_tokens=1000, cache_creation_input_tokens=300
+            ),
+        ),
+    )
+
+    anthropic_wrapper._chunk_usage(start, usage)
+
+    assert (usage.tokens_in, usage.tokens_cached_in, usage.tokens_cache_write_in) == (
+        1500,
+        1000,
+        300,
+    )
+
+
+def test_anthropic_read_cache_write_reports_only_the_write_count(clock):
+    """A cache write is never mistaken for the read discount, either way."""
+    usage = FakeUsage(
+        input_tokens=200,
+        output_tokens=80,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=300,
+    )
+    response = FakeResponse(usage=usage)
+    assert anthropic_wrapper.read_cache_write(response) == 300
+    assert anthropic_wrapper.read_cached(response) == 1000  # unaffected by the write count
+
+
+def test_anthropic_without_a_cache_write_reports_zero(clock):
+    usage = FakeUsage(input_tokens=1000, output_tokens=500, cache_read_input_tokens=1000)
+    response = FakeResponse(usage=usage)
+    assert anthropic_wrapper.read_cache_write(response) == 0
+
+
 # --- the report contract ----------------------------------------------------
 
 
+def test_a_seven_argument_report_receives_cache_write_tokens(clock):
+    seen = []
+    usage = FakeUsage(
+        input_tokens=200,
+        output_tokens=80,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=300,
+    )
+    client = _anthropic_client(SlowMessages(clock, elapsed=2.0, usage=usage))
+
+    def report(
+        model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in,
+        tokens_cache_write_in,
+    ):
+        seen.append(
+            (model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in,
+             tokens_cache_write_in)
+        )
+
+    anthropic_wrapper.install(client, report)
+    client.messages.create(model="claude-sonnet-4-5", messages=[])
+
+    assert seen == [("claude-sonnet-4-5", 1500, 80, 2.0, 0, 1000, 300)]
+
+
+def test_a_six_argument_report_still_works_when_cache_write_tokens_are_present(clock):
+    """The 7-to-6 fallback drops tokens_cache_write_in, not the call itself.
+
+    tokens_in still folds the write count in (that happens before the report
+    callback is ever chosen) — only the extra argument is dropped.
+    """
+    seen = []
+    usage = FakeUsage(
+        input_tokens=200,
+        output_tokens=80,
+        cache_read_input_tokens=1000,
+        cache_creation_input_tokens=300,
+    )
+    client = _anthropic_client(SlowMessages(clock, elapsed=1.0, usage=usage))
+
+    def report(model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in):
+        seen.append((model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in))
+
+    anthropic_wrapper.install(client, report)
+    client.messages.create(model="claude-sonnet-4-5", messages=[])
+
+    assert seen == [("claude-sonnet-4-5", 1500, 80, 1.0, 0, 1000)]
+
+
+def test_a_six_argument_report_receives_cached_tokens(clock):
+    """OpenAI never sends a cache-write count, so its report exercises the
+    7-to-6 fallback on every call — this pins that the 6 values it does
+    receive are still correct."""
+    seen = []
+    usage = FakeUsage(
+        prompt_tokens=1200,
+        completion_tokens=50,
+        completion_tokens_details=FakeUsage(reasoning_tokens=3),
+        prompt_tokens_details=FakeUsage(cached_tokens=1000),
+    )
+    client = _openai_client(SlowCompletions(clock, elapsed=7.0, usage=usage))
+
+    def report(model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in):
+        seen.append((model, tokens_in, tokens_out, duration_s, tokens_reasoning, tokens_cached_in))
+
+    openai_wrapper.install(client, report)
+    client.chat.completions.create(model="gpt-4o", messages=[])
+
+    assert seen == [("gpt-4o", 1200, 50, 7.0, 3, 1000)]
+
+
 def test_a_five_argument_report_receives_duration_and_reasoning(clock):
+    """T139 (6-argument reports) falls back to 5 for a report predating it."""
     seen = []
     usage = FakeUsage(
         prompt_tokens=1,
@@ -435,6 +663,25 @@ def test_a_five_argument_report_receives_duration_and_reasoning(clock):
     client.chat.completions.create(model="gpt-4o", messages=[])
 
     assert seen == [("gpt-4o", 1, 2, 7.0, 3)]
+
+
+def test_a_five_argument_report_still_works_when_cached_tokens_are_present(clock):
+    """The 6-to-5 fallback drops tokens_cached_in, not the call itself."""
+    seen = []
+    usage = FakeUsage(
+        prompt_tokens=1200,
+        completion_tokens=50,
+        prompt_tokens_details=FakeUsage(cached_tokens=1000),
+    )
+    client = _openai_client(SlowCompletions(clock, elapsed=1.0, usage=usage))
+
+    def report(model, tokens_in, tokens_out, duration_s, tokens_reasoning):
+        seen.append((model, tokens_in, tokens_out, duration_s, tokens_reasoning))
+
+    openai_wrapper.install(client, report)
+    client.chat.completions.create(model="gpt-4o", messages=[])
+
+    assert seen == [("gpt-4o", 1200, 50, 1.0, 0)]
 
 
 def test_a_legacy_three_argument_report_still_works(clock):

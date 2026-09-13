@@ -57,6 +57,15 @@ _OUTPUT_FIELDS = ("output_tokens", "completion_tokens")
 #: No Anthropic usage object counts thinking tokens separately today; these are
 #: the names a future one would plausibly use, read for free if it ever does.
 _REASONING_FIELDS = ("thinking_tokens", "reasoning_tokens")
+#: Cache tokens (T139): unlike OpenAI, Anthropic's `input_tokens` EXCLUDES
+#: both of these — they are separate, additive counts — so `read_usage` folds
+#: both into `tokens_in` for a correct total. Each is also reported onward on
+#: its own: the read count (`read_cached`) at its discounted rate, the write
+#: count (`read_cache_write`) at its own 125%-of-input premium — a cache
+#: write costs *more* than a plain input token, never priced as if it were a
+#: discounted read. See `pricing.py`'s `PRICES[model][3]`.
+_CACHE_READ_FIELDS = ("cache_read_input_tokens",)
+_CACHE_WRITE_FIELDS = ("cache_creation_input_tokens",)
 
 
 def _field(obj: Any, name: str) -> Any:
@@ -194,7 +203,14 @@ def _report_call(
         if tokens_in or tokens_out:
             warn_estimated_tokens(model)
     _call_report(
-        report, model, tokens_in, tokens_out, _elapsed(started_at), read_reasoning(response)
+        report,
+        model,
+        tokens_in,
+        tokens_out,
+        _elapsed(started_at),
+        read_reasoning(response),
+        read_cached(response),
+        read_cache_write(response),
     )
 
 
@@ -253,12 +269,24 @@ def read_usage(response: Any, request_kwargs: dict) -> tuple[str | None, int, in
 
     Missing or malformed usage reads as zero tokens; the model falls back to
     the request's ``model`` argument.
+
+    ``tokens_in`` folds in both ``cache_read_input_tokens`` and
+    ``cache_creation_input_tokens`` (T139): Anthropic's ``input_tokens`` is
+    only the *uncached* portion of the prompt, so a cache hit (or a cache
+    write) would otherwise vanish from the total instead of just moving
+    to a different rate. See :func:`read_cached` for the discounted subset
+    and :func:`read_cache_write` for the premium one.
     """
     usage = _field(response, "usage")
     model = _field(response, "model") or request_kwargs.get("model")
+    tokens_in = (
+        _tokens(usage, _INPUT_FIELDS)
+        + _tokens(usage, _CACHE_READ_FIELDS)
+        + _tokens(usage, _CACHE_WRITE_FIELDS)
+    )
     return (
         model if isinstance(model, str) and model else None,
-        _tokens(usage, _INPUT_FIELDS),
+        tokens_in,
         _tokens(usage, _OUTPUT_FIELDS),
     )
 
@@ -271,6 +299,32 @@ def read_reasoning(response: Any) -> int:
     ``_REASONING_FIELDS``.
     """
     return _tokens(_field(response, "usage"), _REASONING_FIELDS)
+
+
+def read_cached(response: Any) -> int:
+    """Cache-*read* tokens billed at Anthropic's discounted rate (T139), or 0.
+
+    Only ``cache_read_input_tokens`` — the subset of ``tokens_in`` (see
+    :func:`read_usage`) that was a cache hit and gets the discount.
+    ``cache_creation_input_tokens`` (a cache *write*) is folded into
+    ``tokens_in`` too, but never reported here: see :func:`read_cache_write`
+    — it costs more than a plain input token, not less, so it must never be
+    priced as if it were cached.
+    """
+    return _tokens(_field(response, "usage"), _CACHE_READ_FIELDS)
+
+
+def read_cache_write(response: Any) -> int:
+    """Cache-*write* tokens billed at Anthropic's 125% premium (T139), or 0.
+
+    Only ``cache_creation_input_tokens`` — the subset of ``tokens_in`` (see
+    :func:`read_usage`) that wrote a new cache entry. Priced (in
+    :mod:`runbound.pricing`) at ``PRICES[model][3]`` when the model publishes
+    one, else at the plain input rate — never at the cache-*read* discount
+    :func:`read_cached` reports, which would price a write as if it cost
+    less than an ordinary token when it actually costs more.
+    """
+    return _tokens(_field(response, "usage"), _CACHE_WRITE_FIELDS)
 
 
 def read_tool_requests(response: Any) -> list[tuple[str, str]]:
@@ -332,7 +386,14 @@ def _chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
         if isinstance(model, str) and model:
             usage.model = model
         message_usage = _field(message, "usage")
-        usage.tokens_in = max(usage.tokens_in, _tokens(message_usage, _INPUT_FIELDS))
+        cache_read = _tokens(message_usage, _CACHE_READ_FIELDS)
+        cache_write = _tokens(message_usage, _CACHE_WRITE_FIELDS)
+        usage.tokens_in = max(
+            usage.tokens_in,
+            _tokens(message_usage, _INPUT_FIELDS) + cache_read + cache_write,
+        )
+        usage.tokens_cached_in = max(usage.tokens_cached_in, cache_read)
+        usage.tokens_cache_write_in = max(usage.tokens_cache_write_in, cache_write)
         usage.tokens_out = max(usage.tokens_out, _tokens(message_usage, _OUTPUT_FIELDS))
         usage.tokens_reasoning = max(
             usage.tokens_reasoning, _tokens(message_usage, _REASONING_FIELDS)

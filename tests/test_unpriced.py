@@ -82,7 +82,9 @@ def _warnings(caplog):
 
 
 def test_price_for_finds_a_static_price():
-    assert price_for("gpt-4o") == (2.50, 10.00)
+    # T139: gpt-4o now publishes a cached-input rate, so price_for returns
+    # the 3-tuple (in, out, cached_in) rather than a bare (in, out) pair.
+    assert price_for("gpt-4o") == (2.50, 10.00, 1.25)
 
 
 def test_price_for_prefers_custom_prices():
@@ -97,6 +99,31 @@ def test_price_for_is_none_for_unpriced_or_invalid(model):
 def test_price_call_prices_a_known_model_exactly_and_is_not_estimated(unwarned):
     cost, estimated = price_call("gpt-4o", 1_000_000, 1_000_000)
     assert cost == pytest.approx(12.50)
+    assert estimated is False
+
+
+def test_price_call_prices_cached_tokens_at_the_cached_rate(unwarned):
+    # 1000 of 1200 input tokens cached (T139's own hand-computed example).
+    cost, estimated = price_call("gpt-4o", 1200, 50, tokens_cached_in=1000)
+    price_in, price_out, price_cached_in = price_for("gpt-4o")
+    expected = (200 / 1e6) * price_in + (1000 / 1e6) * price_cached_in + (50 / 1e6) * price_out
+    assert cost == pytest.approx(expected)
+    assert estimated is False
+
+
+def test_price_call_prices_a_cache_write_at_its_own_premium(unwarned):
+    # 200 fresh + 1000 cache-read + 300 cache-write, 80 out.
+    cost, estimated = price_call(
+        "claude-sonnet-4-5", 1500, 80, tokens_cached_in=1000, tokens_cache_write_in=300
+    )
+    price_in, price_out, price_cached_in, price_write_in = price_for("claude-sonnet-4-5")
+    expected = (
+        (200 / 1e6) * price_in
+        + (1000 / 1e6) * price_cached_in
+        + (300 / 1e6) * price_write_in
+        + (80 / 1e6) * price_out
+    )
+    assert cost == pytest.approx(expected)
     assert estimated is False
 
 

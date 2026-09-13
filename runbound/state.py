@@ -196,6 +196,7 @@ class SessionState:
         self.turns = 0
         self.tool_calls: dict[str, int] = {}
         self.total_tokens = 0
+        self.tokens_cached_in = 0  # T139: running total of Event.tokens_cached_in
         self.total_cost_usd = 0.0
         self.estimated_cost_usd = 0.0
         self.spend_offset_usd = 0.0
@@ -307,11 +308,18 @@ class SessionState:
         The token window is bounded here rather than by whoever reads it: a
         session running for hours with velocity detection switched off — the
         default — would otherwise keep every token-bearing event it ever saw.
+
+        ``tokens_cached_in`` (T139) is a running total of ``event.tokens_cached_in``
+        — a subset of what already landed in ``total_tokens`` via
+        ``tokens_in``, never additional, kept apart so a caller (or a future
+        exit delta) can see how much of a session's spend was the discounted
+        kind without re-deriving it from raw events.
         """
         tokens = event.tokens_in + event.tokens_out
         with self.lock:
             self.event_count = max(self.event_count, event.step)
             self.total_tokens += tokens
+            self.tokens_cached_in += event.tokens_cached_in
             self.total_cost_usd += event.cost_usd
             if event.priced == "estimated":
                 self.estimated_cost_usd += event.cost_usd

@@ -19,6 +19,13 @@ class Event:
     tokens are carried separately in ``tokens_reasoning`` so a caller can see
     the billed split, and are added to it only where total output work matters.
 
+    ``tokens_cached_in`` (T139) is the subset of ``tokens_in`` that was served
+    from the provider's prompt cache — never additional tokens on top of
+    ``tokens_in``, always a slice of it, so ``total_tokens`` keeps meaning
+    "every token this call touched" without double-counting. It is priced at
+    a discount where the model publishes a cached-input rate
+    (:mod:`runbound.pricing`) and at the plain input rate otherwise.
+
     The five kinds:
 
     ``llm_call``
@@ -68,6 +75,7 @@ class Event:
     ts: float  # time.monotonic() at creation
     step: int  # 1-based step number within session
     tokens_in: int = 0
+    tokens_cached_in: int = 0  # subset of tokens_in served from the provider's cache
     tokens_out: int = 0
     cost_usd: float = 0.0
     model: str | None = None

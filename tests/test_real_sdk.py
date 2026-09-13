@@ -72,6 +72,18 @@ def chat_completion(tool_calls: list | None = None) -> dict:
     }
 
 
+def chat_completion_with_cache() -> dict:
+    """A ``chat.completion`` body: 1200 in (1000 cached), 50 out (T139)."""
+    body = chat_completion()
+    body["usage"] = {
+        "prompt_tokens": 1200,
+        "completion_tokens": 50,
+        "total_tokens": 1250,
+        "prompt_tokens_details": {"cached_tokens": 1000},
+    }
+    return body
+
+
 def weather_tool_call() -> list:
     """The same tool call, with the same arguments, every time it is asked."""
     return [
@@ -112,6 +124,18 @@ def responses_body() -> dict:
     }
 
 
+def responses_body_with_cache() -> dict:
+    """A Responses-API body: 1200 in (1000 cached), 60 out (T139)."""
+    body = responses_body()
+    body["usage"] = {
+        "input_tokens": 1200,
+        "output_tokens": 60,
+        "total_tokens": 1260,
+        "input_tokens_details": {"cached_tokens": 1000},
+    }
+    return body
+
+
 def sse(chunks: list) -> str:
     """The wire format a streamed chat completion actually arrives in."""
     body = "".join(f"data: {json.dumps(chunk)}\n\n" for chunk in chunks)
@@ -139,6 +163,32 @@ def stream_chunks() -> list:
     ]
 
 
+def stream_chunks_with_cache() -> list:
+    """Same shape as :func:`stream_chunks`, with the final usage chunk cached (T139)."""
+    def chunk(**fields):
+        return {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1_756_000_000,
+            "model": CHAT_MODEL,
+            **fields,
+        }
+
+    return [
+        chunk(choices=[{"index": 0, "delta": {"role": "assistant", "content": "he"}}]),
+        chunk(choices=[{"index": 0, "delta": {"content": "llo"}, "finish_reason": "stop"}]),
+        chunk(
+            choices=[],
+            usage={
+                "prompt_tokens": 1200,
+                "completion_tokens": 50,
+                "total_tokens": 1250,
+                "prompt_tokens_details": {"cached_tokens": 1000},
+            },
+        ),
+    ]
+
+
 def messages_body(tool_use: bool = False) -> dict:
     """An Anthropic ``message``: 300 in, 80 out, optionally one ``tool_use``."""
     content: list = [{"type": "text", "text": "hello"}]
@@ -161,6 +211,23 @@ def messages_body(tool_use: bool = False) -> dict:
         "stop_sequence": None,
         "usage": {"input_tokens": 300, "output_tokens": 80},
     }
+
+
+def messages_body_with_cache(cache_creation: int = 0) -> dict:
+    """An Anthropic ``message``: 200 fresh + 1000 cache-read input, 80 out (T139).
+
+    ``cache_creation`` optionally adds ``cache_creation_input_tokens`` — a
+    cache *write*, additive to ``input_tokens`` just like a read, but billed
+    at a premium rather than a discount.
+    """
+    body = messages_body()
+    body["usage"] = {
+        "input_tokens": 200,
+        "cache_read_input_tokens": 1000,
+        "cache_creation_input_tokens": cache_creation,
+        "output_tokens": 80,
+    }
+    return body
 
 
 RATE_LIMITED = {
@@ -271,6 +338,13 @@ def totals() -> tuple[int, float, int]:
         return state.total_tokens, state.total_cost_usd, state.step_count
 
 
+def cached_tokens() -> int:
+    """The session's running total of cached input tokens (T139)."""
+    state = runbound.current_session()
+    with state.lock:
+        return state.tokens_cached_in
+
+
 # --- openai: chat completions -----------------------------------------------
 
 
@@ -286,6 +360,25 @@ def test_a_real_chat_completion_is_counted_and_priced():
     assert (tokens, events) == (150, 1)
     assert cost == pytest.approx(100 / 1e6 * 2.50 + 50 / 1e6 * 10.00)
     assert transport.calls == 1
+
+
+def test_a_cached_heavy_chat_completion_is_priced_at_the_discount():
+    """T139: 1000 of 1200 input tokens are a cache hit, read off the real
+    OpenAI SDK's ``usage.prompt_tokens_details.cached_tokens``."""
+    transport = json_transport(chat_completion_with_cache())
+    client = runbound.wrap(openai_client(transport))
+    runbound.init()
+
+    response = chat(client)
+
+    assert response.usage.prompt_tokens_details.cached_tokens == 1000
+    tokens, cost, events = totals()
+    assert (tokens, events) == (1250, 1)
+    assert cached_tokens() == 1000
+    price_in, price_out, price_cached_in = 2.50, 10.00, 1.25
+    expected = (200 / 1e6) * price_in + (1000 / 1e6) * price_cached_in + (50 / 1e6) * price_out
+    assert cost == pytest.approx(expected)
+    assert cost < (1200 / 1e6) * price_in + (50 / 1e6) * price_out  # cheaper than no discount
 
 
 def test_wrapping_a_real_client_returns_the_same_client():
@@ -326,6 +419,23 @@ def test_the_responses_api_is_guarded_too():
     assert cost == pytest.approx(200 / 1e6 * 2.50 + 60 / 1e6 * 10.00)
 
 
+def test_the_responses_api_reads_its_own_cached_tokens_field():
+    """T139: the Responses API names the details object differently
+    (``input_tokens_details``, not ``prompt_tokens_details``)."""
+    transport = json_transport(responses_body_with_cache())
+    client = runbound.wrap(openai_client(transport))
+    runbound.init()
+
+    response = client.responses.create(model=CHAT_MODEL, input="hi")
+
+    assert response.usage.input_tokens_details.cached_tokens == 1000
+    tokens, cost, events = totals()
+    assert (tokens, events) == (1260, 1)
+    assert cached_tokens() == 1000
+    expected = (200 / 1e6) * 2.50 + (1000 / 1e6) * 1.25 + (60 / 1e6) * 10.00
+    assert cost == pytest.approx(expected)
+
+
 def test_a_streamed_call_records_its_usage_once_when_the_stream_ends():
     transport = Transport(
         httpx.Response(
@@ -342,6 +452,26 @@ def test_a_streamed_call_records_its_usage_once_when_the_stream_ends():
 
     assert len(chunks) == 3
     assert totals() == (18, pytest.approx(11 / 1e6 * 2.50 + 7 / 1e6 * 10.00), 1)
+
+
+def test_a_streamed_calls_cached_tokens_are_read_off_the_final_usage_chunk():
+    transport = Transport(
+        httpx.Response(
+            200,
+            content=sse(stream_chunks_with_cache()),
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    client = runbound.wrap(openai_client(transport))
+    runbound.init()
+
+    list(chat(client, stream=True, stream_options={"include_usage": True}))
+
+    tokens, cost, events = totals()
+    assert (tokens, events) == (1250, 1)
+    assert cached_tokens() == 1000
+    expected = (200 / 1e6) * 2.50 + (1000 / 1e6) * 1.25 + (50 / 1e6) * 10.00
+    assert cost == pytest.approx(expected)
 
 
 # --- openai: failures and the circuit ---------------------------------------
@@ -488,6 +618,70 @@ def test_a_real_messages_call_is_counted_and_priced():
     tokens, cost, events = totals()
     assert (tokens, events) == (380, 1)
     assert cost == pytest.approx(300 / 1e6 * 3.00 + 80 / 1e6 * 15.00)
+
+
+def test_a_cached_heavy_messages_call_is_priced_at_the_discount():
+    """T139: Anthropic's ``input_tokens`` EXCLUDES cache fields, so the real
+    SDK's ``usage.cache_read_input_tokens`` must be folded into the total,
+    not just read for the discount."""
+    transport = anthropic_transport(messages_body_with_cache())
+    client = runbound.wrap(anthropic_client(transport))
+    runbound.init()
+
+    response = message(client)
+
+    assert response.usage.cache_read_input_tokens == 1000
+    tokens, cost, events = totals()
+    assert (tokens, events) == (1280, 1)  # 200 fresh + 1000 cached + 80 out
+    assert cached_tokens() == 1000
+    price_in, price_out, price_cached_in = 3.00, 15.00, 0.30
+    expected = (200 / 1e6) * price_in + (1000 / 1e6) * price_cached_in + (80 / 1e6) * price_out
+    assert cost == pytest.approx(expected)
+    assert cost < (1200 / 1e6) * price_in + (80 / 1e6) * price_out  # cheaper than no discount
+
+
+def test_a_cache_write_is_priced_at_its_125_percent_premium():
+    """T139 (revised): a cache write must never be under-priced.
+
+    Under-counting a cache *read* discount trips a customer's wall early —
+    annoying, but safe (they are stopped before their money is gone).
+    Under-counting a *write* premium is the opposite: the wall fires late,
+    after they have spent past a budget they set, which is the one direction
+    this product cannot afford. So the write gets its own rate
+    (`PRICES[model][3]`, 125% of the input rate) rather than being folded in
+    at the plain input rate.
+
+    This is also the coordinator's requested example: one call mixing a
+    cache read and a cache write, so both rates are visible together —
+    200 fresh + 1000 cache-read + 300 cache-write input tokens, 80 output.
+    """
+    transport = anthropic_transport(messages_body_with_cache(cache_creation=300))
+    client = runbound.wrap(anthropic_client(transport))
+    runbound.init()
+
+    response = message(client)
+
+    assert response.usage.cache_creation_input_tokens == 300
+    tokens, cost, events = totals()
+    assert (tokens, events) == (1580, 1)  # 200 fresh + 1000 read + 300 write + 80 out
+    assert cached_tokens() == 1000  # the write never counts as a "cached" (discounted) token
+    price_in, price_out, price_cached_in, price_write_in = 3.00, 15.00, 0.30, 3.75
+    expected = (
+        (200 / 1e6) * price_in  # fresh
+        + (300 / 1e6) * price_write_in  # cache write: its own 125% premium
+        + (1000 / 1e6) * price_cached_in  # cache read: the discount
+        + (80 / 1e6) * price_out
+    )
+    assert cost == pytest.approx(expected)
+    # The premium must actually bite: cheaper treatments would be a regression.
+    priced_as_plain_input = (
+        (500 / 1e6) * price_in + (1000 / 1e6) * price_cached_in + (80 / 1e6) * price_out
+    )
+    priced_as_a_cached_read = (
+        (200 / 1e6) * price_in + (1300 / 1e6) * price_cached_in + (80 / 1e6) * price_out
+    )
+    assert cost > priced_as_plain_input
+    assert cost > priced_as_a_cached_read
 
 
 def test_repeated_tool_use_blocks_trip_the_loop():

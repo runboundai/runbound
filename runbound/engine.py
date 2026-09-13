@@ -529,6 +529,13 @@ class Engine:
 
         Never latches (see :meth:`admit`): raises straight from here, never
         through :meth:`_react`/:meth:`_latch`.
+
+        ``price_for`` may return a 3-tuple when the model publishes a cached-
+        input rate (T139); admission has no way to know before the call how
+        many of its input tokens will be cache hits, so it estimates at the
+        plain input rate (``price[:2]``) — the same conservative "assume no
+        discount" the post-call price falls back to for an unpriced model,
+        here applied to an unknown-yet split instead of an unknown rate.
         """
         config = self.config
         if config.budget_usd is None:
@@ -538,7 +545,7 @@ class Engine:
             if price is None:
                 self._warn_admission_unpriced(model)
                 return
-            price_in, price_out = price
+            price_in, price_out = price[0], price[1]
             with session.lock:
                 remaining = config.budget_usd - (
                     session.total_cost_usd + session.spend_offset_usd

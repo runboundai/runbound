@@ -14,9 +14,9 @@ were patched is logged at INFO.
 This module knows three things and nothing else: where the methods live, how
 to read usage off a response, and how to read the tool calls the model asked
 for in one. It does not price calls, decide policy or touch session state; it
-hands ``(model, tokens_in, tokens_out, duration_s, tokens_reasoning)`` to the
-``report`` callback the API layer passes in, and each requested tool call to
-``hooks.tool_request``.
+hands ``(model, tokens_in, tokens_out, duration_s, tokens_reasoning,
+tokens_cached_in)`` to the ``report`` callback the API layer passes in, and
+each requested tool call to ``hooks.tool_request``.
 
 Sync and async clients are both handled, streamed or not: :func:`install`
 looks at each method it is replacing and at the request, and picks one of the
@@ -76,6 +76,11 @@ _OUTPUT_FIELDS = ("completion_tokens", "output_tokens")
 #: ``usage.output_tokens_details`` (responses).
 _DETAILS_FIELDS = ("completion_tokens_details", "output_tokens_details")
 _REASONING_FIELDS = ("reasoning_tokens",)
+#: Cached-input tokens (T139) hang off the *input*-side details object:
+#: ``usage.prompt_tokens_details`` (chat) or ``usage.input_tokens_details``
+#: (responses) — the mirror of `_DETAILS_FIELDS`, which is the output side.
+_CACHED_DETAILS_FIELDS = ("prompt_tokens_details", "input_tokens_details")
+_CACHED_FIELDS = ("cached_tokens",)
 
 
 def _field(obj: Any, name: str) -> Any:
@@ -291,7 +296,13 @@ def _report_call(
         if tokens_in or tokens_out:
             warn_estimated_tokens(model)
     _call_report(
-        report, model, tokens_in, tokens_out, _elapsed(started_at), read_reasoning(response)
+        report,
+        model,
+        tokens_in,
+        tokens_out,
+        _elapsed(started_at),
+        read_reasoning(response),
+        read_cached(response),
     )
 
 
@@ -336,6 +347,28 @@ def _reasoning(usage: Any) -> int:
     return 0
 
 
+def read_cached(response: Any) -> int:
+    """Cached prompt tokens billed at OpenAI's discounted rate (T139), or 0.
+
+    A slice of ``tokens_in``, not additional tokens — ``prompt_tokens`` /
+    ``input_tokens`` already include a cache hit, this just says how many of
+    them were one. ``usage.prompt_tokens_details.cached_tokens`` for chat
+    completions, ``usage.input_tokens_details.cached_tokens`` for the
+    Responses API. Absent or unreadable reads as 0 ("no cached tokens seen"),
+    the same fail-open reading every other usage field here gets.
+    """
+    return _cached(_field(response, "usage"))
+
+
+def _cached(usage: Any) -> int:
+    """Cached-input tokens on one usage object, 0 when absent or unreadable."""
+    for name in _CACHED_DETAILS_FIELDS:
+        tokens = _tokens(_field(usage, name), _CACHED_FIELDS)
+        if tokens:
+            return tokens
+    return 0
+
+
 def _responses_chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
     """Read one Responses-API stream event into the running usage.
 
@@ -356,6 +389,7 @@ def _responses_chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
         usage.tokens_in = max(usage.tokens_in, _tokens(candidate, _INPUT_FIELDS))
         usage.tokens_out = max(usage.tokens_out, _tokens(candidate, _OUTPUT_FIELDS))
         usage.tokens_reasoning = max(usage.tokens_reasoning, _reasoning(candidate))
+        usage.tokens_cached_in = max(usage.tokens_cached_in, _cached(candidate))
 
 
 def _chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
@@ -375,6 +409,7 @@ def _chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
     usage.tokens_in = max(usage.tokens_in, _tokens(chunk_usage, _INPUT_FIELDS))
     usage.tokens_out = max(usage.tokens_out, _tokens(chunk_usage, _OUTPUT_FIELDS))
     usage.tokens_reasoning = max(usage.tokens_reasoning, _reasoning(chunk_usage))
+    usage.tokens_cached_in = max(usage.tokens_cached_in, _cached(chunk_usage))
 
 
 def _tokens(usage: Any, names: tuple[str, ...]) -> int:
