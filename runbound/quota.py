@@ -129,15 +129,16 @@ def read_quota(headers: Any, now: float | None = None) -> Quota:
         reset_s: float | None = None
         source: str | None = None
         for vendor, buckets, remaining_name, reset_name in _VENDORS:
-            counts = _least(
-                _parse_count(table.get(remaining_name.format(bucket))) for bucket in buckets
-            )
-            resets = _least(
-                parse_reset(table.get(reset_name.format(bucket)), moment) for bucket in buckets
-            )
-            if counts is None and resets is None:
+            pairs = [
+                (
+                    _parse_count(table.get(remaining_name.format(bucket))),
+                    parse_reset(table.get(reset_name.format(bucket)), moment),
+                )
+                for bucket in buckets
+            ]
+            if all(count is None and reset is None for count, reset in pairs):
                 continue
-            remaining, reset_s, source = counts, resets, vendor
+            remaining, reset_s, source = *_binding(pairs), vendor
             break
         return Quota(
             remaining=remaining,
@@ -348,6 +349,30 @@ def _epoch(moment: datetime) -> float:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.timestamp()
+
+
+def _binding(pairs: list[tuple[int | None, float | None]]) -> tuple[int | None, float | None]:
+    """The tightest bucket's count, and the reset *of that bucket*.
+
+    Each bucket's count and reset belong together. Taking the smallest count
+    from one bucket and the earliest reset from another pairs numbers that
+    describe different things: OpenAI's real headers on 2026-09-14 said
+    requests 9999 left, resetting in 8.64s, and tokens 199990 left, resetting
+    in 3ms — so a spent requests bucket would have opened a circuit for 3ms
+    instead of the 8.64s the provider actually asked for. Found by T174, the
+    first time T144's reader saw a real OpenAI response.
+
+    When several buckets share the smallest count, the *latest* of their
+    resets wins: a call needs every spent bucket refilled, not just one. With
+    no readable count at all the earliest reset is kept for information only
+    — a ``remaining`` of None never opens a circuit.
+    """
+    counts = [count for count, _ in pairs if count is not None]
+    if not counts:
+        return None, _least(reset for _, reset in pairs)
+    remaining = min(counts)
+    resets = [reset for count, reset in pairs if count == remaining and reset is not None]
+    return remaining, (max(resets) if resets else None)
 
 
 def _least(values) -> Any:

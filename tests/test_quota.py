@@ -170,7 +170,11 @@ def test_openais_four_headers_are_read_as_openai():
 
     assert quota.source == "openai"
     assert quota.remaining == 9998  # the smaller of 9998 requests and 1999000 tokens
-    assert quota.reset_s == pytest.approx(0.02)  # the earlier of 6m0s and 20ms
+    # The requests bucket is the binding one, so its own reset (6m0s), not the
+    # tokens bucket's 20ms. This line used to assert 0.02 — the earlier reset
+    # of *any* bucket — which pinned a count and a reset from different
+    # buckets together; T174 found it against real OpenAI headers.
+    assert quota.reset_s == pytest.approx(360.0)
 
 
 def test_a_plain_number_of_seconds_is_a_reset_too():
@@ -414,3 +418,51 @@ def test_headers_of_accepts_an_httpx_style_mapping():
     mapping = HeaderMapping([("retry-after", "7")])
 
     assert headers_of(Raw(mapping)) is mapping
+
+
+# --- a bucket's count and its reset belong together (found by T174) ---------
+
+
+def test_the_reset_is_the_tightest_buckets_own_not_the_earliest_of_any():
+    # The shape of OpenAI's real headers on 2026-09-14, requests bucket spent.
+    headers = {
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-reset-requests": "8.64s",
+        "x-ratelimit-remaining-tokens": "199990",
+        "x-ratelimit-reset-tokens": "3ms",
+    }
+    quota = read_quota(headers, now=1_000_000.0)
+    assert quota.remaining == 0
+    assert quota.reset_s == pytest.approx(8.64)  # not 0.003, the tokens bucket's
+
+
+def test_the_same_pairing_holds_when_nothing_is_spent():
+    headers = {
+        "x-ratelimit-remaining-requests": "9999",
+        "x-ratelimit-reset-requests": "8.64s",
+        "x-ratelimit-remaining-tokens": "199990",
+        "x-ratelimit-reset-tokens": "3ms",
+    }
+    quota = read_quota(headers, now=1_000_000.0)
+    assert (quota.remaining, quota.reset_s) == (9999, pytest.approx(8.64))
+
+
+def test_two_spent_buckets_wait_for_the_later_reset():
+    headers = {
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-reset-requests": "2s",
+        "x-ratelimit-remaining-tokens": "0",
+        "x-ratelimit-reset-tokens": "1m0s",
+    }
+    quota = read_quota(headers, now=1_000_000.0)
+    assert (quota.remaining, quota.reset_s) == (0, pytest.approx(60.0))
+
+
+def test_a_spent_bucket_with_no_readable_reset_falls_back_rather_than_borrowing_one():
+    headers = {
+        "x-ratelimit-remaining-requests": "0",
+        "x-ratelimit-remaining-tokens": "500",
+        "x-ratelimit-reset-tokens": "3ms",
+    }
+    quota = read_quota(headers, now=1_000_000.0)
+    assert quota.remaining == 0 and quota.reset_s is None

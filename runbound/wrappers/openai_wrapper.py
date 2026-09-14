@@ -427,6 +427,22 @@ def _tokens(usage: Any, names: tuple[str, ...]) -> int:
     return 0
 
 
+def read_tool_requests(response: Any) -> list[tuple[str, str]]:
+    """Tool calls any OpenAI-shaped response asked for, in the order it asked.
+
+    The fifth of the five functions every wrapper module exposes
+    (``CONTRIBUTING.md``, "Adding a provider"); ``anthropic_wrapper`` has had
+    it from the start, and this module had only its two private per-surface
+    readers until T174 found the gap. A chat completion keeps tool calls in
+    ``choices``, a Responses-API response in ``output``, and a response is
+    only ever one of the two — so both readers run and each finds nothing on
+    the other's shape. No guessing which surface a response came from, and an
+    OpenAI-compatible endpoint that returns a dict reads exactly the same.
+    Unreadable reads as none, never an error.
+    """
+    return _chat_tool_requests(response) + _responses_tool_requests(response)
+
+
 def _chat_tool_requests(response: Any) -> list[tuple[str, str]]:
     """Tool calls a chat completion asked for, in the order it asked.
 

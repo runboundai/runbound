@@ -2168,7 +2168,7 @@ you run only Anthropic, older versions are fine.
 
 | Provider | sync | async | stream | tool calls | usage | live-tested |
 |---|---|---|---|---|---|---|
-| OpenAI | yes [^sdk] | yes [^sdk] | yes [^stream] | yes [^sdk] | yes [^sdk] | |
+| OpenAI | yes [^sdk] | yes [^sdk] | yes [^stream] | yes [^sdk] | yes [^sdk] | yes [^live] |
 | Anthropic | yes [^sdk] | yes [^conformance] | yes [^stream] | yes [^sdk] | yes [^sdk] | yes [^live] |
 | Azure OpenAI | | | | | | |
 | Ollama / vLLM / OpenAI-compatible | yes [^ollama] | | yes [^ollama] | yes [^ollama] | yes [^ollama] | yes [^ollama] |
@@ -2188,7 +2188,7 @@ you run only Anthropic, older versions are fine.
     real SDK; not part of this repository), alongside the fake-async-client
     tests in `tests/test_async_wrappers.py`. Recorded fixtures prove the
     wrapper reads a real recorded response correctly; they are not a live
-    end-to-end run, which is why the live-tested cell is still empty.
+    end-to-end run — the live-tested column cites [^live] for that, not this.
 [^stream]: Sync for both providers, async for OpenAI — including
     abandoned-stream accounting: `tests/test_streaming.py`,
     `tests/test_streams_abandoned.py`. Async Anthropic streaming is covered
@@ -2205,10 +2205,17 @@ you run only Anthropic, older versions are fine.
     an invalid model name that does *not* count against the provider's
     circuit, extended thinking read and priced, a cache hit priced at the
     cached rate, `record_call` parity, and a latch healing on its TTL. The
-    run cost $0.031. Like the recorded fixtures above, it lives in a private
-    conformance kit in the development monorepo and is not part of this
-    repository. Anthropic only: there is no OpenAI leg yet, which is why that
-    row's cell is still empty.
+    run cost $0.031. And against the real hosted OpenAI API on `gpt-4o-mini`
+    (`o4-mini` for reasoning), 2026-09-14: the same nineteen plus a
+    twentieth — a stream sent without `stream_options={"include_usage":
+    True}` records zero tokens and warns exactly once — every one a PASS,
+    with reasoning tokens read as a subset of the output and priced once, and
+    a cache hit read as a slice of the prompt and priced at the cached rate.
+    That run cost $0.013 and called `chat.completions.create` only: the
+    Responses API is proven by recorded responses replayed through the
+    wrapper, not live. Like the recorded fixtures above, both runs live in a
+    private conformance kit in the development monorepo and are not part of
+    this repository.
 [^ollama]: Live, over the network, against a real running Ollama server —
     sync only, includes a streaming scenario (`max_inflight_calls` while a
     stream is in flight), a decorated and an undecorated tool loop, and real
