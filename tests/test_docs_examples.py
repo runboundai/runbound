@@ -60,6 +60,7 @@ REQUIRED_IDS = (
     "langchain-handler",
     "fleet-init",
     "plane-unreachable",
+    "self-hosted-init",
 )
 
 _START_PREFIX = "# docs: "
@@ -182,6 +183,7 @@ def _refuse(*_a, **_kw):
 socket.socket.connect = _refuse
 socket.socket.connect_ex = _refuse
 socket.create_connection = _refuse
+socket.getaddrinfo = _refuse
 """
 
 
