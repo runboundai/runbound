@@ -21,6 +21,14 @@ import pytest
 
 DOCS_DIR = Path(__file__).resolve().parent.parent / "examples" / "docs"
 
+if not DOCS_DIR.is_dir():  # pragma: no cover - only reachable from a tree without examples/
+    pytest.skip(
+        "examples/docs/ is not present next to tests/ (a source tree without the "
+        "examples, or an sdist built before MANIFEST.in shipped them); the docs "
+        "examples cannot be run here",
+        allow_module_level=True,
+    )
+
 #: The complete set of docs ids this wave ships. A file added or removed
 #: under examples/docs/ without a matching change here fails loudly, on
 #: purpose — this table is the contract the generator script and the docs
