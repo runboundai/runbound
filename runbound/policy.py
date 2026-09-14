@@ -52,8 +52,10 @@ class ToolCall:
     """One attempted tool call, as the policy sees it.
 
     Handed to the customer's own predicates so they can decide on the real
-    arguments. It is never stored, hashed, logged, or put in an anomaly:
-    ``args`` and ``kwargs`` live for the duration of the predicate call only.
+    arguments. It is never stored, logged, or put in an anomaly: ``args`` and
+    ``kwargs`` live for the duration of the predicate call only. (The loop
+    detector separately keeps a salted digest of a tool call's arguments —
+    ``api._args_hash`` — never the arguments themselves.)
     ``session_key`` and ``tags`` are the calling session's identity, so a rule
     can say "free-tier users may not do this".
     """

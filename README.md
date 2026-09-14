@@ -140,9 +140,9 @@ one of those emits a small immutable event into an in-process session — one pe
 default, or one per session key inside a `runbound.session()` block. A model
 call that *fails* emits one too (`llm_error`), and so does every tool call the
 model **asks** for in its answer (`tool_request`), before your code dispatches
-it. Seven detectors read that session after every event; the first anomaly
-triggers your configured reaction (log, raise, or your own callback) and fires
-any alerts you configured. A guarded tool call is also checked against your
+it. Eight detectors read that session after every event; the first anomaly
+triggers your configured reaction (log, raise, or your own callback) and is
+reported to the control plane, if one is configured. A guarded tool call is also checked against your
 [action policy](#action-policy--rules-for-what-your-agent-may-do), if you set
 one, before the function body runs. Failed calls are counted a second time
 against [the provider's own circuit](#retry-storms-and-the-provider-circuit-breaker),
@@ -162,7 +162,7 @@ which is process-wide rather than per session.
        |                one per process, or one per session key
        |                              |
        |                              v
-       |    loop | budget | velocity | steps | spike | error_storm | timeout
+       |    loop | budget | velocity | steps | events | spike | error_storm | timeout
        |                    (pure functions, no LLM)
        |                              |
        |                       Anomaly detected
@@ -202,7 +202,7 @@ green because it has nothing to read. `runbound.coverage()` and
 
 | Data point | Where it comes from | Blind if you skip… |
 |---|---|---|
-| Tokens in / out / reasoning / cached | `response.usage` on a guarded call — `prompt_tokens`/`input_tokens`, `completion_tokens`/`output_tokens`, `*_tokens_details.reasoning_tokens`, and the cached-input count (OpenAI's `prompt_tokens_details.cached_tokens`/`input_tokens_details.cached_tokens`, Anthropic's `cache_read_input_tokens` — see [Cached input tokens](#cached-input-tokens)). `estimate_tokens=True` only fills in when the server sends no usage at all, and never guesses a cache hit. | a guarded client. Use `record_call()` or `@runbound.llm` for calls runbound did not make — neither reports cached tokens, so those calls price every input token at the full rate. |
+| Tokens in / out / reasoning / cached | `response.usage` on a guarded call — `prompt_tokens`/`input_tokens`, `completion_tokens`/`output_tokens`, `*_tokens_details.reasoning_tokens` (Anthropic's `output_tokens_details.thinking_tokens`), and the cached-input count (OpenAI's `prompt_tokens_details.cached_tokens`/`input_tokens_details.cached_tokens`, Anthropic's `cache_read_input_tokens` — see [Cached input tokens](#cached-input-tokens)). `estimate_tokens=True` only fills in when the server sends no usage at all, and never guesses a cache hit. | a guarded client. Use `record_call()` or `@runbound.llm` for calls runbound did not make — neither reports cached tokens, so those calls price every input token at the full rate. |
 | Estimated cost | Those tokens × the static price table, or your `custom_prices` — cached tokens at the table's cached rate where it has one, else the full input rate. | anything that makes tokens blind — and it reads `$0.00` for a model with no price. |
 | Call duration | A stopwatch around the guarded call. | a guarded client. Also blind under the LangChain handler, which reports no timing. |
 | Provider errors → `error_storm`, circuits | The exception raised inside the guarded call. | any call runbound did not make. `record_call(..., error=exc)` reports one by hand. |
@@ -237,7 +237,7 @@ sensors saw*: an unguarded path is not counted at all, which is what
 | The admission check (`budget_admission=True`) | **Estimated, and opt-in** | Request characters / 4 at the model's input rate, plus the request's own output cap (or `admission_output_tokens`, 1024) at the output rate — always at the plain input rate, since nothing can know before the call how much of it will be a cache hit. It refuses a call before it goes out and never latches. Off by default: the wall that ships on is the post-call one. |
 | What a spike *means* | **Estimated** | The arithmetic is exact — this call is over `spike_factor` × this session's median and over the absolute floor — but the reading of it is not. A spike is a behaviour-change signal, not proof of abuse. |
 | Fleet totals inside the sync window | **Bounded, not exact** | `fleet_spend_offset_usd`, `fleet_tokens_offset` and fleet strikes are what the plane knew when this block opened, reused for `control_plane_cache_s` (5 s) while other workers' deltas arrive in roughly one-second batches. The worst that window can cost is stated as a bound in [INVARIANTS.md](INVARIANTS.md#budget), not hand-waved as "eventually". |
-| An abandoned stream's record | **Partial, and estimated unless a chunk carried usage** | Its `tokens_out` is the provider's own count when any chunk carried usage (even a truthful zero) and `ceil(chars / 4)` of what streamed otherwise — `tokens_estimated` says which. Its duration covers up to the last chunk observed, not up to collection, and it is recorded when Python collects the stream, which is not necessarily promptly and never at interpreter exit. |
+| An abandoned stream's record | **Partial, and estimated unless a chunk carried usage** | Its `tokens_out` is the provider's own count when any chunk carried usage (even a truthful zero) and `ceil(chars / 4)` of what streamed otherwise — `tokens_estimated` says which. Its `tokens_in` is the provider's count only when a chunk carried one: OpenAI sends usage on the final chunk alone, which an abandoned stream never reaches, so there it is `0` unless `estimate_tokens=True` estimated it from the request. Its duration covers up to the last chunk observed, not up to collection, and it is recorded when Python collects the stream, which is not necessarily promptly and never at interpreter exit. |
 
 ### What it never reads
 
@@ -455,8 +455,8 @@ with runbound.session(f"run:{run_id}", tags={"service": "refunds-agent"}):
     response = client.chat.completions.create(model="gpt-4o", messages=messages)
 ```
 
-- **The key is yours and opaque to us.** runbound stores it, prints it in
-  alerts, and never interprets it. Send a run id, a job id, a tenant id, a
+- **The key is yours and opaque to us.** runbound stores it, names it in
+  its own anomaly messages, and never interprets it. Send a run id, a job id, a tenant id, a
   customer id, a hash — identity stays the business's. `tags` is a small dict
   of labels that rides along with it.
 - **The same key is the same session.** Re-entering a key in a later request
@@ -580,8 +580,9 @@ runbound.init(token=os.environ["RUNBOUND_TOKEN"],
 
 That is the whole change for the hosted case: a non-empty `token`, with no
 `control_plane_url` anywhere — not passed, and not in `RUNBOUND_PLANE_URL`
-— is `plane_mode == "hosted"`, and you never have to name `control_plane_url`
-yourself. Set `control_plane_url` too, from either source, and that is
+— is `plane_mode == "hosted"` once the hosted plane is live, and you never have
+to name `control_plane_url` yourself; until then a bare token logs one WARNING
+and the process stays local (`plane_mode == "off"`). Set `control_plane_url` too, from either source, and that is
 `"self_hosted"` instead, not hosted — it always needs a token, and
 `token=""` is how you state a self-hosted plane with no auth, since an empty
 token never invents a url. `service` names the fleet this process belongs
@@ -626,7 +627,7 @@ take the fleet down with it.
 
 ```python
 # an unreachable plane, on purpose
-runbound.init(control_plane_url="http://127.0.0.1:9", token="ag_live_x",
+runbound.init(control_plane_url="http://127.0.0.1:9", token="rb_live_x",
                 budget_usd=0.01, on_anomaly="raise")
 
 with runbound.session("user:1"):
@@ -704,8 +705,8 @@ a single file.
 |---|---|---|
 | `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`), `active` (open `session()` blocks), `coverage` (the counts `runbound.coverage()` shows), `tools_hash`, and `tools` — the tool report — only when that hash changed |
 | `POST /v1/enter` | a `session()` block opens, on a cache miss | `key_hash`, `tags`, `service`, `worker_id`, `budget_usd`, `local_spend_usd`, `local_total_tokens` |
-| `POST /v1/trip` | a critical trip latches a session, and every block refused at the door because a key is latched | `key_hash`, the anomaly (`detector`, `severity`, `message`, scrubbed `details`, `reacted`), `latch_ttl_s`, `strikes`, `generation`, `refused_at_door` |
-| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`kind`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
+| `POST /v1/trip` | a critical trip latches a session, and every block refused at the door because a key is latched | `key_hash`, the anomaly (`ts_wall`, `key_hash`, `detector`, `severity`, `message`, scrubbed `details`, `reacted`, `anomaly_id`), `latch_ttl_s`, `strikes`, `generation`, `refused_at_door`, `anomaly_id`, and a `worker_id` the SDK leaves empty |
+| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`ts_wall`, `kind`, `key_hash`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`, `priced`, `partial`, `tokens_estimated`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
 | `GET /v1/policy?service=…` | the heartbeat announced a new policy version | nothing but the service name |
 | `POST /v1/clear` | `runbound.clear(key)` | `key_hash` |
 
@@ -1438,9 +1439,9 @@ runbound.init(refusals={
 A profile is a dict of `{key: {"status": int, "message": str}}`. Keys are
 `"default"` or a detector name exactly as the engine emits it — grepping
 `detector=` across the package turns up `budget`, `loop`, `spike`,
-`velocity`, `steps`, `error_storm`, `timeout`, `fanout` and `inflight`, plus
+`velocity`, `steps`, `events`, `error_storm`, `timeout`, `fanout` and `inflight`, plus
 `policy` (`PolicyViolation`), `circuit` (`CircuitOpen`), `halt` (an org-wide
-halt) and `fleet` (a latch relayed from another worker whose own detector
+halt), `plane` (an entry refused under `on_plane_loss="refuse"`) and `fleet` (a latch relayed from another worker whose own detector
 could not be read). **Per-call hard caps** (`max_call_seconds`,
 `max_tokens_out_per_call`, `max_cost_per_call_usd`) report through `spike` —
 there is no `cap` key. Either field of an entry may be omitted; a missing
@@ -1662,8 +1663,9 @@ Four honest notes:
   `False`. Only the exception's *type* reaches the anomaly (`error: 'KeyError'`),
   never its message, which usually quotes the argument it choked on.
 - **The real arguments go to your predicate and nowhere else.** `ToolCall.args`
-  and `.kwargs` live for the duration of your call and are never stored, hashed,
-  logged, or put in an anomaly or an alert. A violation names the tool, the rule
+  and `.kwargs` live for the duration of your call and are never stored,
+  logged, or put in an anomaly or an alert — only the salted digest the loop
+  detector compares is kept. A violation names the tool, the rule
   and the numbers behind it — never a refund amount or an email address.
 - **Approval callbacks are synchronous by contract.** runbound calls yours on
   the agent's own thread and waits, which is what makes the refusal arrive
@@ -2119,7 +2121,7 @@ The rest of the public API:
 | `runbound.unpatch()` | Undoes the class-level patching `auto_wrap` installed. `reset()` does not unpatch; this does. |
 | `runbound.clear(key)` | Explicit forgiveness: un-blocks the key — next entry gets a fresh session, fresh baselines, re-armed detectors. No-op for unknown keys. In [fleet mode](#fleet-mode--one-truth-across-all-your-workers-control-plane) the plane is told too, so the key is let back in on every worker. |
 | `runbound.plane_status()` | Where this worker's link to the control plane stands: `PlaneStatus(mode, last_contact_age_s, consecutive_failures, notice, entitlements, halt_stale_s)`. `mode` is `"local"` with no plane configured (and before `init()`), `"connected"` while it answers, `"limited"` when it answers but the org's plan has entry decisions made locally, and `"degraded"` when it does not answer at all — in which case every answer is being made locally. `halt_stale_s` is seconds since the last successful contact while a halt is currently enforced, else `None` — how close a `stale_halt="release"` halt is to lifting itself, or how long a `"hold"` halt has been running on a dead link. Reads cached state; never opens a socket. |
-| `runbound.fleet_status(key)` | What the plane last said about one key: `{"fleet_spend_usd", "fleet_tokens", "strikes", "generation", "halt", "latched", "policy_version", "age_s"}`. The fleet-wide counterpart of `session_status(key)`. Reads the entry-decision cache only, so it never opens a socket and answers `None` without a plane, or for a key this worker has not opened a block for in the last few seconds. |
+| `runbound.fleet_status(key)` | What the plane last said about one key: `{"fleet_spend_usd", "fleet_tokens", "strikes", "generation", "halt", "latched", "policy_version", "age_s", "door_refusals"}`. The fleet-wide counterpart of `session_status(key)`. Reads the entry-decision cache only, so it never opens a socket and answers `None` without a plane, or for a key this worker has not opened a block for in the last few seconds. |
 | `runbound.key_hash(key)` | The sha256 hex digest a session key travels as — the only form a key reaches the plane in, unless `send_session_keys=True`. Use it to join your own logs to anything the plane shows you. |
 | `runbound.verify_webhook_signature(secret, timestamp, body_bytes, signature)` | Receiver-side check for a delivery from the control plane's webhook adapter (the same signing string this module used to send, kept for exactly this): constant-time compare of `"sha256=" + HMAC_SHA256(secret, f"{timestamp}.{body}")`, and a ±5-minute replay window. Returns `False` rather than raising for anything malformed. Verify the **raw** body bytes. See [Alerting](#alerting). |
 
@@ -2267,7 +2269,12 @@ in, and still wrong.
 Nothing to configure: every guarded OpenAI and Anthropic call already reads
 its own cache fields (`prompt_tokens_details.cached_tokens` /
 `input_tokens_details.cached_tokens` for OpenAI, `cache_read_input_tokens`
-for Anthropic) and prices the discount automatically, streamed or not. A
+for Anthropic) and prices the discount automatically, streamed or not. Whether
+the provider caches at all is its decision, not runbound's: measured on
+`gpt-4o-mini` on 2026-09-14, chat completions served a repeated
+8,000-character system prompt from cache with no option set, while the
+Responses API reported `cached_tokens: 0` until the request set
+`prompt_cache_key`. A
 model with no published cached rate (`gpt-4-turbo`, `gpt-3.5-turbo` — both
 predate prompt caching) prices every token at the full input rate instead of
 guessing a discount that was never published.
@@ -2342,7 +2349,7 @@ client = runbound.wrap(openai.OpenAI(base_url="http://gpu-box:8000/v1", api_key=
 ```
 
 That exact setup is what `examples/live/ollama_verify.py` runs against a real
-local model on every release — thirteen scenarios, real tokens, real durations,
+local model, run by hand — thirteen scenarios, real tokens, real durations,
 `$0.00`.
 
 **The knobs that protect capacity.** Dollars are the wrong meter here; these
@@ -2410,8 +2417,8 @@ worst of its endpoints); `circuit_state("openai@gpu-box:8000")` answers for
 that box.
 
 **Honest limits.** The in-flight cap is **per process**, not per cluster —
-eight replicas with `max_inflight_calls=8` allow 64 concurrent calls, and a
-shared cap is what the control plane is for. A stream holds its slot until it
+eight replicas with `max_inflight_calls=8` allow 64 concurrent calls, and fleet
+mode does not share it (a fleet-wide cap is on the [roadmap](#roadmap)). A stream holds its slot until it
 ends, is closed, **or is garbage collected** — an abandoned stream frees its
 slot and is counted as one partial call the moment Python collects it (see
 [Async and streaming](#async-and-streaming)); it does not hold the slot until
@@ -2507,11 +2514,13 @@ collected, in the session that opened the stream, and reports:
 
 - **duration** — the time actually spent streaming (last chunk seen minus
   first), not the time since the call started;
-- **tokens** — usage from the provider if any chunk carried it, else
-  `ceil(chars / 4)` of the text that was actually streamed before it was
-  abandoned, marked `estimated=True` so it is never mistaken for a measured
+- **tokens** — output tokens from the provider's usage if any chunk carried
+  it, else `ceil(chars / 4)` of the text that was actually streamed before it
+  was abandoned, marked `estimated=True` so it is never mistaken for a measured
   number; zero if neither is available, and a truthful zero is trusted rather
-  than skipped;
+  than skipped. Input tokens come only from usage a chunk carried (or, under
+  `estimate_tokens=True`, from the request) — OpenAI sends usage on the final
+  chunk alone, so an abandoned OpenAI stream records `tokens_in=0`;
 - **the circuit and in-flight cap** — the slot is freed, but the call counts
   as neither a success nor a failure, so an abandoned stream can neither close
   a circuit nor open one.
@@ -2527,7 +2536,10 @@ used to go completely uncounted, not a second report on top of the first.
 Telemetry here is **content-minimizing, not content-free** — say plainly what
 it still reveals rather than call it "safe" and leave you to find out. What it
 reveals: tool names, model names, call timing, counts (tokens, steps, calls),
-provider error classes, and salted argument-equality hashes (below). What it
+estimated dollars, provider error classes, salted argument-equality hashes
+(below), session-key hashes, your `tags`, detector messages with the key
+redacted, and the [tool report](#what-we-send--hashes-and-counts-never-content)
+(parameter names and annotations, module, a docstring's first line). What it
 never reveals: prompts, replies, tool arguments themselves, or error text.
 
 - **Tool arguments are sha256-hashed before storage, salted per process.** The
@@ -2543,8 +2555,8 @@ never reveals: prompts, replies, tool arguments themselves, or error text.
   own constraint and approval callbacks for the duration of that call and
   nothing more; a policy violation records the tool and the rule, never the
   arguments that broke it.
-- **Session keys and tags are stored as you wrote them in your own process,
-  and reach a connected plane as a hash.** Detectors name the key untouched in
+- **Session keys and tags are stored as you wrote them in your own process;
+  a key reaches a connected plane as a hash, tags as written.** Detectors name the key untouched in
   their own local `message` and `details`, so a key session with an id you
   are willing to see in your own logs, not with an email address. The plane —
   hosted or self-hosted, the only destination the SDK sends to any more — gets
@@ -2574,7 +2586,7 @@ never reveals: prompts, replies, tool arguments themselves, or error text.
 Every failure inside detection, pricing, hashing, wrapping, or alerting is
 caught, logged to the `"runbound"` logger, and swallowed — your call proceeds
 as if runbound were not there. A detector that raises is skipped; a client
-runbound cannot patch runs unguarded; a broken alerter is logged past. The only
+runbound cannot patch runs unguarded; a broken observer is logged past. The only
 exception that escapes on purpose is `GuardrailTripped`, and only if you chose
 `on_anomaly="raise"`.
 
@@ -2617,7 +2629,8 @@ Honest limitations today:
   garbage collected.** A guarded stream reports normally when it is exhausted,
   closed, or exited; one that is simply dropped is still reported — as one
   partial call, with the time actually streamed and usage-or-estimated
-  tokens — but only once Python collects it, which is not necessarily
+  output tokens (input tokens only from usage, or from the request under
+  `estimate_tokens=True`) — but only once Python collects it, which is not necessarily
   promptly, and never at interpreter exit. See [Async and
   streaming](#async-and-streaming).
 - **OpenAI streams need `stream_options={"include_usage": True}`** to be priced.
@@ -2631,7 +2644,7 @@ Honest limitations today:
   replicas mean N times the numbers you wrote.
   [Fleet mode](#fleet-mode--one-truth-across-all-your-workers-control-plane)
   shares the budget, the latch, the strike count, the org policy and the
-  provider circuits; the four bullets below are what it does **not** fix.
+  provider circuits; the three bullets below are what it does **not** fix.
 - **Spike baselines are in-process and reset on restart.** A redeployed worker
   re-learns each session over its first `spike_warmup_calls` calls, and two
   workers serving the same user learn separately. Baselines are not among the
@@ -2693,8 +2706,8 @@ Honest limitations today:
 - **A new thread does not inherit the current session.** Context variables are
   per thread, so a thread spawned inside a `session()` block lands on the
   default session unless it enters the block itself. `asyncio` tasks do inherit.
-- **Costs are estimates** from a static list-price table. Cached input, batch
-  discounts, and negotiated rates are not modeled.
+- **Costs are estimates** from a static list-price table. Batch discounts and
+  negotiated rates are not modeled.
 - **Auto-patching covers two SDKs.** `auto_wrap` patches the OpenAI and
   Anthropic classes and nothing else; every other client still needs `wrap()`,
   and tools still need `@runbound.tool`. `runbound.unpatch()` undoes it.
