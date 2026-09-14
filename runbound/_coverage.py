@@ -24,6 +24,7 @@ not a question a new session re-asks.
 
 import hashlib
 import inspect
+import types
 import json
 import logging
 import sys
@@ -429,7 +430,10 @@ def _annotation(annotation: Any) -> str | None:
         return None
     if isinstance(annotation, str):
         text = annotation
-    elif isinstance(annotation, type):
+    elif isinstance(annotation, type) and not isinstance(annotation, types.GenericAlias):
+        # On Python 3.10 ``isinstance(list[int], type)`` is True (3.11+ says
+        # False), and taking ``__qualname__`` there prints ``list`` for
+        # ``list[int]`` -- found by the public repo's 3.10 CI leg, 2026-09-15.
         text = annotation.__qualname__
     else:
         text = str(annotation)
