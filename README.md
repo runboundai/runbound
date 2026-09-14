@@ -2745,6 +2745,36 @@ page you.
 
 ---
 
+## Getting help
+
+**Something not working, or a question?** Open an issue at
+[github.com/runboundai/runbound/issues](https://github.com/runboundai/runbound/issues),
+or email **runboundai@gmail.com** if it is not something you can post in
+public.
+
+The two things that let us answer on the first reply instead of the third:
+
+```python
+import runbound
+print(runbound.__version__)
+print(runbound.coverage())   # after init() and your first guarded call
+```
+
+`coverage()` is plain numbers and names — which provider classes were
+patched, how many calls and tools runbound saw, which imported providers
+nothing is guarding, and any silent-zero warning — so it shows at a glance
+whether runbound can see your traffic at all, which is the most common
+cause of "it isn't catching anything". It lists your decorated tools'
+names; remove any you would rather not post. Please also say your Python
+version, your `openai` / `anthropic` versions, and whether you run with a
+control plane (`token` / `control_plane_url`) or locally.
+
+**Never paste** an API key, a control-plane token, a prompt, a reply, or a
+real session key into an issue.
+
+**Security issues go to email, not to an issue** — see
+[SECURITY.md](SECURITY.md) for what to send and the disclosure window.
+
 ## License
 
 MIT — see [LICENSE](LICENSE). Release history is in
