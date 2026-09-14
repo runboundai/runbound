@@ -7,7 +7,7 @@ from runbound import GuardrailTripped
 
 # docs: plane-unreachable · needs token
 # an unreachable plane, on purpose
-runbound.init(control_plane_url="http://127.0.0.1:9", token="ag_live_x",
+runbound.init(control_plane_url="http://127.0.0.1:9", token="rb_live_x",
                 budget_usd=0.01, on_anomaly="raise")
 
 tripped = None

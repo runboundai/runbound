@@ -15,7 +15,7 @@ logging.getLogger("runbound").setLevel(logging.WARNING)
 
 import os
 
-os.environ["RUNBOUND_TOKEN"] = "ag_live_dummy_docs_token"
+os.environ["RUNBOUND_TOKEN"] = "rb_live_dummy_docs_token"
 
 # docs: fleet-init · needs token
 import os
