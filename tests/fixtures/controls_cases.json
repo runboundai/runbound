@@ -1,0 +1,310 @@
+{
+  "_comment": "The one shared table for Controls' two pure functions (merge, combine) -- see INVARIANTS.md's tighten-only bound. Lives in the SDK's own tree, the authority both the control plane and its dashboard read across to, mirrored by their own merge module and TS preview respectively, so a divergence between any of the three fails a test in whichever one drifted, instead of only ever being noticed by a human comparing files by eye. Edit this file, not any suite's inline cases, when adding a scenario every side must agree on.",
+  "merge": [
+    {
+      "name": "no served row yet accepts anything",
+      "base": null,
+      "candidate": { "envelope": false },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "two empty bodies are a no-op",
+      "base": {},
+      "candidate": {},
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "a lower limit amount tightens",
+      "base": { "limits": { "org": { "budget_usd": 100.0 } } },
+      "candidate": { "limits": { "org": { "budget_usd": 50.0 } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "a higher limit amount loosens",
+      "base": { "limits": { "org": { "budget_usd": 50.0 } } },
+      "candidate": { "limits": { "org": { "budget_usd": 100.0 } } },
+      "accepted": false,
+      "violations": [{ "path": "limits.org.budget_usd", "base": 50.0, "candidate": 100.0 }]
+    },
+    {
+      "name": "an equal limit amount is a no-op",
+      "base": { "limits": { "service": { "max_steps": 20 } } },
+      "candidate": { "limits": { "service": { "max_steps": 20 } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "introducing a limit where none existed tightens",
+      "base": { "limits": { "run": { "max_events": null } } },
+      "candidate": { "limits": { "run": { "max_events": 500 } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "removing a limit entirely loosens",
+      "base": { "limits": { "run": { "max_events": 500 } } },
+      "candidate": { "limits": { "run": { "max_events": null } } },
+      "accepted": false,
+      "violations": [{ "path": "limits.run.max_events", "base": 500, "candidate": null }]
+    },
+    {
+      "name": "allow to deny tightens",
+      "base": { "capabilities": { "financial": "allow" } },
+      "candidate": { "capabilities": { "financial": "deny" } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "deny to allow loosens",
+      "base": { "capabilities": { "financial": "deny" } },
+      "candidate": { "capabilities": { "financial": "allow" } },
+      "accepted": false,
+      "violations": [{ "path": "capabilities.financial", "base": "deny", "candidate": "allow" }]
+    },
+    {
+      "name": "an unstated capability ties with allow (no violation either direction)",
+      "base": { "capabilities": { "financial": "allow" } },
+      "candidate": {},
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "a stricter posture tightens",
+      "base": { "posture": "full" },
+      "candidate": { "posture": "restricted" },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "a widening posture loosens",
+      "base": { "posture": "read_only" },
+      "candidate": { "posture": "restricted" },
+      "accepted": false,
+      "violations": [{ "path": "posture", "base": "read_only", "candidate": "restricted" }]
+    },
+    {
+      "name": "lifting a stated posture back to none loosens",
+      "base": { "posture": "restricted" },
+      "candidate": { "posture": null },
+      "accepted": false,
+      "violations": [{ "path": "posture", "base": "restricted", "candidate": null }]
+    },
+    {
+      "name": "notify to stop tightens",
+      "base": { "detectors": { "loop": { "action": "notify", "mode": "shadow" } } },
+      "candidate": { "detectors": { "loop": { "action": "stop", "mode": "shadow" } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "stop to notify is a violation",
+      "base": { "detectors": { "loop": { "action": "stop", "mode": "shadow" } } },
+      "candidate": { "detectors": { "loop": { "action": "notify", "mode": "shadow" } } },
+      "accepted": false,
+      "violations": [{ "path": "detectors.loop.action", "base": "stop", "candidate": "notify" }]
+    },
+    {
+      "name": "shadow to enforce tightens",
+      "base": { "detectors": { "budget": { "action": "stop", "mode": "shadow" } } },
+      "candidate": { "detectors": { "budget": { "action": "stop", "mode": "enforce" } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "a new detector control not in base is free to add",
+      "base": { "detectors": {} },
+      "candidate": { "detectors": { "stall": { "action": "notify", "mode": "shadow" } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "dropping a detector control the base had loosens",
+      "base": { "detectors": { "stall": { "action": "stop", "mode": "enforce" } } },
+      "candidate": { "detectors": {} },
+      "accepted": false,
+      "violations": [
+        { "path": "detectors.stall", "base": { "action": "stop", "mode": "enforce" }, "candidate": null }
+      ]
+    },
+    {
+      "name": "envelope false to true tightens",
+      "base": { "envelope": false },
+      "candidate": { "envelope": true },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "envelope true to false is a violation",
+      "base": { "envelope": true },
+      "candidate": { "envelope": false },
+      "accepted": false,
+      "violations": [{ "path": "envelope", "base": true, "candidate": false }]
+    },
+    {
+      "name": "envelope false to unstated ties (both the loosest)",
+      "base": { "envelope": false },
+      "candidate": {},
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "envelope unstated to false ties (both the loosest)",
+      "base": {},
+      "candidate": { "envelope": false },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "envelope true to unstated is a violation (unstated is not a restatement)",
+      "base": { "envelope": true },
+      "candidate": {},
+      "accepted": false,
+      "violations": [{ "path": "envelope", "base": true, "candidate": null }]
+    },
+    {
+      "name": "every field can tighten in one candidate",
+      "base": {
+        "limits": { "org": { "budget_usd": 100.0 } },
+        "capabilities": { "financial": "allow" },
+        "posture": "full",
+        "detectors": { "loop": { "action": "notify", "mode": "shadow" } },
+        "envelope": false
+      },
+      "candidate": {
+        "limits": { "org": { "budget_usd": 10.0 } },
+        "capabilities": { "financial": "deny" },
+        "posture": "stopped",
+        "detectors": { "loop": { "action": "stop", "mode": "enforce" } },
+        "envelope": true
+      },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "three independent violations are all reported together",
+      "base": { "limits": { "org": { "budget_usd": 10.0 } }, "posture": "stopped", "envelope": true },
+      "candidate": { "limits": { "org": { "budget_usd": 20.0 } }, "posture": "full", "envelope": false },
+      "accepted": false,
+      "violations": [
+        { "path": "limits.org.budget_usd", "base": 10.0, "candidate": 20.0 },
+        { "path": "posture", "base": "stopped", "candidate": "full" },
+        { "path": "envelope", "base": true, "candidate": false }
+      ]
+    }
+  ],
+  "combine": [
+    {
+      "name": "both empty combine to empty",
+      "a": {},
+      "b": {},
+      "combined": {}
+    },
+    {
+      "name": "one side null takes the other verbatim",
+      "a": null,
+      "b": { "posture": "restricted" },
+      "combined": { "posture": "restricted" }
+    },
+    {
+      "name": "the lower of two org/service budgets wins",
+      "a": { "limits": { "org": { "budget_usd": 5.0 } } },
+      "b": { "limits": { "service": { "budget_usd": 50.0 } } },
+      "combined": { "limits": { "org": { "budget_usd": 5.0 }, "service": { "budget_usd": 50.0 } } }
+    },
+    {
+      "name": "the same level from both sides takes the stricter amount",
+      "a": { "limits": { "org": { "budget_usd": 5.0 } } },
+      "b": { "limits": { "org": { "budget_usd": 50.0 } } },
+      "combined": { "limits": { "org": { "budget_usd": 5.0 } } }
+    },
+    {
+      "name": "deny beats allow regardless of side",
+      "a": { "capabilities": { "financial": "allow" } },
+      "b": { "capabilities": { "financial": "deny" } },
+      "combined": { "capabilities": { "financial": "deny" } }
+    },
+    {
+      "name": "a capability only one side states is taken from that side",
+      "a": { "capabilities": { "financial": "deny" } },
+      "b": {},
+      "combined": { "capabilities": { "financial": "deny" } }
+    },
+    {
+      "name": "the stricter posture wins regardless of side",
+      "a": { "posture": "full" },
+      "b": { "posture": "restricted" },
+      "combined": { "posture": "restricted" }
+    },
+    {
+      "name": "a posture only one side states is taken from that side",
+      "a": {},
+      "b": { "posture": "read_only" },
+      "combined": { "posture": "read_only" }
+    },
+    {
+      "name": "stop beats notify and enforce beats shadow, per detector",
+      "a": { "detectors": { "loop": { "action": "notify", "mode": "enforce" } } },
+      "b": { "detectors": { "loop": { "action": "stop", "mode": "shadow" } } },
+      "combined": { "detectors": { "loop": { "action": "stop", "mode": "enforce" } } }
+    },
+    {
+      "name": "a detector only one side names is taken from that side",
+      "a": { "detectors": { "loop": { "action": "stop", "mode": "enforce" } } },
+      "b": { "detectors": { "spike": { "action": "notify", "mode": "shadow" } } },
+      "combined": {
+        "detectors": {
+          "loop": { "action": "stop", "mode": "enforce" },
+          "spike": { "action": "notify", "mode": "shadow" }
+        }
+      }
+    },
+    {
+      "name": "envelope true from either side wins",
+      "a": { "envelope": false },
+      "b": { "envelope": true },
+      "combined": { "envelope": true }
+    },
+    {
+      "name": "envelope unstated on both sides stays absent",
+      "a": {},
+      "b": {},
+      "combined": {}
+    },
+    {
+      "name": "an org-wide budget cannot be outrun by a looser service budget",
+      "a": { "limits": { "org": { "budget_usd": 5.0 } } },
+      "b": { "limits": { "org": { "budget_usd": 50.0 } } },
+      "combined": { "limits": { "org": { "budget_usd": 5.0 } } }
+    },
+    {
+      "name": "every field family combines in one call",
+      "a": {
+        "limits": { "org": { "budget_usd": 5.0 } },
+        "capabilities": { "financial": "allow" },
+        "posture": "full",
+        "detectors": { "loop": { "action": "notify", "mode": "shadow" } },
+        "envelope": false
+      },
+      "b": {
+        "limits": { "service": { "budget_usd": 50.0 } },
+        "capabilities": { "financial": "deny" },
+        "posture": "restricted",
+        "detectors": { "spike": { "action": "stop", "mode": "enforce" } },
+        "envelope": true
+      },
+      "combined": {
+        "limits": { "org": { "budget_usd": 5.0 }, "service": { "budget_usd": 50.0 } },
+        "capabilities": { "financial": "deny" },
+        "posture": "restricted",
+        "detectors": {
+          "loop": { "action": "notify", "mode": "shadow" },
+          "spike": { "action": "stop", "mode": "enforce" }
+        },
+        "envelope": true
+      }
+    }
+  ]
+}

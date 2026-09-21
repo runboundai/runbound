@@ -1,0 +1,7 @@
+# What the source distribution carries beyond the package: the docs the
+# README links to, and the executed examples the test suite runs, so
+# `pip download --no-binary` + `pytest` works from the sdist alone.
+graft examples
+graft docs
+include INVARIANTS.md SECURITY.md CONTRIBUTING.md CHANGELOG.md
+global-exclude __pycache__ *.py[cod] last_report.md

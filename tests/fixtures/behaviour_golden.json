@@ -1,0 +1,195 @@
+{
+  "anomalies": [
+    [
+      "budget",
+      "critical",
+      "warn",
+      {
+        "budget_usd": 3.0,
+        "key_hash": "66a4544b6261c757977490e622838d72f12a6ab3cfb2f72d29f6055aa910c459",
+        "level": "key",
+        "limit_hit": "budget_usd",
+        "max_total_tokens": 1000,
+        "total_cost_usd": 4.0,
+        "total_tokens": 4
+      }
+    ],
+    [
+      "steps",
+      "critical",
+      "warn",
+      {
+        "max_steps": 5,
+        "turns": 6
+      }
+    ],
+    [
+      "budget",
+      "critical",
+      "warn",
+      {
+        "budget_usd": 3.0,
+        "key_hash": "3d8fb853d8d7432143f683db5ed5db88c1d3ac53c7b6ec4bfbfea0448107e6d0",
+        "level": "key",
+        "limit_hit": "max_total_tokens",
+        "max_total_tokens": 1000,
+        "total_cost_usd": 0.0,
+        "total_tokens": 1200
+      }
+    ],
+    [
+      "budget",
+      "critical",
+      "door",
+      {
+        "budget_usd": 3.0,
+        "cap_tokens": 2,
+        "key": "golden:wall-reservation",
+        "key_hash": "01af67ad886f644d2cc46333232528817699deca48c0689f50d2d92ac268221f",
+        "level": "key",
+        "model": "golden-budget-model",
+        "reason": "reservation",
+        "remaining_usd": 1.0,
+        "reserved_usd": 0.0,
+        "rule": "reservation",
+        "tags": {},
+        "worst_case_usd": 2.0
+      }
+    ],
+    [
+      "policy",
+      "critical",
+      "blocked",
+      {
+        "count": 2,
+        "key": null,
+        "key_hash": null,
+        "limit": 1,
+        "rule": "max_calls",
+        "tags": {},
+        "tool": "golden_limited_tool"
+      }
+    ],
+    [
+      "safe_mode",
+      "warn",
+      "blocked",
+      {
+        "denied_class": "financial",
+        "effects": [
+          "financial"
+        ],
+        "key": null,
+        "key_hash": null,
+        "posture": "restricted",
+        "reason": "behaviour golden: incident drill",
+        "rule": "safe_mode",
+        "source": "manual",
+        "tags": {},
+        "tool": "golden_financial_tool",
+        "verdict": "deny"
+      }
+    ]
+  ],
+  "budget": {
+    "default": {
+      "limit": 3.0,
+      "remaining": 3.0,
+      "reserved": 0.0,
+      "resets_at": null,
+      "scope": "session",
+      "soft_at": null,
+      "spent": 0.0,
+      "window": null
+    },
+    "golden:wall-budget": {
+      "limit": 3.0,
+      "remaining": 0.0,
+      "reserved": 0.0,
+      "resets_at": null,
+      "scope": "session",
+      "soft_at": null,
+      "spent": 5.0,
+      "window": null
+    },
+    "golden:wall-reservation": {
+      "limit": 3.0,
+      "remaining": 1.0,
+      "reserved": 0.0,
+      "resets_at": null,
+      "scope": "session",
+      "soft_at": null,
+      "spent": 2.0,
+      "window": null
+    },
+    "golden:wall-steps": {
+      "limit": 3.0,
+      "remaining": 3.0,
+      "reserved": 0.0,
+      "resets_at": null,
+      "scope": "session",
+      "soft_at": null,
+      "spent": 0.0,
+      "window": null
+    },
+    "golden:wall-tokens": {
+      "limit": 3.0,
+      "remaining": 3.0,
+      "reserved": 0.0,
+      "resets_at": null,
+      "scope": "session",
+      "soft_at": null,
+      "spent": 0.0,
+      "window": null
+    }
+  },
+  "client_calls": 19,
+  "is_tripped": null,
+  "latching": {
+    "detector": "steps",
+    "refusal": {
+      "detector": "steps",
+      "exception": "ExecutionRefused",
+      "reason": null,
+      "rule": null
+    }
+  },
+  "refusals": [
+    {
+      "detector": "budget",
+      "exception": "ExecutionRefused",
+      "reason": "reservation",
+      "rule": "reservation"
+    },
+    {
+      "detector": null,
+      "exception": "RuntimeError",
+      "reason": null,
+      "rule": null
+    },
+    {
+      "detector": "policy",
+      "exception": "PolicyViolation",
+      "reason": null,
+      "rule": "max_calls"
+    },
+    {
+      "detector": "safe_mode",
+      "exception": "SafeModeViolation",
+      "reason": "behaviour golden: incident drill",
+      "rule": "safe_mode"
+    },
+    {
+      "detector": "safe_mode",
+      "exception": "SafeModeViolation",
+      "reason": "behaviour golden: incident drill",
+      "rule": "safe_mode"
+    },
+    {
+      "detector": "safe_mode",
+      "exception": "SafeModeViolation",
+      "reason": "behaviour golden: incident drill",
+      "rule": "safe_mode"
+    }
+  ]
+}
