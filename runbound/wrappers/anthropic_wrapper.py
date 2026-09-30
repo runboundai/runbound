@@ -16,6 +16,7 @@ response, assembled from ``content_block`` events off a streamed one.
 import logging
 from typing import Any, Callable
 
+from .. import pricing
 from . import (
     MARKER,
     ClassTarget,
@@ -36,7 +37,6 @@ from . import (
     fixed_label,
     guarded_create,
     log_guarded_surfaces,
-    messages_chars,
     normalize_arguments,
     provider_label,
     report_quota,
@@ -235,10 +235,9 @@ def _report_call(
 
 
 def _request_chars(request_kwargs: dict) -> int:
-    """Characters of text a messages request sent, system prompt included."""
-    total = messages_chars(request_kwargs.get("messages"))
-    system = request_kwargs.get("system")
-    return total + (len(system) if isinstance(system, str) else 0)
+    """Characters of input a messages request sent: messages, the system prompt
+    (a string or blocks) and the tool definitions."""
+    return pricing.request_chars(request_kwargs)
 
 
 def request_output_cap(kwargs: dict) -> int | None:

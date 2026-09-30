@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-30
+
+### Added
+
+- **The admission estimate's formula is public.** `runbound.pricing` gains
+  `admission_worst_case(price, output_tokens, input_chars)`, the dollar worst
+  case of one call (its input at the plain input rate plus the output it may
+  produce), and `request_chars(request)`, the characters of input a request
+  will be billed for. The engine's budget admission uses exactly these, so
+  anything that estimates a call the same way composes the same numbers.
+
+### Changed
+
+- **The worst-case admission estimate now counts what providers bill as
+  input.** It counts the Responses API's `input` and `instructions`, Anthropic's
+  `system` (a string or blocks), the tool definitions (`tools`, and the legacy
+  `functions`) and the tool calls and tool results carried in a conversation.
+  Before, it read only chat `messages`, so a Responses call estimated no input
+  at all and a request's system prompt and tools were skipped: with
+  `budget_admission` on, budgets undercounted those calls and admitted some that
+  should have been refused. The estimate used when a server reports no usage
+  counts the same fields. Nothing is estimated for content whose size cannot be
+  known (an image).
+
 ## [0.5.0] - 2026-09-30
 
 ### Added

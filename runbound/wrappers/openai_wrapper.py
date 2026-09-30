@@ -29,6 +29,7 @@ import functools
 import logging
 from typing import Any, Callable, NamedTuple
 
+from .. import pricing
 from . import (
     MARKER,
     ChunkRequests,
@@ -52,7 +53,6 @@ from . import (
     fixed_label,
     guarded_create,
     log_guarded_surfaces,
-    messages_chars,
     normalize_arguments,
     provider_label,
     report_quota,
@@ -566,8 +566,9 @@ def request_output_cap(kwargs: dict) -> int | None:
 
 
 def _chat_request_chars(request_kwargs: dict) -> int:
-    """Characters of text a chat request sent, 0 for anything unreadable."""
-    return messages_chars(request_kwargs.get("messages"))
+    """Characters of input a request sent (messages, Responses input, tool
+    definitions), 0 for anything unreadable."""
+    return pricing.request_chars(request_kwargs)
 
 
 def _chat_response_chars(response: Any) -> int:

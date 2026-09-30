@@ -51,7 +51,9 @@ published number).
 
 from __future__ import annotations
 
+import json
 import logging
+from typing import Any
 
 _log = logging.getLogger("runbound")
 
@@ -423,3 +425,151 @@ def price_call(
     except Exception:  # fail-open: pricing must never break the host call
         _log.debug("price_call failed for model %r", model, exc_info=True)
         return 0.0, False
+
+
+# --- what a request will cost before it goes ---------------------------------
+#
+# The worst case of one call, before it is made: the input at the plain input
+# rate plus the output it may produce. The input is estimated from the
+# characters of everything the provider bills as input, at four characters a
+# token. The rule the reader follows is that the estimate never undercounts a
+# field the provider bills for; when a field's cost cannot be known (an image,
+# a tokenizer) it is left out rather than guessed, and when its shape is not
+# recognised it is counted by its serialised size instead of being skipped.
+
+#: Characters an estimated token stands for.
+CHARS_PER_TOKEN = 4
+
+
+def estimated_tokens(chars: int) -> int:
+    """``ceil(chars / 4)``, the estimate's whole model of a tokenizer."""
+    try:
+        return -(-max(int(chars), 0) // CHARS_PER_TOKEN)
+    except (TypeError, ValueError):
+        return 0
+
+
+def admission_worst_case(price: tuple, output_tokens: int, input_chars: int) -> float:
+    """The dollar worst case of one call: input estimate plus output.
+
+    ``input_chars`` is the request's input in characters (:func:`request_chars`),
+    priced at ``price[0]``, the plain input rate: admission cannot know before
+    the call how much of its input a cache will serve, so it assumes none (a
+    3- or 4-tuple's cache columns are not used here). ``output_tokens`` is what
+    the call may produce, priced at ``price[1]``. This is the one formula: the
+    engine's budget admission and anything that estimates the same way (a
+    gateway, say) compose it from :func:`price_for`, the request's own output
+    cap, and this.
+    """
+    input_tokens = estimated_tokens(input_chars)
+    return (input_tokens / 1_000_000.0) * price[0] + (max(int(output_tokens), 0) / 1_000_000.0) * price[1]
+
+
+def _get(obj: Any, name: str) -> Any:
+    """``name`` off a mapping or an attribute-style object; ``None`` if absent or unreadable."""
+    try:
+        if isinstance(obj, dict):
+            return obj.get(name)
+        return getattr(obj, name, None)
+    except Exception:
+        return None
+
+
+def _serialised(value: Any) -> int:
+    """The size of a structure as compact JSON, for a field billed by its whole
+    text (a tool definition's schema, a tool call's arguments)."""
+    if value is None:
+        return 0
+    if isinstance(value, str):
+        return len(value)
+    try:
+        return len(json.dumps(value, separators=(",", ":"), default=str, ensure_ascii=False))
+    except Exception:
+        return len(str(value))
+
+
+def _text_of(value: Any) -> int:
+    """Characters of a ``system``/``instructions``/content value: a string, or a
+    list of parts (strings, or blocks with a ``text``), nested where the
+    provider nests them. Anything else with no text says nothing about size."""
+    if isinstance(value, str):
+        return len(value)
+    if isinstance(value, (list, tuple)):
+        return sum(_part_chars(part) for part in value)
+    return 0
+
+
+def _part_chars(part: Any) -> int:
+    """One content part, or one Responses input item.
+
+    Text is counted as text; what a tool was asked to do (``arguments``,
+    ``input``) and what it answered (``content``, ``output``) are billed as
+    input on the next turn and are counted by their serialised size.
+    """
+    if isinstance(part, str):
+        return len(part)
+    total = 0
+    text = _get(part, "text")
+    if isinstance(text, str):
+        total += len(text)
+    for name in ("arguments", "output"):  # a function call item, and its output
+        value = _get(part, name)
+        if value is not None:
+            total += _serialised(value)
+    tool_input = _get(part, "input")  # an Anthropic tool_use block
+    if isinstance(tool_input, (dict, list, tuple)):
+        total += _serialised(tool_input)
+    content = _get(part, "content")  # a tool_result block, or a Responses item
+    if content is not None:
+        total += _text_of(content)
+    return total
+
+
+def _message_chars(message: Any) -> int:
+    total = _text_of(_get(message, "content"))
+    for call in _get(message, "tool_calls") or ():
+        function = _get(call, "function")
+        total += len(str(_get(function, "name") or "")) + _serialised(_get(function, "arguments"))
+    call = _get(message, "function_call")  # the legacy shape
+    if call is not None:
+        total += len(str(_get(call, "name") or "")) + _serialised(_get(call, "arguments"))
+    return total
+
+
+def messages_chars(messages: Any) -> int:
+    """Characters of a chat request's ``messages``: text, and the tool calls,
+    tool uses and tool results that ride in them. 0 if unreadable."""
+    try:
+        if isinstance(messages, (str, bytes)) or messages is None:
+            return 0
+        return sum(_message_chars(message) for message in messages)
+    except Exception:
+        _log.debug("runbound: unreadable messages while estimating tokens", exc_info=True)
+        return 0
+
+
+def request_chars(request: Any) -> int:
+    """Characters of input a request will be billed for, 0 if unreadable.
+
+    Everything the providers bill as input: chat ``messages`` (and the tool
+    calls in them), the Responses API's ``instructions`` and ``input`` (a string,
+    or items), Anthropic's ``system`` (a string, or blocks), and the tool
+    definitions (``tools``, and the legacy ``functions``), counted by their
+    serialised size. Never raises.
+    """
+    try:
+        if not isinstance(request, dict):
+            return 0
+        total = messages_chars(request.get("messages"))
+        total += _text_of(request.get("system"))
+        total += _text_of(request.get("instructions"))
+        total += _text_of(request.get("input"))
+        for name in ("tools", "functions"):
+            tools = request.get(name)
+            if isinstance(tools, (list, tuple)) and tools:
+                total += _serialised(list(tools))
+        return total
+    except Exception:
+        _log.debug("runbound: unreadable request while estimating tokens", exc_info=True)
+        return 0
+

@@ -479,3 +479,35 @@ def test_unpatch_never_raises_when_a_class_refuses_to_be_restored(caplog):
     assert autowrap.patched() == []
     assert autowrap._PATCHED == {}
     assert [line for line in (r.getMessage() for r in caplog.records) if "fake:frozen" in line]
+
+
+# --- reset() starts a fresh run; it does not take the guard away ------------------
+
+
+def test_the_public_reset_keeps_the_class_patches_so_the_next_run_is_still_guarded():
+    """``reset()`` is for between agent runs in a long-lived process. It forgets
+    the sessions and arms the detectors again; it must not unpatch the provider
+    classes, or every run after the first would be silently unguarded (auto_wrap
+    patches at ``init()`` only). Tests are torn down by the SDK's own test
+    teardown, which does unpatch."""
+    runbound.init(on_anomaly="raise")
+    patched = autowrap.patched()
+    client = openai_at("https://api.openai.com/v1", json_transport(chat_completion()))
+    chat(client)
+    assert totals()[2] > 0  # the first run was guarded
+
+    runbound.reset()
+
+    assert autowrap.patched() == patched != []
+    assert totals() == (0, 0.0, 0)  # a fresh session...
+    chat(client)
+    assert totals()[2] > 0  # ...and the same client is still guarded in it
+
+
+def test_the_test_teardown_is_what_unpatches():
+    runbound.init(on_anomaly="raise")
+    assert autowrap.patched() != []
+
+    api._teardown_for_tests()
+
+    assert autowrap.patched() == []

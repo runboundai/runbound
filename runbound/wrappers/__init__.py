@@ -64,7 +64,7 @@ import urllib.parse
 import weakref
 from typing import Any, Callable, NamedTuple, Sequence
 
-from .. import quota
+from .. import pricing, quota
 from ..exceptions import GuardrailTripped
 
 _LOG = logging.getLogger("runbound")
@@ -538,14 +538,10 @@ def content_chars(content: Any) -> int:
 
 
 def messages_chars(messages: Any) -> int:
-    """Characters of text across a chat request's ``messages``, 0 if unreadable."""
-    try:
-        if isinstance(messages, (str, bytes)) or messages is None:
-            return 0
-        return sum(content_chars(field(message, "content")) for message in messages)
-    except Exception:
-        _LOG.debug("runbound: unreadable messages while estimating tokens", exc_info=True)
-        return 0
+    """Characters of a chat request's ``messages``, 0 if unreadable: their text,
+    and the tool calls and tool results that ride in them (billed as input on
+    the next turn). See :func:`runbound.pricing.request_chars`."""
+    return pricing.messages_chars(messages)
 
 
 def request_hash(name: str, arguments: str) -> str:

@@ -54,7 +54,7 @@ from .policy import (
     merge,
 )
 from .plane_types import key_hash as _key_hash_fn
-from .pricing import price_for
+from .pricing import admission_worst_case, price_for, request_chars
 from .quota import MAX_COOLDOWN_S, Quota, cooldown_for, headers_of, read_quota
 from .shared import LocalState
 from . import posture as posture_module
@@ -3263,11 +3263,6 @@ def _actions_door_anomaly(session: SessionState, decision: Decision) -> Anomaly:
     )
 
 
-#: Characters an estimated token stands for (this module's own copy of the constant
-#: `wrappers.CHARS_PER_TOKEN` uses — duplicated, not imported, because engine.py
-#: must not depend on the wrapper package; see `_admission_request_chars`).
-_ADMISSION_CHARS_PER_TOKEN = 4
-
 #: Output-token cap fields, checked in the order a request is likeliest to
 #: carry one: `max_tokens` (Anthropic, and OpenAI's older chat completions),
 #: `max_completion_tokens` (OpenAI's newer chat completions), then
@@ -3275,15 +3270,6 @@ _ADMISSION_CHARS_PER_TOKEN = 4
 #: `wrappers.openai_wrapper.request_output_cap` and
 #: `wrappers.anthropic_wrapper.request_output_cap`.
 _ADMISSION_OUTPUT_CAP_FIELDS = ("max_tokens", "max_completion_tokens", "max_output_tokens")
-
-
-def _estimated_tokens(chars: int) -> int:
-    """``ceil(chars / 4)`` for the admission estimate — this module's own copy of
-    ``wrappers.estimated_tokens`` (see ``_admission_request_chars``)."""
-    try:
-        return -(-max(int(chars), 0) // _ADMISSION_CHARS_PER_TOKEN)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _admission_worst_case(
@@ -3294,64 +3280,28 @@ def _admission_worst_case(
     Pure arithmetic — no lock, no session — so :meth:`Engine._admit_budget`
     can compute it once, outside the ``session.lock`` section its
     compare-and-hold needs. ``stated_cap`` wins over ``admission_output_tokens``
-    when the request named its own cap. ``price`` may be a 3-tuple when the
-    model publishes a cached-input rate; admission has no way to know
-    before the call how many input tokens will be cache hits, so it prices at
-    the plain input rate (``price[0]``) — the same conservative "assume no
-    discount" the post-call price falls back to for an unpriced model, here
-    applied to an unknown-yet split instead of an unknown rate.
+    when the request named its own cap. The formula itself is
+    :func:`runbound.pricing.admission_worst_case`, published so that anything
+    else that estimates a call the same way composes the same thing; ``price``
+    may be a 3-tuple when the model publishes a cached-input rate, and
+    admission prices at the plain input rate regardless (it cannot know before
+    the call how much a cache will serve).
     """
-    price_in, price_out = price[0], price[1]
     output_tokens = stated_cap if stated_cap is not None else admission_output_tokens
-    input_tokens = _estimated_tokens(_admission_request_chars(request))
-    cost_in = (input_tokens / 1_000_000.0) * price_in
-    cost_out = (output_tokens / 1_000_000.0) * price_out
-    return cost_in + cost_out
-
-
-def _admission_field(obj, name: str):
-    """Read ``name`` off an attribute-style or mapping-style object.
-
-    ``None`` for anything missing or that raises — a request is someone
-    else's dict (or SDK param object), and may be shaped any way at all.
-    """
-    try:
-        if isinstance(obj, dict):
-            return obj.get(name)
-        return getattr(obj, name, None)
-    except Exception:
-        return None
+    return admission_worst_case(price, output_tokens, _admission_request_chars(request))
 
 
 def _admission_request_chars(request: dict | None) -> int:
-    """Characters of message text an admission estimate is based on.
+    """Characters of input an admission estimate is based on.
 
-    Deliberately narrow: only the ``messages`` shape both OpenAI's chat
-    completions and Anthropic's ``messages.create`` use, because an admission
-    estimate is stated as one (see ``budget_admission`` in config.py) — a
-    request shaped differently (the Responses API's ``input``, say) simply
-    estimates 0 input chars rather than guessing at a shape this module was
-    not taught. This is engine.py's own minimal reader, not
-    ``wrappers.messages_chars``: the wrapper package imports the engine
-    (indirectly, through the api), so the engine must not import it back —
-    see the module docstring's dependency direction.
+    Everything the providers bill as input, whatever the API's shape: chat
+    ``messages``, the Responses API's ``instructions`` and ``input``,
+    Anthropic's ``system``, and the tool definitions. It is
+    :func:`runbound.pricing.request_chars`, which lives in the leaf pricing
+    module so that the engine (which must not import the wrapper package) and
+    the wrappers read a request the same way.
     """
-    if not isinstance(request, dict):
-        return 0
-    messages = request.get("messages")
-    if not isinstance(messages, (list, tuple)):
-        return 0
-    total = 0
-    for message in messages:
-        content = _admission_field(message, "content")
-        if isinstance(content, str):
-            total += len(content)
-        elif isinstance(content, (list, tuple)):
-            for part in content:
-                text = _admission_field(part, "text")
-                if isinstance(text, str):
-                    total += len(text)
-    return total
+    return request_chars(request)
 
 
 def _admission_output_cap(request: dict | None) -> int | None:

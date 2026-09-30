@@ -171,7 +171,10 @@ concurrency, not just for one call in isolation. A request that names its own
 output cap — `max_tokens`, `max_completion_tokens` or `max_output_tokens` —
 cannot produce more output than that, so its worst case is known before it
 goes out: the cap at the model's output rate, plus the request's input at the
-input rate. When that worst case would take `total_cost_usd +
+input rate. The input is every field the provider bills as input, estimated at
+four characters a token: chat `messages` (and the tool calls in them), the
+Responses API's `instructions` and `input`, Anthropic's `system`, and the tool
+definitions. The formula is public as `runbound.pricing.admission_worst_case`. When that worst case would take `total_cost_usd +
 spend_offset_usd + reserved` past `budget_usd`, the call is refused right
 there, before any socket opens, with `GuardrailTripped` (detector `budget`,
 `details["reason"] == "reservation"`, plus `cap_tokens`, `worst_case_usd`,
