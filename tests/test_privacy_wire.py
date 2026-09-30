@@ -395,3 +395,69 @@ def teardown_module(module) -> None:
         if not [t for t in threading.enumerate() if "runbound" in t.name]:
             return
         time.sleep(0.01)
+
+
+# --- the changes lane --------------------------------------------------------
+
+
+def _posture_record(**overrides) -> dict:
+    record = {
+        "kind": "posture",
+        "at": 1_790_000_000.0,
+        "session_id": "sess-1",
+        "source": "manual",
+        "posture": "restricted",
+        "from": "full",
+        "scope": "session",
+        "level": None,
+        "key": KEY,
+        "reason": f"support narrowed {KEY} by hand",
+    }
+    record.update(overrides)
+    return record
+
+
+def test_an_exported_posture_change_carries_the_key_hash_and_never_the_key():
+    client = Spy()
+    exporter = Exporter(client)
+    exporter.on_change(_posture_record())
+
+    blob = drained(exporter, client)
+    assert_clean(blob)
+    (change,) = client.batches[0]["changes"]
+    assert change["key_hash"] == DIGEST
+    assert change["kind"] == "posture_change"
+    assert "session_id" not in change
+
+
+def test_the_key_is_redacted_out_of_a_posture_changes_reason():
+    client = Spy()
+    exporter = Exporter(client)
+    exporter.on_change(_posture_record())
+
+    exporter.flush()
+    (change,) = client.batches[0]["changes"]
+    assert STAND_IN in change["reason"]
+
+
+def test_a_runtime_change_carries_no_key_at_all():
+    client = Spy()
+    exporter = Exporter(client)
+    exporter.on_change({"kind": "runtime_change", "at": 1_790_000_000.0, "what": "model", "from": "a", "to": "b"})
+
+    exporter.flush()
+    (change,) = client.batches[0]["changes"]
+    assert "key_hash" not in change
+    assert (change["what"], change["from"], change["to"]) == ("model", "a", "b")
+
+
+def test_the_changes_lane_never_carries_a_raw_key_even_when_keys_are_opted_in():
+    """``send_session_keys`` is about anomaly messages; a posture change is
+    identified by the hash alone, whatever that setting says."""
+    client = Spy()
+    exporter = Exporter(client, send_session_keys=True)
+    exporter.on_change(_posture_record(reason="no key in this one"))
+
+    blob = drained(exporter, client)
+    assert_clean(blob)
+    assert client.batches[0]["changes"][0]["key_hash"] == DIGEST

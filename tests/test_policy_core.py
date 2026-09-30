@@ -453,14 +453,14 @@ def test_dry_run_never_latches():
 # --- alerts -----------------------------------------------------------------
 
 
-def test_the_same_violation_alerts_once_per_session_rule_and_tool():
+def test_the_same_violation_is_recorded_every_time():
     observer = RecordingObserver()
     eng = engine(ToolPolicy(deny=["shell"]), observers=[observer])
     state = session()
     for _ in range(3):
         with pytest.raises(PolicyViolation):
             eng.enforce_policy(state, call("shell"))
-    assert len(observer.sent) == 1
+    assert len(observer.sent) == 3  # a refusal is evidence: none is dropped as a repeat
 
 
 def test_a_different_tool_alerts_again():
@@ -473,7 +473,7 @@ def test_a_different_tool_alerts_again():
     assert [a.details["tool"] for a in observer.sent] == ["shell", "wire_money"]
 
 
-def test_a_different_rule_on_the_same_tool_alerts_again():
+def test_a_different_rule_on_the_same_tool_is_recorded_as_that_rule():
     observer = RecordingObserver()
     policy = ToolPolicy(max_calls={"refund": 1}, constraints={"refund": lambda c: False})
     eng = engine(policy, observers=[observer])
@@ -482,13 +482,13 @@ def test_a_different_rule_on_the_same_tool_alerts_again():
     with pytest.raises(PolicyViolation):
         eng.enforce_policy(state, call("refund"))  # constraint: 1 is within the limit
     with pytest.raises(PolicyViolation):
-        eng.enforce_policy(state, call("refund"))  # still the constraint: deduped
-    assert len(observer.sent) == 1
+        eng.enforce_policy(state, call("refund"))  # still the constraint: recorded again
+    assert [a.details["rule"] for a in observer.sent] == ["constraint", "constraint"]
 
     state.record(tool_event("refund", 2))
     with pytest.raises(PolicyViolation):
         eng.enforce_policy(state, call("refund"))  # now over the limit
-    assert [a.details["rule"] for a in observer.sent] == ["constraint", "max_calls"]
+    assert [a.details["rule"] for a in observer.sent] == ["constraint", "constraint", "max_calls"]
 
 
 def test_detector_alerts_are_deduped_exactly_as_before():

@@ -17,9 +17,10 @@ every decision here.
   plane comes back. Retries back off exponentially so a dead plane is polled
   less often, not hammered; an invalid key is the one failure that still
   drops on the spot, since retrying past a rejected key would never help.
-* **Trips first.** Exits, trips and circuit transitions go to a priority lane
-  that is drained before ordinary events, so the record of an incident is not
-  stuck behind a queue of routine token counts.
+* **Trips first.** Exits, trips, circuit transitions and changes (a posture
+  moving, a model or policy version changing) go to a priority lane that is
+  drained before ordinary events, so the record of an incident is not stuck
+  behind a queue of routine token counts.
 
 At interpreter exit the queue is drained once, within the same few seconds the
 alert module already budgets for: the flusher thread is registered through
@@ -39,9 +40,17 @@ from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from . import alerts
+from . import alerts, local_events
 from .plane import WARN_INTERVAL_S, _PeriodicWarning, warn_periodically
-from .plane_types import ExitDelta, anomaly_to_wire, event_to_wire, key_hash, to_wire
+from .plane_types import (
+    ExitDelta,
+    anomaly_to_wire,
+    event_to_wire,
+    fresh_batch_id,
+    key_hash,
+    redact_key,
+    to_wire,
+)
 
 _LOG = logging.getLogger("runbound")
 
@@ -57,6 +66,42 @@ _BACKOFF_MAX_S = 10.0
 #: Wall clock used for the ISO-8601 stamps. Read off the module namespace at
 #: call time, so a test can freeze it.
 _wall = time.time
+
+#: Local record kinds the changes lane carries, and the kind each travels as.
+#: The reactions that mean a call was actually turned away.
+REFUSAL_REACTIONS = frozenset({"raise", "blocked", "door"})
+
+_CHANGE_KINDS = {"posture": "posture_change", "runtime_change": "runtime_change"}
+
+
+def change_to_wire(record: dict) -> dict:
+    """One posture or runtime change record, in its wire form.
+
+    The session key is replaced by its hash, and redacted out of the reason
+    (a manual reason is the caller's own text and may name it); the local
+    ``session_id`` stays behind. Fields a record does not have are left off
+    rather than sent as null. Raises on a record it cannot encode — the
+    caller counts it as dropped.
+    """
+    kind = _CHANGE_KINDS[record["kind"]]
+    key = record.get("key")
+    digest = None if key is None else key_hash(key)
+    reason = record.get("reason")
+    if isinstance(reason, str) and key is not None:
+        reason = redact_key(reason, key, digest)
+    wire = {
+        "ts_wall": _iso(float(record["at"])),
+        "kind": kind,
+        "key_hash": digest,
+        "scope": record.get("scope"),
+        "from": record.get("from"),
+        "to": record.get("posture") if kind == "posture_change" else record.get("to"),
+        "source": record.get("source"),
+        "reason": reason,
+        "level": record.get("level"),
+        "what": record.get("what"),
+    }
+    return {name: value for name, value in wire.items() if value is not None}
 
 
 def _iso(wall_seconds: float) -> str:
@@ -101,17 +146,33 @@ class Exporter:
         #: :class:`~runbound.shared.RemoteState` too, which installs this as
         #: an engine observer only when there is something for it to observe.
         self.include_events = bool(include_events)
+        # The customer's own export_events, which nothing the plane says changes.
+        self.customer_events = bool(include_events)
         self._maxlen = max(int(maxlen), 1)
         self._flush_every_s = max(float(flush_every_s), 0.0)
         self._batch_size = max(int(batch_size), 1)
         self._now = now
         self._events: deque = deque()
         self._anomalies: deque = deque()
-        self._priority: deque = deque()  # (lane, wire) with lane in exits|circuits
+        self._priority: deque = deque()  # (lane, wire) with lane in exits|circuits|changes
         self.dropped = 0
         #: Consecutive failed posts, for diagnostics and the backoff below.
         #: Reset to 0 on the next successful post.
         self.consecutive_failures = 0
+        #: How many batches this exporter has put back on the queue after
+        #: the plane refused them -- one per :meth:`_requeue` call, so it
+        #: counts *attempts* that failed, not the requests behind them: a
+        #: batch requeued three times before it lands counts three, the same
+        #: as three separate refused batches. Cumulative for the life of the
+        #: process, like ``dropped``; never reset on a later success, since
+        #: a resend already happened whether or not this one succeeds too.
+        self.resends = 0
+        #: The still-pending resend's own identity, or ``None`` -- set by
+        #: :meth:`_requeue` (a batch the plane refused) and consumed by the
+        #: very next :meth:`_take`, which reuses its ``batch_id`` and pops
+        #: exactly its own surviving counts rather than reassembling a
+        #: batch from scratch. See :meth:`_take`'s own docstring.
+        self._resend: dict | None = None
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stopped = threading.Event()
@@ -141,11 +202,17 @@ class Exporter:
     def on_anomaly(self, session, anomaly, reacted: str) -> None:
         """Queue one detector verdict and how the SDK reacted. Never raises.
 
-        Telemetry, so ``include_events`` off silences it. The trip that a
-        latch is made of travels on :meth:`on_trip` instead, which does not
-        ask.
+        Telemetry, so ``include_events`` off silences it, with one exception:
+        a refusal (``reacted`` ``raise``, ``blocked`` or ``door``) is evidence
+        that something was stopped, not telemetry, and is exported whatever
+        the plan says (a monthly events cap closes the telemetry lanes; it
+        never closes this one). The customer's own ``export_events=False`` is
+        still honoured: it is theirs to choose. The trip that a latch is made
+        of travels on :meth:`on_trip` instead, which does not ask.
         """
-        if not self.include_events:
+        if not self.include_events and not (
+            self.customer_events and reacted in REFUSAL_REACTIONS
+        ):
             return
         self._queue_anomaly(session, anomaly, reacted)
 
@@ -213,6 +280,31 @@ class Exporter:
             return
         self._enqueue(self._priority, ("circuits", wire))
 
+    def on_change(self, record: dict) -> None:
+        """Queue a posture change or a runtime change on the priority lane.
+        Never raises.
+
+        A :mod:`runbound.local_events` sink, registered by :meth:`start`.
+        Every other record kind is ignored. A posture change is state the
+        fleet acts on, like a trip, so it is queued whatever
+        ``include_events`` says; a runtime change (which model, which
+        provider, which version) is telemetry, and ``include_events`` off
+        silences it.
+        """
+        kind = record.get("kind") if isinstance(record, dict) else None
+        if kind not in _CHANGE_KINDS:
+            return
+        if kind == "runtime_change" and not self.include_events:
+            return
+        if self._discarding():
+            return
+        try:
+            wire = change_to_wire(record)
+        except Exception:
+            self._unencodable()
+            return
+        self._enqueue(self._priority, ("changes", wire))
+
     # --- the queue --------------------------------------------------------
 
     @property
@@ -230,10 +322,43 @@ class Exporter:
             if len(queue) >= self._maxlen:
                 queue.popleft()
                 self.dropped += 1
+                self._shrink_pending_resend(queue)
             queue.append(item)
             pending = len(self._events) + len(self._anomalies) + len(self._priority)
         if pending >= self._batch_size:
             self._wake.set()
+
+    def _shrink_pending_resend(self, queue: deque) -> None:
+        """One item of ``queue`` was just evicted by overflow — if a resend
+        is pending on this same lane, shrink its recorded count to match.
+
+        Without this, :meth:`_take` would later pop more than actually
+        belongs to the pending resend once the evicted slot is refilled by
+        newer telemetry, mislabeling that newer record under the stale
+        batch's id (see ``tests/test_export_requeue.py::
+        test_a_partially_evicted_resend_still_keeps_its_id``). If every
+        lane's count has now reached zero — the whole pending batch was
+        evicted, not merely thinned — the resend is cleared entirely rather
+        than left armed for zero items, which would make :meth:`_take`
+        report "nothing to send" and silently stall whatever fresh
+        telemetry the queues actually hold (see ``test_a_long_outage_
+        drops_oldest_and_counts_dropped_end_to_end``). Called already
+        holding :attr:`_lock`.
+        """
+        if self._resend is None:
+            return
+        if queue is self._events:
+            key = "events_n"
+        elif queue is self._anomalies:
+            key = "anomalies_n"
+        elif queue is self._priority:
+            key = "priority_n"
+        else:
+            return  # pragma: no cover - every caller passes one of the three
+        if self._resend[key] > 0:
+            self._resend[key] -= 1
+        if not any(self._resend[name] for name in ("priority_n", "anomalies_n", "events_n")):
+            self._resend = None
 
     def _key_hash(self, session) -> str | None:
         key = getattr(session, "key", None)
@@ -261,29 +386,55 @@ class Exporter:
         )
 
     def _take(self) -> tuple[dict, list, list, list] | None:
-        """Pop up to ``batch_size`` records — priority, then anomalies, then events.
+        """Pop the next batch to post — either a pending resend, exactly as
+        it was, or up to ``batch_size`` fresh records (priority, then
+        anomalies, then events).
 
-        Returns the wire batch alongside the raw per-lane lists that made it,
-        so a failed post can hand them straight back to :meth:`_requeue`.
+        A resend (:attr:`_resend` set by the last :meth:`_requeue`) is
+        popped at its own previously-recorded counts, never re-budgeted
+        against ``batch_size``: it keeps the exact ``batch_id`` it failed
+        with, so the receiving end can recognize the identical batch and
+        fold its telemetry in exactly once however many times this posts
+        it before one lands, rather than once per attempt. A lane that
+        lost some of those items to :meth:`_enqueue`'s own overflow while
+        the resend was pending (already counted in ``dropped``) simply
+        yields fewer than recorded — never blocks, and never reaches into
+        the fresher records queued behind them. Once read, :attr:`_resend`
+        is cleared; a further failure re-arms it with the same id via
+        :meth:`_requeue`.
+
+        Returns the wire batch alongside the raw per-lane lists that made
+        it, so a failed post can hand them straight back to
+        :meth:`_requeue`.
         """
         with self._lock:
-            budget = self._batch_size
-            priority = []
-            while self._priority and budget:
-                priority.append(self._priority.popleft())
-                budget -= 1
-            anomalies = []
-            while self._anomalies and budget:
-                anomalies.append(self._anomalies.popleft())
-                budget -= 1
-            events = []
-            while self._events and budget:
-                events.append(self._events.popleft())
-                budget -= 1
+            pending = self._resend
+            self._resend = None
+            if pending is not None:
+                batch_id = pending["batch_id"]
+                priority = self._pop_n(self._priority, pending["priority_n"])
+                anomalies = self._pop_n(self._anomalies, pending["anomalies_n"])
+                events = self._pop_n(self._events, pending["events_n"])
+            else:
+                batch_id = fresh_batch_id()
+                budget = self._batch_size
+                priority = []
+                while self._priority and budget:
+                    priority.append(self._priority.popleft())
+                    budget -= 1
+                anomalies = []
+                while self._anomalies and budget:
+                    anomalies.append(self._anomalies.popleft())
+                    budget -= 1
+                events = []
+                while self._events and budget:
+                    events.append(self._events.popleft())
+                    budget -= 1
             dropped = self.dropped
         if not (priority or anomalies or events):
             return None
         batch = {
+            "batch_id": batch_id,
             "service": getattr(self._client, "service", ""),
             "worker_id": getattr(self._client, "worker_id", ""),
             "sent_at": _iso(_wall()),
@@ -291,9 +442,17 @@ class Exporter:
             "anomalies": anomalies,
             "exits": [wire for lane, wire in priority if lane == "exits"],
             "circuits": [wire for lane, wire in priority if lane == "circuits"],
+            "changes": [wire for lane, wire in priority if lane == "changes"],
             "dropped": dropped,
         }
         return batch, priority, anomalies, events
+
+    def _pop_n(self, queue: deque, n: int) -> list:
+        """Up to ``n`` items off the front of ``queue`` — fewer if it holds less."""
+        items = []
+        while queue and len(items) < n:
+            items.append(queue.popleft())
+        return items
 
     def _abandon_queue(self) -> None:
         """Throw the queue away, counting it, when the key has been rejected."""
@@ -302,8 +461,9 @@ class Exporter:
             self._events.clear()
             self._anomalies.clear()
             self._priority.clear()
+            self._resend = None
 
-    def _requeue(self, priority: list, anomalies: list, events: list) -> None:
+    def _requeue(self, batch_id: str, priority: list, anomalies: list, events: list) -> None:
         """Put a batch the plane refused back, intact and in order.
 
         Each lane gets its own slice back at the front — ahead of anything
@@ -311,19 +471,42 @@ class Exporter:
         what is waiting. Still bounded by ``maxlen``: if the lane overflows
         (new records kept arriving during the failed attempt), the oldest
         records lose the room, same accounting as :meth:`_enqueue`.
+
+        Arms :attr:`_resend` with ``batch_id`` and each lane's *surviving*
+        count, so the very next :meth:`_take` reassembles this same batch
+        (never a bigger one) under the same id rather than a fresh one.
+
+        Bumps :attr:`resends`: this is the one place a refused batch goes
+        back on the queue to be sent again.
         """
         with self._lock:
-            self._requeue_lane(self._priority, priority)
-            self._requeue_lane(self._anomalies, anomalies)
-            self._requeue_lane(self._events, events)
+            self.resends += 1
+            priority_n = self._requeue_lane(self._priority, priority)
+            anomalies_n = self._requeue_lane(self._anomalies, anomalies)
+            events_n = self._requeue_lane(self._events, events)
+            self._resend = {
+                "batch_id": batch_id,
+                "priority_n": priority_n,
+                "anomalies_n": anomalies_n,
+                "events_n": events_n,
+            }
 
-    def _requeue_lane(self, queue: deque, items: list) -> None:
-        """Put ``items`` back at the front of ``queue``, oldest first."""
+    def _requeue_lane(self, queue: deque, items: list) -> int:
+        """Put ``items`` back at the front of ``queue``, oldest first.
+
+        Returns how many of ``items`` actually survived the overflow trim
+        below — the count :meth:`_requeue` needs to re-arm :attr:`_resend`
+        with, since a lane too small to hold the whole resend loses some of
+        it exactly the way :meth:`_enqueue` always does.
+        """
         for item in reversed(items):
             queue.appendleft(item)
+        trimmed = 0
         while len(queue) > self._maxlen:
             queue.popleft()
             self.dropped += 1
+            trimmed += 1
+        return max(0, len(items) - trimmed)
 
     # --- posting ----------------------------------------------------------
 
@@ -350,7 +533,7 @@ class Exporter:
             if self._post(batch):
                 self._on_success()
             else:
-                self._requeue(priority, anomalies, events)
+                self._requeue(batch["batch_id"], priority, anomalies, events)
                 self._on_failure()
                 self._warn_pending()
                 return
@@ -409,7 +592,8 @@ class Exporter:
     # --- the flusher thread -----------------------------------------------
 
     def start(self) -> None:
-        """Start the flusher thread, once. Idempotent."""
+        """Start the flusher thread, once, and listen for changes. Idempotent."""
+        local_events.add_sink(self.on_change)
         if self._thread is not None and self._thread.is_alive():
             return
         self._stopped.clear()
@@ -432,7 +616,9 @@ class Exporter:
         self.flush(DRAIN_TIMEOUT_S)
 
     def stop(self, timeout: float = DRAIN_TIMEOUT_S) -> None:
-        """Stop the flusher and drain what is left, within ``timeout`` total."""
+        """Stop listening for changes, stop the flusher and drain what is
+        left, within ``timeout`` total."""
+        local_events.remove_sink(self.on_change)
         deadline = time.monotonic() + max(timeout, 0.0)
         self._stopped.set()
         self._wake.set()

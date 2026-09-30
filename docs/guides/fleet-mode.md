@@ -293,7 +293,11 @@ A shared budget works the same with telemetry off.
 ```python
 runbound.plane_status()
 # PlaneStatus(mode='connected', last_contact_age_s=1.2, consecutive_failures=0,
-#             notice=None, entitlements={'plan': 'team', 'limits': {...}, 'denied': []})
+#             notice=None, entitlements={'plan': 'team', 'limits': {...}, 'denied': []},
+#             entries_window={'plane': 41, 'cache': 55, 'local': 4,
+#                              'local_causes': {'timeout': 3, 'plane_loss': 0,
+#                                               'plane_unavailable': 0, 'error': 1}},
+#             entries_local_share=0.04, reason=None)
 
 runbound.fleet_status("user:42")
 # {'fleet_spend_usd': 4.9, 'fleet_tokens': 900000, 'strikes': 1, 'generation': 3,
@@ -324,6 +328,119 @@ latch is saving, which the plane also counts fleet-wide. Both read cached state
 and never open a socket, so a health endpoint may poll them. `key_hash(key)` is the digest the plane knows a key by:
 the join key between your own logs and anything the plane shows you.
 
+### What "connected" means, and what it does not
+
+`mode == "connected"` says the link is up. It does not say every session
+entry actually reached the plane in time. Those are different questions,
+because they run on different clocks: a heartbeat every few seconds can
+afford to wait; an entry opening on your request thread cannot, and gives
+up after `control_plane_timeout_s` (150 ms by default) rather than slow your
+call down. A plane that is healthy enough to answer the slow, patient
+heartbeat can still be too loaded to answer the fast, impatient one — and
+when that happens, every session on this worker is quietly decided on its
+own local numbers instead, exactly as if there were no plane at all. That is
+not a bug in your setup; it is the fail-open promise working as designed,
+just further along than "plane unreachable."
+
+`entries_window` and `entries_local_share` are how you see that distance:
+how the last minute's session entries were actually decided — answered by
+the plane, served from the short-lived decision cache, or decided locally
+because the plane could not be asked in time — and what share of them were
+local. Once a worker has opened enough sessions for the number to mean
+anything, a local share past half degrades `mode` to `"degraded"` on its
+own, even while every heartbeat keeps succeeding. `entries_window.
+local_causes` breaks the `"local"` count down further, by *why* each of
+those entries was decided locally — the client's socket genuinely timing
+out, the plane answering a 503 that specifically names its own state as
+the problem, the plane answering the same shape of 503 for some other
+reason, or anything else — and `reason` names the majority cause among
+them.
+
+`entries_window` is history; `mode` and `reason` describe what is failing
+now. The two part ways after a state outage: the moment the plane answers a
+session entry again, or a heartbeat says its state is back, the entries the
+outage forced a worker to decide locally stop counting toward `"degraded"`,
+so `reason` clears within one heartbeat of recovery instead of lingering
+for most of a minute. They stay in `entries_window` and
+`entries_local_share`, so you can still see how much of the last minute was
+decided locally. Timeouts and other failures are not cleared this way: one
+good answer does not prove a slow plane is fast again, so those keep the
+window's one-minute smoothing.
+
+A plane's 503 carries `{"error": "plane_unavailable"}` for *any* failure it
+cannot answer normally — a saturated database connection pool, a bug in a
+request handler, a failed write, as well as its own state store being
+unreachable — and, only for that last, specific case, an additional
+`"cause": "fleet_state_unavailable"`. The two are never conflated: a plane
+that is merely overloaded, with its state store perfectly healthy, must
+never be reported as having lost its fleet state.
+
+Every value `reason` can take:
+
+| `reason` | When it fires | What it means |
+|---|---|---|
+| `"heartbeat failures"` | 3 consecutive calls of any kind have failed | the link itself has stopped answering anything — wins over the others when more than one applies, since it is the most urgent fact |
+| `"fleet state unavailable"` | the last heartbeat carried `fleet_state: "unavailable"`, **or** the entry window's own majority local cause is a 503 naming `"cause": "fleet_state_unavailable"` | the plane is answering, but its own state store (Redis) is not — a halt, a latch or a fleet budget cannot currently be trusted, so nothing is enforced from a guess. The same fact, whichever door it was learned at: a heartbeat is patient and usually notices first, but a session entry that gets the same 503 while a stale heartbeat has not yet caught up must read the same way, not the misleading `"entry timeouts"` below |
+| `"entry timeouts"` | the entry window's majority local cause is a genuine client-side timeout | the plane is healthy enough to answer the slow, patient heartbeat but too loaded (or too far) to answer the fast, impatient entry call within `control_plane_timeout_s` |
+| `"plane unavailable"` | the entry window's majority local cause is a 503 shaped like plane loss but naming no specific cause | the plane answered, but could not help — a saturated connection pool, a handler bug, or anything else it catches generically. Never a state outage: the plane's own state store may be perfectly healthy |
+| `"plane errors"` | the entry window's majority local cause is neither of the above | a connection refused, a malformed reply, or any other failure that never got a plane-shaped answer at all |
+| `None` | none of the above | the link is healthy |
+
+`coverage()["fleet"]` carries the two most common cases in one sentence:
+`"connected"`, `"connected; 40% of entries in the last minute were
+decided locally (plane timeouts)"` for `"entry timeouts"`, `"connected;
+fleet state unavailable: deciding locally, last halt and posture held"` for
+`"fleet state unavailable"`, or the same honest `"local protection active;
+fleet coordination: not connected"` you would see with no plane for anything
+else (`"heartbeat failures"`, `"plane unavailable"` and `"plane errors"`
+included) — so a health check or a startup log does not have to read
+`plane_status()` separately to catch the difference between "fine" and
+"quietly local."
+`coverage()["fleet_pending"]` rides alongside it: how many state and
+telemetry records this worker still has queued to post, so a backlog is
+visible in the same place, not just in the fleet string.
+
+A plane can also lose its own state — the store every halt, latch and
+fleet budget it enforces centrally lives in, most often because its Redis
+went away — without losing the link to you at all: it keeps answering
+every heartbeat, on time, it simply cannot say anything true about the
+halt any more. A plane in that position never answers from a default
+instead; the honest, safe answer would look identical to "no halt," and a
+kill switch that can be silently un-pressed by an infrastructure outage on
+the plane's side is not a kill switch. So it says so — `plane_status().mode`
+reads `"degraded"` with `reason == "fleet state unavailable"`, and
+`coverage()["fleet"]` reads `"connected; fleet state unavailable: deciding
+locally, last halt and posture held"` — and your worker keeps whatever
+halt and posture it already had rather than reading their absence as a
+lift. From there `stale_halt` decides what happens next, exactly as it
+does for a lost link: `"release"` (the default) lets a held halt lapse
+once the plane's state has been unavailable for as long as a dead link
+would need to before it does the same, and `"hold"` keeps enforcing it for
+as long as the plane's state stays lost. `hold` exists for this case as
+much as for a dead link: if your incident *is* the runaway spend a halt is
+stopping, a plane that cannot currently vouch for its own state is not a
+reason to let the fleet start spending again.
+
+Usage is never lost across the same outage, either. The plane's own store
+split runs one level deeper than the halt: Redis holds the fast, expiring
+state above, but the durable half — Postgres, holding your history, org
+records and monthly usage — is a separate store the plane also depends on,
+and it usually stays up through exactly this kind of outage. While Redis is
+unreachable the plane keeps metering what your fleet does (the events and
+sessions your plan is measured against) by journaling each count to
+Postgres instead of losing it; once Redis comes back the journal is
+replayed into it automatically, and even a plane that restarts partway
+through the outage picks the journal back up rather than starting over.
+Nothing on your side changes for this — it costs your fleet nothing and
+needs no configuration — but it is why a Redis outage on the plane's side
+never shows up as a gap in your usage later.
+
+Nothing about any of this changes what you are protected by. Every
+detector, latch, cap and policy you configured keeps running on this
+worker's own numbers, exactly as it does with no plane at all — a local
+decision is never a *wrong* decision, only one this one worker made on its
+own rather than with the rest of the fleet's knowledge folded in.
+
 The control plane is Runbound AI's hosted product, currently in early access
 (see [pricing](https://runbound.co/pricing)); a self-hosted deployment
 of the plane is available as an Enterprise option, licensed separately
@@ -331,6 +448,21 @@ rather than built from this repository. The SDK half above is the free,
 MIT-licensed part of fleet mode, and it works against any server that
 speaks those six endpoints — a real property, not a sales pitch: nothing in
 the SDK cares whether the plane behind them is ours.
+
+## How far one plane goes
+
+Measured, not estimated, with 700 workers heartbeating and a live entry
+stream running together, in the same window, repeated to check it holds:
+a self-hosted plane on one 8-core machine serves that combined load with
+`/v1/enter` p99 under 50 ms, its default Postgres and Redis included. Both
+grow with usage in ways worth planning for rather than being surprised
+by — Redis holds roughly 1 KB per live session key, and Postgres roughly
+1 KB per session close — and a plane under a much larger burst than its
+steady traffic can, like any database-backed service, need a restart to
+recover its full throughput rather than just time. None of this touches
+what a worker sees with no plane at all, or what a plane loss falls back
+to (`on_plane_loss`, above): those stay local and instant regardless of
+the plane's own load.
 
 A human can run and watch the fleet too, wherever the plane is deployed: it
 serves an admin dashboard at `/` — fleet overview, sessions, the

@@ -227,10 +227,10 @@ def test_a_cheaper_call_fits_right_after_a_refusal():
     )  # fits, no raise
 
 
-# --- alerted once per session -------------------------------------------
+# --- every refusal is recorded -------------------------------------------
 
 
-def test_an_admission_refusal_is_alerted_once_per_session():
+def test_every_admission_refusal_is_recorded():
     config = GuardrailConfig(budget_usd=0.0001, budget_admission=True)
     observer = RecordingObserver()
     eng = engine(config, observers=[observer])
@@ -240,8 +240,8 @@ def test_an_admission_refusal_is_alerted_once_per_session():
         with pytest.raises(GuardrailTripped):
             eng.admit(session, "openai@default", "gpt-4o", {"messages": messages(4000)})
 
-    assert len(observer.anomalies) == 1  # refused every time; alerted once
-    assert observer.anomalies[0][1] == "door"
+    assert len(observer.anomalies) == 3  # refused every time; each one is evidence
+    assert {reacted for _anomaly, reacted in observer.anomalies} == {"door"}
 
 
 def test_an_admission_refusal_and_a_postcall_budget_trip_both_alert():

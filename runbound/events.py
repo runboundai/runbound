@@ -101,6 +101,7 @@ class Event:
     priced: str | None = None  # "estimated" when cost_usd came from the unpriced fallback
     partial: bool = False  # an llm_call reported by an abandoned-stream finalizer
     tokens_estimated: bool = False  # a partial call's tokens_out is chars/4, not real usage
+    provider: str | None = None  # the endpoint label, "openai@api.openai.com"; model calls only
 
 
 @dataclass(frozen=True)

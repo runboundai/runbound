@@ -5,6 +5,126 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.5.0] - 2026-09-30
+
+### Added
+
+- **A session the spike ladder stopped comes back, and says so.** When its
+  cooldown is served, the session records its return (a posture change back
+  to full), and the key is let back in across the fleet, on every worker,
+  rather than only on the worker that closed it.
+- **What changed, and how posture moved, now travel as records.**
+  `runbound.events()` gains a `"runtime_change"` record whenever a value this
+  process runs on moves from one value to another: the `model` a call used,
+  the `provider` it went to, and the `policy_version` or `controls_version`
+  a control plane delivered. Only on a real change: never on the first value
+  seen and never while it stays the same. Posture records gain `"from"` (the
+  posture they replaced), `"scope"` (`"session"` or `"process"`), `"level"`
+  (the spike ladder's rung, when the ladder moved it) and, for a session, its
+  `"key"`; a session narrowed by the ladder, by hand, by the soft budget line
+  or lifted by `runbound.clear()` is now recorded, not only the process's own
+  posture. With a control plane connected, both kinds are sent to it on a
+  priority lane, with the session key as a hash and never raw; a posture
+  change is sent even with `export_events=False`, like a trip, while a
+  runtime change is telemetry and follows that setting. No record carries a
+  prompt, a reply or a tool argument.
+- **Every model call's event names its provider.** `Event` and its wire form
+  gain `provider`, the endpoint label the call went to
+  (`"openai@api.openai.com"`), from every wrapped client, `record_call()` and
+  `@runbound.llm`.
+- **A partial outage now reads as one.** `PlaneStatus` gains `entries_window`
+  (`{"plane", "cache", "local"}`, a trailing one-minute count of how session
+  entries were actually decided), `entries_local_share` (the local share of
+  that window) and `reason`. A plane that answers every heartbeat but keeps
+  missing `control_plane_timeout_s` on the hot `/v1/enter` path — the
+  previously invisible case, since one entry timeout is a single failure and
+  the next successful heartbeat reset the old count before three ever landed
+  in a row — now degrades `mode` on its own once the window holds enough
+  entries to mean something, with `reason="entry timeouts"`. The older,
+  coarser case (the link has stopped answering anything at all) still
+  degrades the same way and now says so: `reason="heartbeat failures"`.
+  `coverage()["fleet"]` carries the same distinction in one sentence —
+  `"connected"`, `"connected; N% of entries in the last minute were decided
+  locally (plane timeouts)"`, or the existing `"local protection active;
+  fleet coordination: not connected"` — and `coverage()["fleet_pending"]`
+  reports the exporter's own queued-record count alongside it. The
+  heartbeat now carries this worker's own local share too, so a connected
+  console can show how many of a service's workers are deciding locally
+  right now. See the "What connected means" section of the fleet mode guide.
+- **A plane that has lost its own state says so, instead of answering as if
+  nothing were wrong.** A hello reply can now carry `fleet_state:
+  "unavailable"` — the plane is answering (the link is fine) but cannot
+  currently read the store every halt, latch and fleet budget lives in.
+  `RemoteState` treats this as plane loss for state, not for the link: a
+  halt, its posture and the policy/Controls versions are all held exactly
+  as they were rather than read from the reply's own "nothing to report"
+  defaults, so an absent halt is never mistaken for a lifted one.
+  `plane_status().mode` reads `"degraded"` with a third `reason`,
+  `"fleet state unavailable"`, within one heartbeat; `coverage()["fleet"]`
+  reads `"connected; fleet state unavailable: deciding locally, last halt
+  and posture held"`. `stale_halt` applies the same as it always has, except
+  its window now starts at the moment fleet state was first found
+  unavailable rather than at the last successful heartbeat — a dead plane's
+  own store outage does not stop it from answering its heartbeats, so the
+  old clock would never let a held halt go stale under `stale_halt=
+  "release"`. When the state comes back — a heartbeat says so, or the plane
+  answers a session entry again — `reason` clears within one heartbeat: the
+  entries the outage forced a worker to decide locally stay in
+  `entries_window` as history but stop counting toward `"degraded"`.
+  Timeouts are not cleared this way and keep the window's one-minute
+  smoothing. See the new paragraph in the fleet mode guide and the updated
+  `stale_halt` row in the reactions reference.
+- **The entry window now records *why*, not just that, an entry was decided
+  locally.** `entries_window` gains `local_causes` —
+  `{"timeout", "plane_loss", "plane_unavailable", "error"}` — a breakdown
+  of the existing `"local"` count by cause: a genuine client-side timeout,
+  a 503 the plane answered because its own state store is specifically
+  unreachable, the same shape of 503 for any other reason the plane could
+  not help (a saturated connection pool, a handler bug — never a state
+  outage), or anything else. The three existing counts (`"plane"`,
+  `"cache"`, `"local"`) are unchanged. When the entry window is what
+  degrades `mode` (as opposed to the older consecutive-failure count, or a
+  hello's `fleet_state: "unavailable"`), `reason` now names the *majority*
+  cause among that window's local entries instead of always saying
+  `"entry timeouts"` — a genuine state outage answers `/v1/enter` with a
+  503 naming that specifically, and for up to a minute after the outage
+  recovers, the window still holds those entries; they now read `"fleet
+  state unavailable"`, the same string the hello-based signal already
+  uses, rather than the misleading `"entry timeouts"`. Two new reason
+  strings: `"plane unavailable"` for a 503 shaped like plane loss but
+  naming no specific cause — a plane that is merely overloaded, with its
+  state store perfectly healthy, must never be reported as having lost
+  its fleet state — and `"plane errors"` for anything else (a connection
+  refused, a malformed reply). See the reason table in the fleet mode
+  guide.
+
+### Changed
+
+- **Every refusal is recorded and exported, not only the first in a
+  session.** A tool or call the SDK turns away (a posture or capability
+  denial, a tool-policy block, a budget or envelope door) is now its own
+  anomaly and `Decision` in `runbound.events()`, `runbound.decisions()` and
+  the export, every time. Before, the second refusal in a session was dropped
+  as a repeat, even one of a different tool, so a call refused a refund and
+  then a transfer showed only the refund. To keep a runaway loop from
+  flooding the record, identical refusals are recorded one by one up to 100
+  per session, rule and tool (`runbound.engine.REFUSAL_RECORD_CAP`); past
+  that they are counted, and one summary anomaly per rule and tool, carrying
+  `details["suppressed_count"]` (how many were not recorded since the last
+  summary), is reported when the session block exits, ahead of the session's
+  exit record. Two rules or two tools refused at once never hide each other.
+  Turning an already-stopped key away at the door is still counted per knock,
+  as before, and the loop detector's once-per-session notification under
+  `on_loop="throttle"` and `"escalate"` is unchanged.
+- **A refusal is exported even when the plan's telemetry cap is reached.** A
+  control plane whose monthly event allowance is used up closes the telemetry
+  lanes; it no longer silences anomalies that record a refusal
+  (`reacted` of `"raise"`, `"blocked"` or `"door"`), which are evidence that
+  something was stopped, not telemetry. Everything else on those lanes stays
+  closed, and `export_events=False` still turns all of it off.
+
 ## [0.4.0] - 2026-09-23
 
 Every runtime control held to the dominant version of itself. Additive

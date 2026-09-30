@@ -7,6 +7,7 @@ from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
+from . import local_events
 from .events import Anomaly, Event
 
 _LOG = logging.getLogger("runbound")
@@ -278,6 +279,15 @@ class SessionState:
     ``latch_ttl_override`` is this session's own expiry for that latch, which
     beats ``latch_ttl_seconds`` when set: it is how a rollover cooldown is
     served.
+    ``returns_from`` names the posture whose stop this session is the cooldown
+    for, on a session the ladder started after closing its predecessor or that
+    another worker's rollover has latched, and is ``None`` on every other
+    session (a budget or wall latch has an expiry of its own but no stop to
+    return from). It is what makes serving the cooldown a return.
+    ``return_strikes`` is the strike that rollover carried, and
+    ``returned_strikes`` the highest strike this session has already recorded a
+    return for, so one rollover is recorded once however often the plane
+    repeats it.
 
     ``spike_baseline`` is the ``(median_duration, median_output)`` the spike
     detector last trusted, written by it under ``self.lock``. It is the
@@ -437,6 +447,9 @@ class SessionState:
         self.spike_allowance_start: int | None = None
         self.strikes = strikes
         self.latch_ttl_override = latch_ttl_override
+        self.returns_from: str | None = None
+        self.return_strikes = 0
+        self.returned_strikes = 0
         self.spike_trigger: dict | None = spike_trigger
         self.spike_limited_at: float | None = spike_limited_at
         self.spike_closed_at: float | None = spike_closed_at
@@ -507,7 +520,9 @@ class SessionState:
         """Put this session back to ``full``, whatever narrowed it."""
         self._exit_posture()
 
-    def _enter_posture(self, name: str, reason: object, source: str) -> bool:
+    def _enter_posture(
+        self, name: str, reason: object, source: str, level: str | None = None
+    ) -> bool:
         """Narrow to ``name`` from ``source``. True if this call changed the state.
 
         Three rules, in this order. A source may always replace **its own**
@@ -515,6 +530,10 @@ class SessionState:
         ladder going from limited to closed. ``manual`` replaces an automatic
         entry. An automatic source never replaces a *different* source's entry,
         manual or automatic, so two drivers cannot fight over one session.
+
+        Every real move is recorded as a session-scoped posture transition,
+        with the posture it replaced and, from the ladder, the rung's name in
+        ``level`` (see :func:`runbound.local_events.record_posture`).
         """
         state = make_posture_state(name, reason, source)
         with self.lock:
@@ -524,20 +543,68 @@ class SessionState:
             if current is not None and current.source == source and current.name == name:
                 return False  # nothing moved; do not restamp the reason
             self.posture = state
+            self._record_posture(source, name, state.reason, current, level)
             return True
 
-    def _exit_posture(self, source: str | None = None) -> bool:
+    def _exit_posture(
+        self,
+        source: str | None = None,
+        reason: str = "exit_safe_mode",
+        level: str | None = None,
+    ) -> bool:
         """Go back to ``full``. With ``source``, only that source's entry is lifted.
 
         True if this call changed the state. ``source=None`` is the manual exit
-        and lifts anything.
+        and lifts anything. A real move is recorded like :meth:`_enter_posture`'s,
+        under the source of the entry it lifted.
         """
         with self.lock:
             current = self.posture
             if current is None or (source is not None and current.source != source):
                 return False
             self.posture = None
+            self._record_posture(current.source, "full", reason, current, level)
             return True
+
+    def record_return(self, previous: str, source: str, reason: str, level: str | None) -> None:
+        """Record this session coming back from ``previous`` to the posture it
+        holds now, for a move that happened by replacing the session rather
+        than lifting its posture (a stopped session's cooldown served).
+
+        ``to`` is read from the session, not assumed: a session that holds no
+        posture is at ``"full"``.
+        """
+        with self.lock:
+            held = self.posture
+            self._record_posture(
+                source, "full" if held is None else held.name, reason, previous, level
+            )
+
+    def _record_posture(
+        self,
+        source: str,
+        name: str,
+        reason: object,
+        previous: "PostureState | str | None",
+        level: str | None,
+    ) -> None:
+        """Record one session posture move. Never raises: a record that
+        cannot be written must not undo or block the move itself.
+
+        ``previous`` is the posture replaced: its state, or just its name."""
+        try:
+            local_events.record_posture(
+                source,
+                name,
+                reason,
+                self.session_id,
+                previous=previous if isinstance(previous, str) or previous is None else previous.name,
+                scope="session",
+                level=level,
+                key=self.key,
+            )
+        except Exception:
+            _LOG.warning("runbound could not record a posture change; continuing", exc_info=True)
 
     def hold(self, resource: str, amount: float) -> Hold:
         """Reserve ``amount`` of ``resource`` for one call's lifetime.

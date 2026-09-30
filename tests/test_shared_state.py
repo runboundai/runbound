@@ -20,6 +20,7 @@ from runbound.plane_types import EntryDecision, ExitDelta, HelloReply, key_hash
 from runbound.shared import (
     DEGRADE_AFTER,
     DECISION_TTL_S,
+    ENTRY_WINDOW_S,
     RETRY_EVERY_S,
     STALE_HALT_S,
     LocalState,
@@ -1266,3 +1267,231 @@ def test_the_hello_payload_fails_open_when_coverage_cannot_be_read(monkeypatch):
     assert payload["circuits"] == {}
     assert isinstance(payload["sdk_version"], str)
     assert payload["active"] == 0
+
+
+# --- the rolling one-minute window over entry outcomes -----------------------
+#
+# A link can answer every heartbeat and still be having most session entries
+# decided locally: a plane slow enough to miss control_plane_timeout_s on the
+# hot ``/v1/enter`` path, but fast enough to answer the background heartbeat.
+# The consecutive-failure count never catches that, because a heartbeat's own
+# success resets it long before three entry timeouts land in a row. This
+# window is a second, independent signal: how the last minute's entries were
+# actually decided -- by the plane, from the cache, or locally -- so a
+# customer watching plane_status() or coverage() sees the truth even while
+# every heartbeat keeps succeeding.
+
+
+def test_the_entry_window_starts_at_zero():
+    shared = remote(FakePlane(), MovableClock())
+
+    status = shared.status()
+
+    assert status.entries_window == {
+        "plane": 0, "cache": 0, "local": 0,
+        "local_causes": {"timeout": 0, "plane_loss": 0, "plane_unavailable": 0, "error": 0},
+    }
+    assert status.entries_local_share == 0.0
+
+
+def test_a_plane_answer_is_counted_in_the_window():
+    plane = FakePlane(decision=EntryDecision())
+    shared = remote(plane, MovableClock())
+
+    shared.enter("user-9", state(), shared._config)
+
+    assert shared.status().entries_window == {
+        "plane": 1, "cache": 0, "local": 0,
+        "local_causes": {"timeout": 0, "plane_loss": 0, "plane_unavailable": 0, "error": 0},
+    }
+
+
+def test_a_cache_hit_is_counted_separately_from_a_plane_answer():
+    clock = MovableClock()
+    plane = FakePlane(decision=EntryDecision())
+    shared = remote(plane, clock)
+
+    shared.enter("user-9", state(), shared._config)  # a real plane answer
+    shared.enter("user-9", state(), shared._config)  # served from the cache
+
+    assert shared.status().entries_window == {
+        "plane": 1, "cache": 1, "local": 0,
+        "local_causes": {"timeout": 0, "plane_loss": 0, "plane_unavailable": 0, "error": 0},
+    }
+
+
+def test_a_timed_out_entry_is_counted_as_local():
+    plane = FakePlane(ok=False)
+    shared = remote(plane, MovableClock())
+
+    shared.enter("user-9", state(), shared._config)
+
+    assert shared.status().entries_window == {
+        "plane": 0, "cache": 0, "local": 1,
+        "local_causes": {"timeout": 1, "plane_loss": 0, "plane_unavailable": 0, "error": 0},
+    }
+
+
+def test_a_skipped_call_on_an_already_degraded_link_is_also_local():
+    """``_may_call`` returning False (the degraded-link retry gate) never
+    opens a socket, but the entry is still decided on this worker's own
+    numbers -- it belongs in the same bucket as a fresh timeout."""
+    clock = MovableClock()
+    plane = FakePlane(ok=False)
+    shared = remote(plane, clock)
+    for _ in range(DEGRADE_AFTER):
+        shared.enter("user-9", state(), shared._config)  # spends the real attempts
+
+    shared.enter("user-9", state(), shared._config)  # answered with no call at all
+
+    assert plane.names().count("enter") == DEGRADE_AFTER
+    assert shared.status().entries_window["local"] == DEGRADE_AFTER + 1
+
+
+@pytest.mark.parametrize(
+    "local, other, expect_degraded",
+    [
+        (9, 0, False),   # under the 10-entry floor: never degrades, however
+                         # lopsided the share is
+        (5, 5, False),   # exactly at the 0.5 boundary: not "exceeds"
+        (6, 4, True),    # just over the boundary: degrades
+        (0, 10, False),  # a healthy window: no share problem at all
+    ],
+)
+def test_the_window_arithmetic_is_table_tested(local, other, expect_degraded):
+    """Isolates the window's own arithmetic from the older consecutive-
+    failure mechanism: a heartbeat between every local outcome keeps
+    resetting the failure count, exactly as a real fleet's does, so only
+    the window decides whether this case degrades."""
+    clock = MovableClock()
+    plane = FakePlane(decision=EntryDecision())
+    shared = remote(plane, clock)
+
+    for i in range(other):
+        shared.enter(f"plane-{i}", state(key=f"plane-{i}"), shared._config)
+    plane.ok = False
+    for i in range(local):
+        shared.apply_hello(HelloReply())
+        shared.enter(f"local-{i}", state(key=f"local-{i}"), shared._config)
+
+    status = shared.status()
+    assert status.entries_window == {
+        "plane": other, "cache": 0, "local": local,
+        "local_causes": {"timeout": local, "plane_loss": 0, "plane_unavailable": 0, "error": 0},
+    }
+    if expect_degraded:
+        assert status.mode == "degraded"
+        assert status.reason == "entry timeouts"
+    else:
+        assert status.mode == "connected"
+        assert status.reason is None
+
+
+def test_an_entry_ages_out_of_the_window_after_a_minute():
+    clock = MovableClock()
+    plane = FakePlane(ok=False)
+    shared = remote(plane, clock)
+
+    shared.enter("user-9", state(), shared._config)
+    assert shared.status().entries_window["local"] == 1
+
+    clock.advance(ENTRY_WINDOW_S - 0.01)
+    assert shared.status().entries_window["local"] == 1  # not stale yet
+
+    clock.advance(0.02)
+    assert shared.status().entries_window["local"] == 0  # a minute has passed
+
+
+def test_a_partial_outage_degrades_the_link_with_an_entry_timeouts_reason():
+    """The blind spot this window closes: the heartbeat keeps succeeding
+    (so the older consecutive-failure count never reaches DEGRADE_AFTER),
+    while every /v1/enter call sleeps past the timeout and is answered
+    locally instead."""
+    clock = MovableClock()
+    plane = FakePlane(decision=EntryDecision())
+    plane.delay_s = plane.timeout_s + 0.05  # every enter() call times out
+    shared = remote(plane, clock)
+
+    for i in range(12):
+        shared.apply_hello(HelloReply())  # the heartbeat keeps succeeding
+        shared.enter(f"user-{i}", state(key=f"user-{i}"), shared._config)
+
+    status = shared.status()
+    assert status.mode == "degraded"
+    assert status.reason == "entry timeouts"
+    assert status.consecutive_failures < DEGRADE_AFTER
+    assert status.entries_local_share > 0.5
+    assert status.entries_window["local"] >= 10
+
+    # Recovers once /v1/enter answers again -- the window is dominated by
+    # good answers again, well before the bad ones would even age out.
+    plane.delay_s = 0.0
+    shared.apply_hello(HelloReply())
+    for i in range(20):
+        shared.enter(f"user-recovered-{i}", state(key=f"user-recovered-{i}"), shared._config)
+
+    recovered = shared.status()
+    assert recovered.mode == "connected"
+    assert recovered.reason is None
+
+
+def test_the_total_outage_reason_is_heartbeat_failures():
+    """Pins the total-outage behaviour already known to be correct: three
+    failures in a row (the heartbeat included) degrade the link the old
+    way, and the new ``reason`` field names that path too."""
+    plane = FakePlane(ok=False)
+    shared = remote(plane, MovableClock())
+
+    for _ in range(DEGRADE_AFTER):
+        shared.enter("user-9", state(), shared._config)
+
+    status = shared.status()
+    assert status.mode == "degraded"
+    assert status.reason == "heartbeat failures"
+
+
+# --- the local share on the heartbeat -----------------------------------------
+
+
+def test_the_hello_payload_omits_the_local_share_with_too_few_entries():
+    plane = FakePlane(decision=EntryDecision())
+    shared = remote(plane, MovableClock())
+
+    for i in range(3):
+        shared.enter(f"user-{i}", state(key=f"user-{i}"), shared._config)
+
+    assert "entries_local_share" not in shared._hello_payload()
+
+
+def test_the_hello_payload_carries_the_local_share_once_the_window_fills():
+    clock = MovableClock()
+    plane = FakePlane(decision=EntryDecision())
+    shared = remote(plane, clock)
+    for i in range(6):
+        shared.enter(f"plane-{i}", state(key=f"plane-{i}"), shared._config)
+    plane.ok = False
+    for i in range(4):
+        shared.enter(f"local-{i}", state(key=f"local-{i}"), shared._config)
+
+    assert shared._hello_payload()["entries_local_share"] == pytest.approx(0.4)
+
+
+# --- the exporter's pending count, read the way plane_status() is -----------
+
+
+def test_local_state_has_no_pending_events():
+    assert LocalState().pending_events() is None
+
+
+def test_remote_state_without_an_exporter_has_no_pending_events():
+    shared = remote(FakePlane(), MovableClock(), exporter=None)
+
+    assert shared.pending_events() is None
+
+
+def test_remote_state_reports_the_exporters_pending_count():
+    exporter = RecordingExporter()
+    exporter.pending = 7
+    shared = remote(FakePlane(), MovableClock(), exporter=exporter)
+
+    assert shared.pending_events() == 7

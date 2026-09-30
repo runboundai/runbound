@@ -198,7 +198,7 @@ def _finish(
     )
     if stream is not None:
         return stream
-    _report_call(report, response, kwargs, started_at, hooks)
+    _report_call(report, response, kwargs, started_at, hooks, label)
     call_success(hooks, label, _elapsed(started_at))
     report_quota(hooks, label, response)
     emit_tool_requests(hooks, read_tool_requests(response))
@@ -206,9 +206,15 @@ def _finish(
 
 
 def _report_call(
-    report: Report, response: Any, request_kwargs: dict, started_at: float, hooks: Hooks
+    report: Report,
+    response: Any,
+    request_kwargs: dict,
+    started_at: float,
+    hooks: Hooks,
+    provider: str | None = None,
 ) -> None:
-    """Read a finished non-streamed call and hand it to ``report``."""
+    """Read a finished non-streamed call and hand it to ``report``, with the
+    provider label it went to."""
     model, tokens_in, tokens_out = read_usage(response, request_kwargs)
     if not (tokens_in or tokens_out) and estimating(hooks):
         tokens_in = estimated_tokens(_request_chars(request_kwargs))
@@ -224,6 +230,7 @@ def _report_call(
         read_reasoning(response),
         read_cached(response),
         read_cache_write(response),
+        provider=provider,
     )
 
 

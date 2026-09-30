@@ -115,6 +115,7 @@ def test_coverage_before_init_reports_zeros(monkeypatch):
         "refusals": "default",  # no plane/local profile before init()
         "can_stop": None,  # unknown before init()
         "fleet": "local protection active; fleet coordination: not connected",
+        "fleet_pending": None,  # no plane before init()
     }
 
 
@@ -466,3 +467,61 @@ def test_coverage_fleet_with_a_token_and_an_answering_plane_says_connected(monke
     )
 
     assert runbound.coverage()["fleet"] == "connected"
+
+
+def test_coverage_fleet_names_the_local_share_during_a_partial_outage(monkeypatch):
+    """A plane that answers every heartbeat but keeps missing the entry
+    path is not "connected", and it is not the honest-but-generic "not
+    connected" notice either -- it gets its own sentence naming the share."""
+    from runbound import shared as shared_module
+    from test_shared_state import FakePlane
+
+    fake = FakePlane()
+
+    def factory(url, token, service, worker_id, timeout_s=0.15, **kwargs):
+        return fake
+
+    monkeypatch.setattr(shared_module, "PlaneClient", factory)
+    runbound.init(
+        control_plane_url="https://plane.example",
+        token="k",
+        auto_wrap=False,
+        export_events=False,
+    )
+
+    shared = api._SHARED
+    for _ in range(6):
+        shared._record_entry_outcome("local")
+    for _ in range(4):
+        shared._record_entry_outcome("plane")
+
+    assert runbound.coverage()["fleet"] == (
+        "connected; 60% of entries in the last minute were decided locally "
+        "(plane timeouts)"
+    )
+
+
+def test_coverage_fleet_pending_reports_the_exporters_backlog(monkeypatch):
+    from runbound import shared as shared_module
+    from runbound.plane_types import ExitDelta
+    from test_shared_state import FakePlane
+
+    fake = FakePlane()
+
+    def factory(url, token, service, worker_id, timeout_s=0.15, **kwargs):
+        return fake
+
+    monkeypatch.setattr(shared_module, "PlaneClient", factory)
+    runbound.init(control_plane_url="https://plane.example", token="k", auto_wrap=False)
+
+    shared = api._SHARED
+    shared._exporter.on_exit(ExitDelta(key_hash="x"))
+    shared._exporter.on_exit(ExitDelta(key_hash="y"))
+
+    assert runbound.coverage()["fleet_pending"] == 2
+
+
+def test_coverage_fleet_pending_is_none_without_a_plane():
+    runbound.init(auto_wrap=False)
+
+    assert runbound.coverage()["fleet_pending"] is None

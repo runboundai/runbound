@@ -70,6 +70,46 @@
         "tool": "golden_financial_tool",
         "verdict": "deny"
       }
+    ],
+    [
+      "safe_mode",
+      "warn",
+      "blocked",
+      {
+        "denied_class": "financial",
+        "effects": [
+          "financial"
+        ],
+        "key": null,
+        "key_hash": null,
+        "posture": "restricted",
+        "reason": "behaviour golden: incident drill",
+        "rule": "safe_mode",
+        "source": "manual",
+        "tags": {},
+        "tool": "golden_both_tool",
+        "verdict": "deny"
+      }
+    ],
+    [
+      "safe_mode",
+      "warn",
+      "blocked",
+      {
+        "denied_class": "financial",
+        "effects": [
+          "financial"
+        ],
+        "key": null,
+        "key_hash": null,
+        "posture": "restricted",
+        "reason": "behaviour golden: incident drill",
+        "rule": "safe_mode",
+        "source": "manual",
+        "tags": {},
+        "tool": "golden_both_tool",
+        "verdict": "deny"
+      }
     ]
   ],
   "budget": {

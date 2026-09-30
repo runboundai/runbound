@@ -73,6 +73,8 @@ REQUIRED_IDS = (
     "fleet-init",
     "plane-unreachable",
     "self-hosted-init",
+    "session-per-caller",
+    "tool-rule-on-decorator",
 )
 
 _START_PREFIX = "# docs: "

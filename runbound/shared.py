@@ -31,12 +31,12 @@ leave a fleet stopped.
 import logging
 import threading
 import time
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 from typing import Any, Protocol
 
-from . import responses
+from . import local_events, responses
 from .export import Exporter
 from .plane import WARN_INTERVAL_S, PlaneClient, Poller, _PeriodicWarning, warn_periodically
 from .plane_types import (
@@ -71,6 +71,77 @@ RETRY_EVERY_S = 30.0
 #: heaviest thing the plane can say, so it is also the first thing we stop
 #: believing when the plane goes quiet: after this, the fleet runs again.
 STALE_HALT_S = 60.0
+
+#: How far back the session-entry window looks. A heartbeat can succeed
+#: throughout while most entries are actually being decided locally — a
+#: plane slow enough to miss ``control_plane_timeout_s`` on the hot path but
+#: fast enough to answer the background heartbeat — and the consecutive
+#: failure count above never catches that: one entry timeout is a single
+#: failure, and the next successful heartbeat resets it before three ever
+#: land in a row. This window is a second, independent signal: how the last
+#: minute's entries were actually decided.
+ENTRY_WINDOW_S = 60.0
+
+#: Fewest entries the window needs before its local share means anything —
+#: a fleet that has opened two sessions in the last minute is not "half
+#: local" because one of them fell back.
+ENTRY_WINDOW_MIN_ENTRIES = 10
+
+#: The local share above which the link is degraded even while heartbeats
+#: succeed — more entries decided on this worker's own numbers than by the
+#: plane and the cache combined.
+ENTRY_LOCAL_SHARE_THRESHOLD = 0.5
+
+#: The causes a "local" entry outcome can carry — why the plane could not
+#: answer this particular session entry. ``"timeout"`` is the client giving
+#: up quietly past ``control_plane_timeout_s`` (or the entry being skipped
+#: outright on an already-degraded link — see :meth:`RemoteState._may_call`);
+#: ``"plane_loss"`` is the plane naming
+#: :data:`~runbound.plane_types.FLEET_STATE_UNAVAILABLE_CAUSE` on its 503 —
+#: its own live store is unreachable, so it refuses to guess from defaults;
+#: ``"plane_unavailable"`` is the same 503 *shape* with no such cause — the
+#: plane answered but could not help for some other reason (a saturated
+#: connection pool, a handler bug, any other failure its own generic
+#: fail-open catches); ``"error"`` is everything else — a connection
+#: refused, a malformed reply, any failure that never got a plane-shaped
+#: answer at all. See :meth:`RemoteState._last_known_cause`.
+#:
+#: ``"plane_loss"`` and ``"plane_unavailable"`` look alike from the outside
+#: (both are the plane itself answering 503) and used to be indistinguishable
+#: on the wire — every 503 an SDK-path handler on the plane could produce
+#: carried the identical body, so a plane whose database was merely
+#: saturated read the same "fleet state unavailable" a real state outage
+#: would. The plane's ``cause`` field (additive; a plane one version
+#: behind this never sends it, and a body with no ``cause`` reads as
+#: ``"plane_unavailable"`` here, never ``"plane_loss"``) is what splits them.
+LOCAL_CAUSES = ("timeout", "plane_loss", "plane_unavailable", "error")
+
+#: One human sentence per :data:`LOCAL_CAUSES` entry, read by
+#: :meth:`RemoteState.status` when the entry window (not the older
+#: consecutive-failure count) is what degrades the link — see
+#: :meth:`RemoteState._window_reason`. ``"plane_loss"`` reads as the same
+#: ``"fleet state unavailable"`` string the hello-based signal uses:
+#: from the SDK's point of view a 503 naming that specific cause *is* the
+#: plane saying its state is unavailable, whether that is learned from the
+#: last heartbeat or from the entry call itself. ``"plane_unavailable"``
+#: and ``"error"`` are the two reasons this task adds — plain words in the
+#: same register as the other two, documented in
+#: ``docs/guides/fleet-mode.md``'s reason table.
+REASON_BY_LOCAL_CAUSE = {
+    "timeout": "entry timeouts",
+    "plane_loss": "fleet state unavailable",
+    "plane_unavailable": "plane unavailable",
+    "error": "plane errors",
+}
+
+#: The order ties break in when the entry window's local outcomes are split
+#: evenly across more than one cause: ``"plane_loss"`` first (the plane
+#: naming its own state as the problem is the most actionable fact to
+#: surface), then ``"plane_unavailable"`` (the plane still answered, just
+#: not with a specific cause), then ``"timeout"`` (a narrower,
+#: already-documented case), then ``"error"`` (the catch-all — no answer
+#: from the plane at all). See :meth:`RemoteState._window_reason`.
+LOCAL_CAUSE_TIE_BREAK = ("plane_loss", "plane_unavailable", "timeout", "error")
 
 #: Most keys the decision cache holds. Entries expire on their own; this is
 #: the ceiling for a process churning through keys faster than that.
@@ -195,6 +266,10 @@ class SharedState(Protocol):
     def status(self) -> PlaneStatus:  # pragma: no cover - protocol
         """Where the link to the plane stands, for a health endpoint."""
 
+    def pending_events(self) -> "int | None":  # pragma: no cover - protocol
+        """State/telemetry records still queued to post, or ``None``
+        without an exporter — see :class:`RemoteState`."""
+
     def fleet_status(self, key: str) -> dict | None:  # pragma: no cover - protocol
         """What the plane last said about one key, or ``None``."""
 
@@ -286,6 +361,10 @@ class LocalState:
         """``mode="local"`` — the honest answer for "no plane configured"."""
         return PlaneStatus(mode="local")
 
+    def pending_events(self) -> "int | None":
+        """A fleet of one has no exporter to queue anything in."""
+        return None
+
     def fleet_status(self, key: str) -> dict | None:
         """There is no fleet."""
         return None
@@ -333,6 +412,26 @@ class RemoteState:
         self._now = now
         self._lock = threading.Lock()
         self._cache: "OrderedDict[str, tuple[float, EntryDecision]]" = OrderedDict()
+        #: The trailing :data:`ENTRY_WINDOW_S` of session-entry outcomes,
+        #: oldest first — each a ``(timestamp, "plane" | "cache" | "local",
+        #: cause, seq)`` tuple. ``cause`` is ``None`` for ``"plane"``/``"cache"``
+        #: and one of :data:`LOCAL_CAUSES` for ``"local"`` — see
+        #: :meth:`_last_known_cause`. ``seq`` orders outcomes independently of
+        #: the clock, so "recorded before the plane answered again" never
+        #: depends on two timestamps differing. Written by
+        #: :meth:`_record_entry_outcome`, read (and pruned) by
+        #: :meth:`_entry_window_counts`. Under ``self._lock`` like every
+        #: other field here.
+        self._entry_outcomes: "deque[tuple[float, str, str | None, int]]" = deque()
+        self._entry_seq = 0
+        #: Local decisions caused by lost fleet state with a ``seq`` below
+        #: this stop counting toward a degraded link: the plane has since
+        #: answered an entry, or a heartbeat has said its state is back, so
+        #: that outage is over. They stay in :meth:`_entry_window_counts` —
+        #: the window reports what happened; ``status()`` reports what is
+        #: failing now. Timeouts and other errors are never superseded this
+        #: way: one good answer does not prove a slow plane is fast again.
+        self._state_loss_superseded_seq = 0
         self._failures = 0
         self._last_success: float | None = None
         self._last_attempt: float | None = None
@@ -379,6 +478,19 @@ class RemoteState:
         self._tools_sent_hash: str | None = None
         self._tools_pending_hash: str | None = None
         self.breaker: Any = None
+        #: Is the plane's own fleet state (its live store) currently
+        #: unavailable -- the last hello said so? Set and cleared only by
+        #: :meth:`apply_hello`, under ``self._lock``. While true, a halt,
+        #: its Narrow posture, the Controls-stated posture and the policy/
+        #: controls versions are held exactly as they were rather than
+        #: absorbed from the reply -- see :meth:`apply_hello`.
+        self._fleet_state_unavailable = False
+        #: Monotonic timestamp of the moment fleet state was *first* seen
+        #: unavailable in the current streak, or ``None`` while it is not.
+        #: This, not ``self._last_success`` (the link itself keeps
+        #: succeeding throughout), is what ``stale_halt`` measures a held
+        #: halt's staleness from — see :meth:`_staleness_clock_locked`.
+        self._state_unavailable_since: float | None = None
 
     # --- the customer's settings, read defensively ---------------------------
 
@@ -443,6 +555,7 @@ class RemoteState:
             digest = key_hash(key)
             cached = self._cached(digest)
             if cached is not None:
+                self._record_entry_outcome("cache")
                 return cached
             if self.limited:
                 # Not plane loss: the plane is answering fine, this worker is
@@ -450,11 +563,15 @@ class RemoteState:
                 # decide locally regardless of on_plane_loss — a customer who
                 # opted into "refuse" wants safety when the plane cannot be
                 # heard, not a fleet-wide outage because one plan limit was
-                # hit. Guarding continues unaffected either way.
+                # hit. Guarding continues unaffected either way. Not folded
+                # into the entry window either: that window is a health
+                # signal about the plane link, and a plan limit is neither
+                # a timeout nor an error.
                 return None
             if getattr(self._client, "key_state", None) == "invalid":
                 return self._invalid_key()
             if not self._may_call():
+                self._record_entry_outcome("local", cause=self._last_known_cause())
                 return self._plane_loss_refusal("degraded")
             payload = self._entry_payload(key, digest, state, config)
         except Exception:
@@ -466,11 +583,30 @@ class RemoteState:
                 exc_info=True,
             )
             return None
-        decision = self._attempt(lambda: self._client.enter(payload), "enter")
+        entry_kind: str | None = None
+
+        def call_plane() -> EntryDecision | None:
+            # Prefer enter_with_kind's own, synchronous answer over reading
+            # last_failure_kind back afterward (what _last_known_cause does,
+            # the fallback below): that shared attribute is whole-client, so
+            # a concurrent call on the same client -- the heartbeat, always,
+            # in practice -- can clear or overwrite it before this call's
+            # caller gets to look. A duck-typed client without the method
+            # (every test double outside this module) falls back to the old
+            # path unchanged.
+            nonlocal entry_kind
+            entering = getattr(self._client, "enter_with_kind", None)
+            if entering is None:
+                return self._client.enter(payload)
+            decision, entry_kind = entering(payload)
+            return decision
+
+        decision = self._attempt(call_plane, "enter")
         if decision is None:
-            with self._lock:
-                kind = self._last_failure_kind or "error"
-            return self._plane_loss_refusal(kind)
+            cause = entry_kind if entry_kind in LOCAL_CAUSES else self._last_known_cause()
+            self._record_entry_outcome("local", cause=cause)
+            return self._plane_loss_refusal(cause)
+        self._record_entry_outcome("plane")
         self._remember(digest, decision)
         self._absorb(decision)
         return decision
@@ -520,6 +656,40 @@ class RemoteState:
                 "details": {"reason": "plane_unreachable", "mode": mode},
             },
         )
+
+    def _last_known_cause(self) -> str:
+        """A best-effort guess at why the plane could not be reached, for
+        the one path in :meth:`enter` that has no call of its own to ask —
+        the link is already degraded, so nothing was attempted this time
+        (:meth:`_may_call` said no) — plus any duck-typed client that has
+        no :meth:`~runbound.plane.PlaneClient.enter_with_kind` at all.
+
+        :class:`~runbound.plane.PlaneClient` classifies its own failures
+        (``last_failure_kind``: ``"timeout"``, ``"error"`` or
+        ``"plane_loss"`` — the last for a 503 carrying the plane-loss body,
+        see its module docstring); read first, since it is the real client's
+        own, more specific answer. Whole-client state, though — a concurrent
+        call on the same client (the heartbeat, in practice) can already
+        have overwritten it by the time this reads it, which is exactly why
+        :meth:`enter` prefers ``enter_with_kind``'s own, race-free answer
+        for the one path that actually attempted a call this time and
+        reaches this only as its fallback. A duck-typed client that does
+        not track ``last_failure_kind`` at all (every test double in this
+        module's tests) falls back further, to this object's own coarser
+        record (:attr:`_last_failure_kind`, set by :meth:`_record` from
+        whether the call raised or merely returned ``None`` —
+        ``"error"``/``"timeout"`` respectively), and finally to ``"error"``
+        if nothing has failed yet at all — reachable only from the
+        already-degraded branch of :meth:`enter` on a link that somehow
+        never recorded a failure kind, which :meth:`_may_call` cannot
+        produce in practice (three real failures always run through
+        :meth:`_record` first).
+        """
+        with self._lock:
+            kind = self._last_failure_kind
+        client_kind = getattr(self._client, "last_failure_kind", None)
+        cause = client_kind or kind or "error"
+        return cause if cause in LOCAL_CAUSES else "error"
 
     def _entry_payload(self, key: str, digest: str, state: Any, config: Any) -> dict:
         """What one session entry tells the plane: who, where, how much so far."""
@@ -586,6 +756,103 @@ class RemoteState:
             self._cache.move_to_end(digest)
             while len(self._cache) > DECISION_CACHE_MAX:
                 self._cache.popitem(last=False)
+
+    # --- the rolling entry window -------------------------------------------
+
+    def _record_entry_outcome(self, outcome: str, cause: "str | None" = None) -> None:
+        """Fold one session-entry decision into the trailing window.
+
+        ``outcome`` is ``"plane"`` (a fresh answer over the network),
+        ``"cache"`` (a decision cache hit) or ``"local"`` (decided on this
+        worker's own numbers because the plane could not be asked, or did
+        not answer in time). ``cause`` is one of :data:`LOCAL_CAUSES` for a
+        ``"local"`` outcome — ``None`` (the default) for the other two, and
+        normalized to ``"error"`` if a caller passes anything else, so a bad
+        value never breaks the majority-cause arithmetic in
+        :meth:`_window_reason`. Never raises: a window this cannot update is
+        a diagnostic gap, not a reason to fail the entry it describes.
+        """
+        try:
+            now = self._now()
+            recorded = cause if cause in LOCAL_CAUSES else (None if cause is None else "error")
+            with self._lock:
+                self._entry_seq += 1
+                self._entry_outcomes.append((now, outcome, recorded, self._entry_seq))
+                if outcome == "plane":
+                    # A fresh answer needs the plane's own state, so any
+                    # state loss recorded before it has ended.
+                    self._state_loss_superseded_seq = self._entry_seq
+                self._prune_entry_window(now)
+        except Exception:
+            _LOG.debug("runbound: could not record an entry outcome", exc_info=True)
+
+    def _prune_entry_window(self, now: float) -> None:
+        """Drop outcomes older than :data:`ENTRY_WINDOW_S`. Caller holds ``self._lock``."""
+        window = self._entry_outcomes
+        while window and now - window[0][0] >= ENTRY_WINDOW_S:
+            window.popleft()
+
+    def _entry_window_counts(self) -> dict:
+        """``{"plane": n, "cache": n, "local": n, "local_causes": {...}}``
+        over the live window.
+
+        The three top-level counts are unchanged from before this method
+        gained ``local_causes`` — every existing reader of them sees the
+        same numbers it always did. ``local_causes`` has one zero-filled
+        entry per :data:`LOCAL_CAUSES` (``"timeout"``, ``"plane_loss"``,
+        ``"plane_unavailable"``, ``"error"``), so a caller never has to
+        guard a missing key, and it always sums to the top-level
+        ``"local"`` count.
+
+        Pruned on read as well as on write, so a process that has gone idle
+        for a while does not keep reporting stale outcomes just because
+        nothing new has come in to trigger a prune.
+        """
+        try:
+            now = self._now()
+            with self._lock:
+                self._prune_entry_window(now)
+                counts = {"plane": 0, "cache": 0, "local": 0}
+                causes = {cause: 0 for cause in LOCAL_CAUSES}
+                for _, outcome, cause, _seq in self._entry_outcomes:
+                    if outcome in counts:
+                        counts[outcome] += 1
+                    if outcome == "local" and cause in causes:
+                        causes[cause] += 1
+            counts["local_causes"] = causes
+            return counts
+        except Exception:
+            _LOG.debug("runbound: could not read the entry window", exc_info=True)
+            return {"plane": 0, "cache": 0, "local": 0, "local_causes": dict.fromkeys(LOCAL_CAUSES, 0)}
+
+    def _live_entry_counts(self) -> tuple:
+        """``(total, local, local_causes)`` over the window, as evidence of
+        what is failing *now*: the same outcomes as
+        :meth:`_entry_window_counts` minus local decisions caused by lost
+        fleet state that the plane has since superseded (see
+        ``_state_loss_superseded_seq``). Those are left out of the total
+        too, not counted as successes: an outage that is over is simply no
+        longer evidence either way. Never raises.
+        """
+        try:
+            now = self._now()
+            with self._lock:
+                self._prune_entry_window(now)
+                superseded = self._state_loss_superseded_seq
+                total = local = 0
+                causes = {cause: 0 for cause in LOCAL_CAUSES}
+                for _, outcome, cause, seq in self._entry_outcomes:
+                    if outcome == "local" and cause == "plane_loss" and seq < superseded:
+                        continue
+                    total += 1
+                    if outcome == "local":
+                        local += 1
+                        if cause in causes:
+                            causes[cause] += 1
+            return total, local, causes
+        except Exception:
+            _LOG.debug("runbound: could not read the live entry window", exc_info=True)
+            return 0, 0, dict.fromkeys(LOCAL_CAUSES, 0)
 
     def fleet_status(self, key: str) -> dict | None:
         """What the plane last said about ``key``, or ``None`` if nothing fresh.
@@ -776,6 +1043,26 @@ class RemoteState:
         """
         return self._halt_state()[0]
 
+    def _staleness_clock_locked(self) -> "float | None":
+        """The timestamp every ``stale_halt`` decision measures its window
+        from. Caller holds ``self._lock``.
+
+        Ordinarily ``self._last_success`` — the last time the plane
+        actually answered. While the plane's own fleet state is
+        unavailable (:attr:`_fleet_state_unavailable`),
+        the link itself can keep succeeding on every heartbeat (that is the
+        whole point — "plane loss for state, not for the link"), so
+        ``_last_success`` would never age and a held halt would look fresh
+        forever. The clock instead starts at
+        :attr:`_state_unavailable_since`, the moment that state was first
+        found unavailable, so ``stale_halt="release"`` still lifts a held
+        halt :data:`STALE_HALT_S` after the plane stopped being able to
+        vouch for it, exactly as it would after a dead link.
+        """
+        if self._fleet_state_unavailable and self._state_unavailable_since is not None:
+            return self._state_unavailable_since
+        return self._last_success
+
     def _halt_state(self) -> "tuple[bool, str | None]":
         """``(halted, mode)``, the one staleness rule :meth:`halted` and
         :meth:`halt_mode` both need, computed once.
@@ -790,12 +1077,12 @@ class RemoteState:
                 if not self._halt:
                     return False, None
                 mode = self._halt_mode
-                last = self._last_success
-            if last is None:
+                clock = self._staleness_clock_locked()
+            if clock is None:
                 return False, None
             if self._stale_halt_mode() == "hold":
                 return True, mode
-            return (True, mode) if self._now() - last <= STALE_HALT_S else (False, None)
+            return (True, mode) if self._now() - clock <= STALE_HALT_S else (False, None)
         except Exception:
             _LOG.warning("runbound: could not read the fleet halt", exc_info=True)
             return False, None
@@ -844,7 +1131,7 @@ class RemoteState:
         try:
             with self._lock:
                 state = self._halt_posture if self._halt else None
-                last = self._last_success
+                last = self._staleness_clock_locked()
             if state is None or last is None:
                 return None
             if self._stale_halt_mode() == "hold":
@@ -880,7 +1167,7 @@ class RemoteState:
         try:
             with self._lock:
                 state = self._posture
-                last = self._last_success
+                last = self._staleness_clock_locked()
             if state is None or last is None:
                 return None
             if self._stale_halt_mode() == "hold":
@@ -907,7 +1194,7 @@ class RemoteState:
             with self._lock:
                 body = self._controls_body
                 dry_run = self._controls_dry_run
-                last = self._last_success
+                last = self._staleness_clock_locked()
             if body is None or dry_run or last is None:
                 return None
             if self._stale_halt_mode() == "hold":
@@ -993,20 +1280,71 @@ class RemoteState:
         halt is being enforced (see :meth:`halted`), and ``None`` the rest of
         the time — no halt at all, or one that ``stale_halt="release"`` has
         already stopped enforcing.
+
+        ``mode`` also reads ``"degraded"`` when the consecutive-failure count
+        is fine but most of the last minute's session entries were decided
+        locally anyway (:data:`ENTRY_WINDOW_MIN_ENTRIES` or more entries,
+        more than :data:`ENTRY_LOCAL_SHARE_THRESHOLD` of them local) — a
+        plane that answers every heartbeat but keeps missing
+        ``control_plane_timeout_s`` on the hot path. It also reads
+        ``"degraded"`` the moment the last hello carried ``fleet_state:
+        "unavailable"`` — the plane's own live store, not the link, is
+        the thing that is gone. ``reason`` says which of the three is
+        failing: ``"heartbeat failures"`` (the link itself has stopped
+        answering anything, which wins when more than one is true — the
+        most urgent fact), ``"fleet state unavailable"`` (next — the link
+        is fine but the plane cannot vouch for its own state, known within
+        one heartbeat rather than waiting for the entry window to fill), or
+        — when it is the entry window that degrades the link — the majority
+        cause behind the window's own ``"local"`` entries
+        (:meth:`_window_reason`): ``"entry timeouts"`` for genuine timeouts,
+        ``"fleet state unavailable"`` again for a window full of 503s
+        specifically naming the plane's state as the problem (those are
+        the plane's state being lost, discovered at the entry door instead
+        of the heartbeat, and must read the same as the hello-based case
+        above, never the older, misleading "entry timeouts"), ``"plane
+        unavailable"`` for a window full of 503s shaped like plane loss but
+        naming no such cause (a saturated connection pool, a handler bug —
+        the plane answered, just not usefully, and must never be conflated
+        with its state being gone), or ``"plane errors"`` for anything else
+        (no plane-shaped answer at all: a connection refused, a malformed
+        reply). ``None`` while nothing is wrong.
+
+        ``halt_stale_s`` measures from the same clock a held halt's own
+        staleness does (:meth:`_staleness_clock_locked`) — ordinarily the
+        last successful contact, but the moment fleet state was found
+        unavailable while it still is, so this number keeps growing even
+        though the heartbeat itself keeps succeeding.
         """
         try:
             failures = self._failure_run()
+            counts = self._entry_window_counts()
+            total = counts["plane"] + counts["cache"] + counts["local"]
+            local_share = (counts["local"] / total) if total else 0.0
+            live_total, live_local, live_causes = self._live_entry_counts()
+            live_share = (live_local / live_total) if live_total else 0.0
             with self._lock:
                 last = self._last_success
                 notice = self._notice
                 limited = self._limited
                 entitlements = dict(self._entitlements)
+                fleet_state_unavailable = self._fleet_state_unavailable
+                staleness_clock = self._staleness_clock_locked()
             age = None if last is None else max(0.0, self._now() - last)
+            halt_age = None if staleness_clock is None else max(0.0, self._now() - staleness_clock)
+            reason = None
             if self._is_degraded(failures):
                 mode = "degraded"
+                reason = "heartbeat failures"
+            elif fleet_state_unavailable:
+                mode = "degraded"
+                reason = "fleet state unavailable"
+            elif live_total >= ENTRY_WINDOW_MIN_ENTRIES and live_share > ENTRY_LOCAL_SHARE_THRESHOLD:
+                mode = "degraded"
+                reason = self._window_reason(live_causes)
             else:
                 mode = "limited" if limited else "connected"
-            halt_stale_s = age if self.halted() else None
+            halt_stale_s = halt_age if self.halted() else None
             return PlaneStatus(
                 mode=mode,
                 last_contact_age_s=age,
@@ -1014,10 +1352,42 @@ class RemoteState:
                 notice=notice,
                 entitlements=entitlements,
                 halt_stale_s=halt_stale_s,
+                entries_window=counts,
+                entries_local_share=local_share,
+                reason=reason,
             )
         except Exception:
             _LOG.warning("runbound: could not read the plane status", exc_info=True)
             return PlaneStatus(mode="degraded")
+
+    def _window_reason(self, causes: dict) -> str:
+        """The reason string for a link degraded by the entry window.
+
+        Before this method existed, ``status()`` hardcoded ``"entry
+        timeouts"`` here regardless of why the window's local entries were
+        actually decided locally — the mislabel a state outage's own run log flagged: for
+        up to a minute after a state outage recovers, the window still holds
+        entries that were really 503s from lost fleet state, and the old
+        code named them "entry timeouts" anyway.
+
+        Instead, this reads the majority cause off ``causes`` (one entry
+        per :data:`LOCAL_CAUSES`, from :meth:`_entry_window_counts`) and
+        maps it through :data:`REASON_BY_LOCAL_CAUSE`. Ties break by
+        :data:`LOCAL_CAUSE_TIE_BREAK`: ``max`` with a ``key`` that pairs each
+        cause's count with its *negative* tie-break rank picks the highest
+        count first and, among equal counts, the earliest cause in that
+        tuple — so an even split always resolves the same way, not by
+        whatever order ``dict`` happens to iterate in. A window with no
+        local entries at all (should not happen: this is only called once
+        the window's own local share has already cleared the degrade
+        threshold) falls back to ``"entry timeouts"``, the original,
+        least-alarming default.
+        """
+        if not any(causes.values()):
+            return REASON_BY_LOCAL_CAUSE["timeout"]
+        rank = {cause: i for i, cause in enumerate(LOCAL_CAUSE_TIE_BREAK)}
+        winner = max(causes, key=lambda cause: (causes[cause], -rank.get(cause, len(rank))))
+        return REASON_BY_LOCAL_CAUSE.get(winner, REASON_BY_LOCAL_CAUSE["timeout"])
 
     def _is_degraded(self, failures: int) -> bool:
         """Degraded when we have given up calling: too many failures, or a bad key."""
@@ -1053,13 +1423,30 @@ class RemoteState:
         be applied is logged, and the next one is tried as if nothing
         happened.
 
+        ``reply.fleet_state == "unavailable"`` means the plane itself
+        answered (the link is fine — the *this reply arrived at all* half
+        of this method still runs) but could not read its own live store, so
+        none of it can say anything true about the halt, either posture
+        slot, or the policy/Controls versions — every one of those fields
+        rides the wire at its own "nothing to report" default in that case
+        (see ``routers/sdk.py::hello``), and a plane's silence must never
+        read as "no halt." Those five are left exactly as they were instead
+        of being absorbed from the reply; the link's own liveness
+        (``_last_success``, ``_failures``) and the entitlements/notice
+        (read from Postgres on the plane, unaffected by its Redis being
+        gone) still update normally either way.
+
         This runs only for a reply that actually arrived, which is what makes
         it the right place to settle the tool report: the hash that rode the
         last heartbeat becomes the acknowledged one, and a reply saying
         ``tools_known: false`` throws that away so the next heartbeat resends
-        the report in full (see :meth:`_tools_payload`).
+        the report in full (see :meth:`_tools_payload`) — unaffected by
+        ``fleet_state`` either, since the tool inventory lives on the
+        plane's ledger, not its live store.
         """
         try:
+            fleet_state = getattr(reply, "fleet_state", "ok")
+            unavailable = fleet_state == "unavailable"
             version = _as_int(getattr(reply, "policy_version", 0))
             controls_version = _as_int(getattr(reply, "controls_version", 0))
             entitlements = _entitlements(reply)
@@ -1068,23 +1455,37 @@ class RemoteState:
             mode = getattr(reply, "halt_mode", "stop")
             mode = mode if mode in ("stop", "narrow") else "stop"
             with self._lock:
-                self._halt = halt
-                self._halt_mode = mode if halt else "stop"
-                self._absorb_halt_posture(mode if halt else None)
-                self._absorb_posture(getattr(reply, "posture", None))
+                if unavailable:
+                    if not self._fleet_state_unavailable:
+                        self._state_unavailable_since = self._now()
+                    self._fleet_state_unavailable = True
+                    changed = False
+                    controls_changed = False
+                else:
+                    if self._fleet_state_unavailable:
+                        # The heartbeat says the state is back: every local
+                        # decision the outage caused is now history.
+                        self._state_loss_superseded_seq = self._entry_seq + 1
+                    self._fleet_state_unavailable = False
+                    self._state_unavailable_since = None
+                    self._halt = halt
+                    self._halt_mode = mode if halt else "stop"
+                    self._absorb_halt_posture(mode if halt else None)
+                    self._absorb_posture(getattr(reply, "posture", None))
+                    changed = version != self._policy_version
+                    controls_changed = controls_version != self._controls_version
                 self._notice = notice if isinstance(notice, str) else None
                 self._entitlements = entitlements
                 self._last_success = self._now()
                 self._failures = 0
-                changed = version != self._policy_version
-                controls_changed = controls_version != self._controls_version
                 self._settle_tools_hash(reply)
             self._apply_entitlements(entitlements)
             if changed:
                 self._fetch_policy(version)
             if controls_changed:
                 self._fetch_controls(controls_version)
-            self._apply_circuits(getattr(reply, "circuits", None))
+            if not unavailable:
+                self._apply_circuits(getattr(reply, "circuits", None))
         except Exception:
             _LOG.warning(
                 "runbound: could not apply the control plane's reply", exc_info=True
@@ -1220,6 +1621,7 @@ class RemoteState:
             self._policy_version = resolved
             self._policy_dry_run = dry_run
         _install_remote_refusals(refusals)
+        _note_version("policy_version", resolved)
 
     def _fetch_controls(self, version: int) -> None:
         """Pull this service's Controls body; keep the old one on failure.
@@ -1241,6 +1643,7 @@ class RemoteState:
             self._controls_body = body
             self._controls_version = resolved
             self._controls_dry_run = dry_run
+        _note_version("controls_version", resolved)
 
     def _apply_circuits(self, circuits: Any) -> None:
         """Open or close provider circuits because the plane said so.
@@ -1421,8 +1824,45 @@ class RemoteState:
         envelope = self._envelope_payload()
         if envelope is not None:
             payload["envelope"] = envelope
+        local_share = self._entries_local_share_payload()
+        if local_share is not None:
+            payload["entries_local_share"] = local_share
         payload.update(self._tools_payload())
         return payload
+
+    def _entries_local_share_payload(self) -> float | None:
+        """This worker's local-decision share over the last minute, for the
+        plane to store per worker — so a console can show how many of a
+        service's workers are deciding locally right now.
+
+        ``None`` with fewer than :data:`ENTRY_WINDOW_MIN_ENTRIES` entries in
+        the window: a worker that has barely opened any sessions does not
+        have a share worth storing, and ``0.0`` would misreport "definitely
+        fine" from a sample of one.
+        """
+        try:
+            counts = self._entry_window_counts()
+            total = counts["plane"] + counts["cache"] + counts["local"]
+            if total < ENTRY_WINDOW_MIN_ENTRIES:
+                return None
+            return counts["local"] / total
+        except Exception:
+            _LOG.debug("runbound: could not build the entries_local_share payload", exc_info=True)
+            return None
+
+    def pending_events(self) -> "int | None":
+        """State/telemetry records this worker still has queued to post,
+        or ``None`` without an exporter. Read the same way
+        :meth:`status` is — safe for a health endpoint, never opens a
+        socket."""
+        exporter = self._exporter
+        if exporter is None:
+            return None
+        try:
+            return int(exporter.pending)
+        except Exception:
+            _LOG.debug("runbound: could not read the exporter's pending count", exc_info=True)
+            return None
 
     @staticmethod
     def _envelope_payload() -> dict | None:
@@ -1638,6 +2078,15 @@ def build(config: Any) -> Any:
             exc_info=True,
         )
         return LocalState()
+
+
+def _note_version(what: str, version: Any) -> None:
+    """Note a newly applied policy or Controls version, recording a change
+    from the one this worker ran on before. Never raises."""
+    try:
+        local_events.note_runtime_value(what, version)
+    except Exception:
+        _LOG.warning("runbound: could not note the %s", what, exc_info=True)
 
 
 def _policy_envelope(data: dict, version: int) -> tuple[dict | None, int, bool, dict | None]:

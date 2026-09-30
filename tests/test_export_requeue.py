@@ -109,6 +109,7 @@ def test_a_failed_batch_is_kept_intact_and_pending(wall):
     assert sink.pending == 4  # nothing was lost
     assert sink.backlog() == 4
     assert sink.consecutive_failures == 1
+    assert sink.resends == 1  # the batch went back on the queue once
 
 
 def test_a_failed_batch_is_delivered_intact_once_the_plane_recovers(wall):
@@ -125,11 +126,154 @@ def test_a_failed_batch_is_delivered_intact_once_the_plane_recovers(wall):
 
     assert sink.pending == 0
     assert sink.consecutive_failures == 0
+    assert sink.resends == 1  # the delivery that landed was not itself a resend
     assert len(client.batches) == 2  # the failed attempt, then the delivery
     delivered = client.batches[1]
     assert [w["seq"] for w in delivered["exits"]] == [9]  # priority lane first
     assert [w["label"] for w in delivered["circuits"]] == ["openai"]
     assert [w["step"] for w in delivered["events"]] == [1, 2]  # order preserved
+
+
+# --- the resend counter -----------------------------------------------------
+
+
+def test_resends_counts_attempts_not_deliveries(wall):
+    """One batch, refused twice before it lands: two resends, one delivery."""
+    client = FakeClient(ok=False)
+    sink = exporter(client, batch_size=100)
+    sink.on_event(session(), event())
+
+    sink.flush()
+    sink.flush()
+    assert sink.resends == 2
+
+    client.ok = True
+    sink.flush()
+    assert sink.resends == 2  # the landing itself is not counted as a resend
+    assert sink.pending == 0
+
+
+def test_resends_is_cumulative_and_never_resets_on_success(wall):
+    client = FakeClient(ok=False)
+    sink = exporter(client, batch_size=100)
+    sink.on_event(session(), event())
+    sink.flush()
+    assert sink.resends == 1
+
+    client.ok = True
+    sink.flush()  # a clean delivery
+    assert sink.resends == 1  # unchanged by success, same as `dropped`
+
+    client.ok = False
+    sink.on_event(session(), event())
+    sink.flush()
+    assert sink.resends == 2  # keeps counting across a later, separate outage
+
+
+def test_a_healthy_exporter_never_resends_anything(wall):
+    client = FakeClient(ok=True)
+    sink = exporter(client, batch_size=100)
+    sink.on_event(session(), event())
+
+    sink.flush()
+
+    assert sink.resends == 0
+    assert sink.pending == 0
+
+
+# --- batch_id: stable across a resend, fresh for a new batch ---------------
+
+
+def test_a_resent_batch_keeps_its_batch_id(wall):
+    client = FakeClient(ok=False)
+    sink = exporter(client, batch_size=100)
+    sink.on_event(session(), event(step=1))
+
+    sink.flush()  # fails; requeued
+    client.ok = True
+    sink.flush()  # the resend
+
+    failed_id = client.batches[0]["batch_id"]
+    delivered_id = client.batches[1]["batch_id"]
+    assert failed_id == delivered_id
+    assert failed_id  # never blank
+
+
+def test_two_consecutive_failures_of_one_batch_keep_the_same_id(wall):
+    client = FakeClient(ok=False)
+    sink = exporter(client, batch_size=100)
+    sink.on_event(session(), event(step=1))
+
+    sink.flush()
+    sink.flush()
+    sink.flush()
+
+    ids = {batch["batch_id"] for batch in client.batches}
+    assert len(client.batches) == 3
+    assert len(ids) == 1  # one batch, three attempts, one id throughout
+
+
+def test_a_genuinely_new_batch_after_a_delivery_gets_a_new_id(wall):
+    client = FakeClient(ok=False)
+    sink = exporter(client, batch_size=100)
+    sink.on_event(session(), event(step=1))
+    sink.flush()  # fails
+    client.ok = True
+    sink.flush()  # delivered
+
+    sink.on_event(session(), event(step=2))
+    sink.flush()  # a fresh batch -- nothing pending from before
+
+    ids = [batch["batch_id"] for batch in client.batches]
+    assert len(ids) == 3
+    assert ids[0] == ids[1]  # the failed attempt and its resend
+    assert ids[2] not in ids[:2]  # the next, unrelated batch
+
+
+def test_two_batches_in_a_row_never_share_an_id(wall):
+    """No failure at all -- two ordinary, back-to-back batches -- still get
+    two different ids; a fresh id is not something only a failure produces."""
+    client = FakeClient(ok=True)
+    sink = exporter(client, batch_size=1)
+    sink.on_event(session(), event(step=1))
+    sink.on_event(session(), event(step=2))
+
+    sink.flush()
+
+    assert len(client.batches) == 2
+    assert client.batches[0]["batch_id"] != client.batches[1]["batch_id"]
+
+
+def test_a_partially_evicted_resend_still_keeps_its_id(wall):
+    """A resend pending in a *small* lane can lose some of its own items to
+    new telemetry's overflow eviction (same accounting as any other
+    overflow) -- it still keeps its id for whatever survives, rather than
+    silently starting a new one."""
+    client = FakeClient(ok=False)
+    sink = exporter(client, maxlen=2, batch_size=100)
+    sink.on_event(session(), event(step=1))
+    sink.on_event(session(), event(step=2))
+
+    sink.flush()  # fails; both requeued, pending resend armed for 2 events
+    assert sink.resends == 1
+
+    # New telemetry overflows the 2-slot lane, evicting the (oldest) pending
+    # resend items first -- same rule test_overflow_during_requeue_drops_
+    # the_oldest_and_counts_it pins for a manual _requeue.
+    sink.on_event(session(), event(step=3))
+
+    client.ok = True
+    sink.flush()  # one call drains both the resend and, after it lands,
+                  # step 3's own fresh batch -- see flush()'s own docstring
+
+    assert len(client.batches) == 3
+    resent = client.batches[1]
+    assert resent["batch_id"] == client.batches[0]["batch_id"]
+    assert [w["step"] for w in resent["events"]] == [2]  # step 1 was evicted
+
+    fresh = client.batches[2]
+    assert fresh["batch_id"] != resent["batch_id"]  # step 3's own, later batch
+    assert [w["step"] for w in fresh["events"]] == [3]
 
 
 def test_a_multi_batch_backlog_drains_in_order_after_recovery(wall):
@@ -199,7 +343,7 @@ def test_overflow_during_requeue_drops_the_oldest_and_counts_it(wall):
     for step in (10, 11, 12):
         sink.on_event(session(), event(step=step))
 
-    sink._requeue([], [], older_events)
+    sink._requeue(_batch["batch_id"], [], [], older_events)
 
     assert sink.dropped == 3  # the older batch lost the fight for room
     assert [w["step"] for w in list(sink._events)] == [10, 11, 12]

@@ -541,7 +541,8 @@ def coverage() -> dict:
          "last_guarded_call_age_s": 0.4,        # None if there has been none
          "warnings": [],                        # the silent-zero text, if any
          "refusals": "default",                 # highest refusal source in effect
-         "fleet": "local protection active; fleet coordination: not connected"}
+         "fleet": "local protection active; fleet coordination: not connected",
+         "fleet_pending": None}                 # events queued to post; None with no plane
 
     Counters are process-lifetime: :func:`init` and :func:`reset` do not clear
     them, because "has this process ever seen traffic?" is not a question a new
@@ -554,12 +555,18 @@ def coverage() -> dict:
     ``"plane"`` when a control-plane profile is in effect, else ``"local"``
     when ``GuardrailConfig.refusals`` was set, else ``"default"`` (BUILTIN).
 
-    ``"fleet"``: the one nudge — ``"connected"``
-    while a control plane is answering, else the honest
-    ``"local protection active; fleet coordination: not connected"``. Every
-    control this SDK enforces is already free and already running locally
-    (see :mod:`runbound.config`); this key says only whether it is
+    ``"fleet"``: the one nudge — ``"connected"`` while a control plane is
+    answering every path well, ``"connected; N% of entries in the last
+    minute were decided locally (plane timeouts)"`` while it answers every
+    heartbeat but is missing the entry timeout on the hot path, else the
+    honest ``"local protection active; fleet coordination: not connected"``.
+    Every control this SDK enforces is already free and already running
+    locally (see :mod:`runbound.config`); this key says only whether it is
     coordinated across a fleet, never whether it is "unlocked".
+
+    ``"fleet_pending"``: how many state/telemetry records this worker still
+    has queued to post to the plane, or ``None`` with no plane configured —
+    reported the same fail-open, best-effort way as ``"fleet"`` itself.
     """
     try:
         report = _coverage.snapshot(autowrap.patched(), **_coverage_kwargs())
@@ -568,6 +575,7 @@ def coverage() -> dict:
         report["posture"] = posture()
         report["can_stop"] = _can_stop()
         report["fleet"] = _fleet_report()
+        report["fleet_pending"] = _fleet_pending()
         return report
     except Exception:
         _LOG.warning("runbound could not read its own coverage", exc_info=True)
@@ -575,6 +583,7 @@ def coverage() -> dict:
         zeros["refusals"] = "default"
         zeros["can_stop"] = None
         zeros["fleet"] = _NO_FLEET
+        zeros["fleet_pending"] = None
         return zeros
 
 
@@ -590,20 +599,45 @@ def _fleet_report() -> str:
     try:
         with _LOCK:
             shared = _SHARED
-        return "connected" if shared.status().mode == "connected" else _NO_FLEET
+        status = shared.status()
+        if status.mode == "connected":
+            return "connected"
+        if status.mode == "degraded" and status.reason == "fleet state unavailable":
+            return (
+                "connected; fleet state unavailable: deciding locally, "
+                "last halt and posture held"
+            )
+        if status.mode == "degraded" and status.reason == "entry timeouts":
+            pct = round(status.entries_local_share * 100)
+            return (
+                f"connected; {pct}% of entries in the last minute were "
+                "decided locally (plane timeouts)"
+            )
+        return _NO_FLEET
     except Exception:
         return _NO_FLEET
 
 
+def _fleet_pending() -> int | None:
+    """``coverage()["fleet_pending"]``: see :func:`coverage`."""
+    try:
+        with _LOCK:
+            shared = _SHARED
+        return shared.pending_events()
+    except Exception:
+        return None
+
+
 def events(n: int = 100) -> list:
-    """This process's own anomalies, refusals and posture transitions, most
-    recent last (local telemetry is free).
+    """This process's own anomalies, refusals, posture transitions and
+    runtime changes, most recent last (local telemetry is free).
 
     An in-memory ring, readable with no account, no token and no control
     plane — the free, local half of what a connected plane's own
-    centralized event log charges for. Nothing here is written to disk,
-    nothing leaves the process, and no record ever carries a call argument,
-    a prompt or a reply. Process-lifetime like :func:`coverage`'s own
+    centralized event log charges for. Nothing here is written to disk, and
+    no record ever carries a call argument, a prompt or a reply. Without a
+    control plane nothing leaves the process; with one, posture transitions
+    and runtime changes are also sent to it, the session key as a hash. Process-lifetime like :func:`coverage`'s own
     counters: :func:`init` and :func:`reset` do not clear it. ``[]`` before
     :func:`init` or when nothing has happened yet. See also
     :func:`decisions` and the optional ``on_event=`` callback on
@@ -897,6 +931,7 @@ def session(key: str, tags: dict | None = None) -> Iterator[SessionState | None]
     _sync_entry(key, state)
     _refuse_fanout(state)
     _refuse_if_tripped(state)
+    _record_return_if_served(state)
     _count_entry()
     token = _CURRENT.set(state)
     try:
@@ -904,6 +939,7 @@ def session(key: str, tags: dict | None = None) -> Iterator[SessionState | None]
     finally:
         _CURRENT.reset(token)
         _count_exit()
+        _flush_refusal_summaries(state)
         _sync_exit(key, state)
 
 
@@ -1354,7 +1390,12 @@ def _seed_rung(state: SessionState, decision, config: GuardrailConfig) -> None:
         state.spike_allowance_start = int(start) if start is not None else state.spike_allowance
         enter = getattr(state, "_enter_posture", None)
         if enter is not None:
-            enter("restricted", "restored: session limited before restart", source="ladder")
+            enter(
+                "restricted",
+                "restored: session limited before restart",
+                source="ladder",
+                level=ladder.LEVEL_NAMES[ladder.LEVEL_LIMITED],
+            )
     state.record_ladder_transition(0, level, "restored")
 
 
@@ -1381,6 +1422,30 @@ def _apply_remote_latch(state: SessionState, latch) -> None:
         state.tripped_by = anomaly
         state.tripped_at = _now()
         state.latch_ttl_override = ttl
+        _mark_relayed_rollover(state, anomaly, ttl)
+
+
+def _mark_relayed_rollover(state: SessionState, anomaly: Anomaly, ttl: float | None) -> None:
+    """Note that a rollover another worker made is now this session's cooldown.
+
+    The key's next request may land on any worker, so each one that holds a
+    rollover's cooldown records the stop's return when it serves it (the plane
+    tolerates the repeats). Only a rollover that expires counts: budget,
+    wall-trip and admin latches have no stop to return from, and the last
+    strike's block (``action == "blocked"``, no expiry) never returns. A
+    rollover already recorded on this session is not armed again, however
+    often the plane repeats it. The caller holds ``state.lock``.
+    """
+    details = anomaly.details if isinstance(anomaly.details, dict) else {}
+    if ttl is None or details.get("action") != "rollover":
+        return
+    try:
+        strikes = int(details.get("strikes", state.returned_strikes + 1))
+    except (TypeError, ValueError):
+        strikes = state.returned_strikes + 1
+    if strikes > state.returned_strikes:
+        state.returns_from = "stopped"
+        state.return_strikes = strikes
 
 
 def _remote_anomaly(latch, state: "SessionState | None" = None) -> Anomaly | None:
@@ -1508,6 +1573,18 @@ def _warn_narrowed(engine: Engine) -> None:
         "(on_halt='warn': tools keep running unrestricted)",
         engine.config.service,
     )
+
+
+def _flush_refusal_summaries(state: SessionState) -> None:
+    """Report the refusals this session suppressed, ahead of its exit record.
+    Never raises."""
+    try:
+        with _LOCK:
+            engine = _ENGINE
+        if engine is not None:
+            engine.flush_refusal_summaries(state)
+    except Exception:
+        _LOG.warning("runbound could not summarise suppressed refusals", exc_info=True)
 
 
 def _sync_exit(key: str, state: SessionState) -> None:
@@ -2026,6 +2103,27 @@ def _cooldown_served(state: SessionState) -> None:
             state.latch_ttl_override = None
 
 
+def _record_return_if_served(state: SessionState) -> None:
+    """Record a stopped session's return, once its cooldown is served and the
+    entry has been admitted.
+
+    Only a session the ladder started as a rollover cooldown carries
+    ``returns_from`` (a latch relayed from another worker does not: it has an
+    expiry but no stop of this worker's to return from). It is called after
+    the entry's refusals, so a cooldown that ran out but whose key is refused
+    again on the same entry records nothing yet. Once per cooldown: the mark
+    is spent as it is recorded.
+    """
+    with state.lock:
+        previous = state.returns_from
+        if previous is None or state.tripped_by is not None:
+            return
+        state.returns_from = None
+        state.returned_strikes = max(state.returned_strikes, state.return_strikes)
+        level = ladder.LEVEL_NAMES.get(int(getattr(state, "spike_level", 0) or 0))
+    state.record_return(previous, "ladder", "cooldown served", level)
+
+
 def _roll_over(
     key: str,
     old: SessionState,
@@ -2110,6 +2208,9 @@ def _latch_rollover(
         )
         fresh.tripped_at = _now()
         fresh.latch_ttl_override = None if blocked else config.spike_cooldown_seconds
+        # A rollover happens only to a session the ladder closed, which it stopped.
+        fresh.returns_from = None if blocked else "stopped"
+        fresh.return_strikes = strikes
         fresh.ladder_history = history
         fresh.healed_times = healed_times
         fresh.spike_closed_at = closed_at
@@ -2494,6 +2595,8 @@ def clear(key: str) -> None:
                 return
             shared = _SHARED
             state = _REGISTRY.pop(key, None)
+            if state is not None:
+                state.returns_from = None  # forgiveness is not a cooldown served
             _STRIKES.pop(key, None)
             _DOOR_REFUSALS.pop(key, None)
             _EXITS.pop(_keyed_id(key), None)
@@ -2501,6 +2604,9 @@ def clear(key: str) -> None:
         if state is not None:
             with state.lock:
                 state.record_ladder_transition(state.spike_level, 0, "cleared")
+            # Whatever narrowed this key is lifted with it, and said so: a
+            # cleared key is the end of its containment.
+            state._exit_posture(reason="cleared")
     except Exception:
         _LOG.warning("runbound could not clear session %r", key, exc_info=True)
         return
@@ -2613,6 +2719,7 @@ def _record_llm_call(
     *,
     partial: bool = False,
     tokens_estimated: bool = False,
+    provider: str | None = None,
 ) -> None:
     """Price a model call and emit its ``llm_call`` event.
 
@@ -2644,6 +2751,13 @@ def _record_llm_call(
     finished — an abandoned stream reported by :meth:`_Hooks.abandoned` — and
     are carried straight onto the event; every other caller leaves them at
     their default of ``False``.
+
+    ``provider`` is the endpoint label the call went to, when the caller
+    knows it (every wrapper does, and :func:`record_call`); it rides on the
+    event, and it and ``model`` are each noted as this process's current
+    value, so a model or provider that changes under a running service is
+    recorded once as a ``"runtime_change"`` (see
+    :func:`runbound.local_events.note_runtime_value`).
     """
     # Counted before the engine check: the coverage report asks whether a
     # sensor fired, which is true whether or not anything was configured to
@@ -2653,6 +2767,7 @@ def _record_llm_call(
         engine = _ENGINE
     if engine is None:
         return
+    _note_runtime(model, provider)
     cost, estimated = price_call(
         model,
         tokens_in,
@@ -2675,7 +2790,20 @@ def _record_llm_call(
         priced=("estimated" if estimated else None),
         partial=partial,
         tokens_estimated=tokens_estimated,
+        provider=provider,
     )
+
+
+def _note_runtime(model: str | None, provider: str | None) -> None:
+    """Note this call's model and provider as the process's current ones.
+
+    Fail-open: a change that cannot be recorded never costs the call.
+    """
+    try:
+        local_events.note_runtime_value("model", model or None)
+        local_events.note_runtime_value("provider", provider or None)
+    except Exception:
+        _LOG.warning("runbound could not note a runtime change; continuing", exc_info=True)
 
 
 # --- the wrappers' hooks ----------------------------------------------------
@@ -2862,6 +2990,7 @@ class _Hooks:
                 duration_s,
                 partial=True,
                 tokens_estimated=estimated,
+                provider=provider,
             )
         except GuardrailTripped:
             _LOG.debug(
@@ -3282,7 +3411,7 @@ def record_call(
     if error is not None:
         _HOOKS.error(model, error, duration_s, provider)
         return
-    _record_llm_call(model, tokens_in, tokens_out, duration_s)
+    _record_llm_call(model, tokens_in, tokens_out, duration_s, provider=provider)
     _HOOKS.success(provider, duration_s)
 
 

@@ -689,11 +689,15 @@ def _call_report(
     tokens_reasoning: int,
     tokens_cached_in: int = 0,
     tokens_cache_write_in: int = 0,
+    *,
+    provider: str | None = None,
 ) -> None:
     """Hand one call's usage to ``report``, tolerating an older ``report``.
 
-    Four shapes are tried, newest first, each falling back to the last only
-    on a binding failure: the current 7-argument form (added
+    With ``provider`` (the endpoint label the call went to), the newest shape
+    is tried first: the 7 positional arguments plus ``provider=`` as a
+    keyword. After that, four shapes, newest first, each falling back to the
+    last only on a binding failure: the 7-argument form (added
     ``tokens_cache_write_in`` for Anthropic's cache-write premium), the
     6-argument form that predates it (with ``tokens_cached_in``), the
     5-argument form before that, and the 3-argument ``(model, tokens_in,
@@ -702,6 +706,23 @@ def _call_report(
     as "did not accept this shape" — one from inside ``report`` propagates,
     so a broken callback is never invoked twice.
     """
+    if provider:
+        try:
+            report(
+                model,
+                tokens_in,
+                tokens_out,
+                duration_s,
+                tokens_reasoning,
+                tokens_cached_in,
+                tokens_cache_write_in,
+                provider=provider,
+            )
+            return
+        except TypeError as exc:
+            if exc.__traceback__ is not None and exc.__traceback__.tb_next is not None:
+                raise
+            _LOG.debug("runbound: report() predates provider reporting; trying 7 args")
     try:
         report(
             model,
@@ -1332,6 +1353,7 @@ class _StreamGuard:
                     self._usage.tokens_reasoning,
                     self._usage.tokens_cached_in,
                     self._usage.tokens_cache_write_in,
+                    provider=self._provider,
                 )
                 if not self._ledger.failed:
                     call_success(self._hooks, self._provider, _time_to_first_chunk(self._ledger))

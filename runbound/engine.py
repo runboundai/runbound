@@ -19,13 +19,16 @@ import asyncio
 import contextvars
 import dataclasses
 import logging
+import math
 import threading
 import time
+from collections import OrderedDict
 from collections.abc import Sequence
 from typing import Any, NamedTuple
 
 from . import admission
 from . import controls_merge
+from . import ladder
 from . import local_events
 from .circuit import CIRCUIT_FAULTS, PROVIDER, CircuitBreaker, classify_failure
 from .config import GuardrailConfig
@@ -61,6 +64,19 @@ from .state import Hold, PostureState, SessionState, make_posture_state
 _LOG = logging.getLogger("runbound")
 
 LOOP_DETECTOR = LoopDetector.name
+
+#: How many identical refusals one session records individually, per
+#: ``(detector, rule, tool)``. A refusal is evidence, so every one of them is
+#: exported as its own anomaly and Decision, up to this many; a session that
+#: keeps hammering the same refused action past it is counted, and one summary
+#: anomaly per ``(detector, rule, tool)`` carrying ``details["suppressed_count"]``
+#: is reported when the session block exits. Two rules, or two tools, storming
+#: at once never hide each other: the count is per rule and per tool, not per
+#: session.
+REFUSAL_RECORD_CAP = 100
+
+#: How many ``(session, detector, rule, tool)`` counters an engine keeps.
+_REFUSAL_COUNTERS_MAX = 20_000
 SPIKE_DETECTOR = SpikeDetector.name
 BUDGET_DETECTOR = BudgetDetector.name
 STEP_DETECTOR = StepDetector.name
@@ -253,6 +269,10 @@ class Engine:
         )
         self._circuit_rate_active: dict | None = None
         self._alerted: set[tuple] = set()
+        # Per (session id, detector, rule, tool): [refusals seen, refusals
+        # suppressed since the last summary, reacted]. See REFUSAL_RECORD_CAP.
+        self._refusal_counts: "OrderedDict[tuple, list]" = OrderedDict()
+        self._refusal_lock = threading.Lock()
         # The process's own narrowing, set by runbound.enter_safe_mode().
         self._posture: PostureState | None = None
         self._posture_lock = threading.Lock()
@@ -771,7 +791,7 @@ class Engine:
         if latch and session is not None:
             self._latch(session, stamped)
         try:
-            self._alert(stamped, session, reacted)
+            self._alert(stamped, session, reacted, refusal=True)
             _LOG.warning("[runbound] %s", stamped.message)
         except Exception:
             _LOG.warning(
@@ -1536,7 +1556,13 @@ class Engine:
             if current is not None and (current.source == "manual" or source != "manual"):
                 return False
             self._posture = state
-        local_events.record_posture(source, name, reason)
+        local_events.record_posture(
+            source,
+            name,
+            reason,
+            previous=None if current is None else current.name,
+            scope="process",
+        )
         return True
 
     def exit_safe_mode(self, source: str | None = None) -> bool:
@@ -1546,7 +1572,9 @@ class Engine:
             if current is None or (source is not None and current.source != source):
                 return False
             self._posture = None
-        local_events.record_posture(current.source, "full", "exit_safe_mode")
+        local_events.record_posture(
+            current.source, "full", "exit_safe_mode", previous=current.name, scope="process"
+        )
         return True
 
     def process_posture(self) -> "PostureState | None":
@@ -2379,13 +2407,28 @@ class Engine:
         return anomalies
 
     def _alert(
-        self, anomaly: Anomaly, session: SessionState, reacted: str | None = None
+        self,
+        anomaly: Anomaly,
+        session: SessionState,
+        reacted: str | None = None,
+        *,
+        refusal: bool = False,
     ) -> None:
         """Notify the observers, once per (session, detector).
 
         Detectors that fire once per session are unaffected; the loop detector
         under a repeat-driven policy fires on every repeat, and this is what
         keeps that from becoming a notification storm.
+
+        **A refusal is not a notification.** ``refusal=True`` (from
+        :meth:`refuse`) means a tool or a call was actually turned away, and
+        every one of those is evidence: it is recorded and exported as its own
+        anomaly and Decision, up to :data:`REFUSAL_RECORD_CAP` per
+        ``(session, detector, rule, tool)``, past which they are counted and
+        summarised (:meth:`flush_refusal_summaries`). The once-per-key memory
+        below then gates only what it always gated for everything else: paging.
+        Before this, the second refusal in a session was dropped whole, even
+        one of a different tool.
 
         The observers are told what the engine is about to do about it
         (``reacted``). Callers that already know — a policy dry run, a
@@ -2455,10 +2498,66 @@ class Engine:
             # second tool, or refused the same tool for a different reason, is
             # news; the same refusal on every retry is not.
             key += (_detail(anomaly, "rule", None), _detail(anomaly, "tool", None))
-        if key in self._alerted:
+        if refusal:
+            self._alerted.add(key)
+            if not self._admit_refusal(session, anomaly, reacted):
+                return
+        elif key in self._alerted:
             return
-        self._alerted.add(key)
+        else:
+            self._alerted.add(key)
         self._notify_anomaly(session, anomaly, reacted or self._reacted_for(anomaly))
+
+    def _refusal_counter_key(self, session: SessionState, anomaly: Anomaly) -> tuple:
+        return (
+            getattr(session, "session_id", ""),
+            anomaly.detector,
+            _detail(anomaly, "rule", None),
+            _detail(anomaly, "tool", None),
+        )
+
+    def _admit_refusal(
+        self, session: SessionState, anomaly: Anomaly, reacted: str | None
+    ) -> bool:
+        """Count one refusal; True while it is still within the record cap."""
+        key = self._refusal_counter_key(session, anomaly)
+        with self._refusal_lock:
+            entry = self._refusal_counts.get(key)
+            if entry is None:
+                entry = [0, 0, reacted or "blocked", _refusal_shape(anomaly)]
+                self._refusal_counts[key] = entry
+                while len(self._refusal_counts) > _REFUSAL_COUNTERS_MAX:
+                    self._refusal_counts.popitem(last=False)
+            else:
+                self._refusal_counts.move_to_end(key)
+            entry[0] += 1
+            if entry[0] <= REFUSAL_RECORD_CAP:
+                return True
+            entry[1] += 1
+            return False
+
+    def flush_refusal_summaries(self, session: SessionState) -> None:
+        """Report what this session's refusals suppressed since the last call.
+
+        One summary anomaly per ``(detector, rule, tool)`` with something
+        suppressed, ``details["suppressed_count"]`` being the number suppressed
+        since the previous summary (so summaries add up), reacted like the
+        refusals it stands for. Called as a session block exits, before its
+        exit record is queued. Never raises.
+        """
+        try:
+            sid = getattr(session, "session_id", "")
+            with self._refusal_lock:
+                due = []
+                for key, entry in self._refusal_counts.items():
+                    if key[0] == sid and entry[1] > 0:
+                        due.append((key, entry[1], entry[2], entry[3]))
+                        entry[1] = 0
+            for key, count, reacted, shape in due:
+                summary = _refusal_summary(shape, count)
+                self._notify_anomaly(session, summary, reacted)
+        except Exception:
+            _LOG.warning("runbound could not summarise suppressed refusals", exc_info=True)
 
     def notify_door(self, session: SessionState, anomaly: Anomaly) -> None:
         """Report a refusal made at the door of a :func:`~runbound.session` block.
@@ -2721,15 +2820,43 @@ class Engine:
     def _report_trip(self, session: SessionState, anomaly: Anomaly, door: bool) -> None:
         """Hand a trip to the shared state, synchronously. Never raises."""
         try:
-            with session.lock:
-                ttl = session.latch_ttl_override
-            if ttl is None:
-                ttl = self.config.latch_ttl_seconds
+            ttl = self._trip_ttl(session, anomaly)
             self.shared.trip(
                 getattr(session, "key", None), session, anomaly, ttl, door
             )
         except Exception:
             _LOG.warning("runbound could not report a trip to the fleet", exc_info=True)
+
+    def _trip_ttl(self, session: SessionState, anomaly: Anomaly) -> float | None:
+        """How long the fleet should hold the latch this trip makes.
+
+        The session's own expiry if it has one; else, for the ladder's close,
+        the cooldown the key's next session will serve (so every worker lets
+        the key back in when that worker would have), except at the last
+        strike, where the key is blocked until ``clear()`` and there is no
+        expiry; else ``latch_ttl_seconds``.
+        """
+        with session.lock:
+            ttl = session.latch_ttl_override
+        if ttl is not None:
+            return ttl
+        details = anomaly.details if isinstance(anomaly.details, dict) else {}
+        if details.get("action") == "rollover":
+            config = self._effective_config()
+            try:
+                strikes = int(details.get("strikes"))
+            except (TypeError, ValueError):
+                strikes = 0
+            if ladder.entry_observation(strikes, config) != ladder.Observation.ENTRY_OUT_OF_STRIKES:
+                cooldown = details.get("cooldown_seconds")
+                usable = (
+                    isinstance(cooldown, (int, float))
+                    and not isinstance(cooldown, bool)
+                    and math.isfinite(cooldown)
+                    and cooldown > 0
+                )
+                return float(cooldown) if usable else float(config.spike_cooldown_seconds)
+        return self.config.latch_ttl_seconds
 
     def _report_circuit(self, provider: str, state: str, failures: int) -> None:
         """Hand a provider circuit transition to the shared state. Never raises."""
@@ -3420,6 +3547,39 @@ def _now() -> float | None:
     except Exception:
         _LOG.debug("runbound could not read the monotonic clock", exc_info=True)
         return None
+
+
+def _refusal_shape(anomaly: Anomaly) -> tuple:
+    """What a summary needs to remember of a refusal: its detector and the
+    few details that say whose it was and what it refused (never a Decision,
+    never an argument)."""
+    details = {
+        key: value
+        for key, value in (anomaly.details or {}).items()
+        if key in ("session_id", "key", "tags", "tool", "rule", "at_door", "refused_at_door")
+    }
+    return anomaly.detector, details
+
+
+def _refusal_summary(shape: tuple, count: int) -> Anomaly:
+    """The one anomaly that stands for ``count`` refusals past the record cap.
+
+    Same detector, rule and tool as the refusals it summarises; carries no
+    Decision of its own.
+    """
+    detector, base = shape
+    details = dict(base)
+    details["suppressed_count"] = int(count)
+    tool = details.get("tool")
+    return Anomaly(
+        detector=detector,
+        severity="warn",
+        message=(
+            f"{count} more refusals of the same kind ({detector}"
+            f"{'' if tool is None else ', tool ' + repr(tool)}) were not recorded one by one"
+        ),
+        details=details,
+    )
 
 
 def _detail(anomaly: Anomaly, key: str, default):

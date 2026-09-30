@@ -28,6 +28,7 @@ the SDK must never crash the agent it is talking to.
 import dataclasses
 import hashlib
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any, get_args, get_type_hints
 
@@ -79,9 +80,11 @@ class WireEvent:
 
     ``priced``, ``partial`` and ``tokens_estimated`` mirror the like-named
     fields on :class:`~runbound.events.Event` — how a call was priced, and
-    whether it ever actually finished. ``loop_exempt`` does not appear here on
-    purpose: it is local bookkeeping for the loop window and has no meaning to
-    the plane.
+    whether it ever actually finished. ``provider`` is the endpoint label the
+    call went to (``"openai@api.openai.com"``), so the plane can say which
+    provider a service was on when its behaviour changed. ``loop_exempt`` does
+    not appear here on purpose: it is local bookkeeping for the loop window and
+    has no meaning to the plane.
     """
 
     ts_wall: str = ""
@@ -100,6 +103,7 @@ class WireEvent:
     priced: str | None = None
     partial: bool = False
     tokens_estimated: bool = False
+    provider: str | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +282,38 @@ class TripReport:
 
 
 @dataclass(frozen=True)
+class PlaneUnavailable:
+    """The body every SDK-path 503 the plane cannot answer normally carries
+    — ``app.UNAVAILABLE``/``app.STORE_UNAVAILABLE`` on the plane, mirrored
+    here so the SDK's own parsing (``PlaneClient._plane_loss_kind``) reads
+    against one contract rather than a hand-written literal on each side.
+
+    ``error`` is always ``"plane_unavailable"`` — the one field every such
+    503 has carried since before this class existed, and the only one an
+    SDK older than this field knows to read: that SDK still treats the
+    whole body as plane loss, unchanged. ``cause`` is additive and empty
+    (``""``, not ``None`` — plain strings round-trip through
+    :func:`from_wire` more tolerantly than an optional field) for the
+    generic case: a saturated connection pool, a handler bug, any other
+    unhandled failure on an SDK path. It is ``"fleet_state_unavailable"``
+    for exactly one, more specific case: the live store itself —
+    ``StoreUnavailable``, not a bug — could not be reached. Only that one
+    value means the plane's own *state*, not merely its process or its
+    database, is what is gone; every other 503 with this shape must not be
+    read as a state outage. See :data:`FLEET_STATE_UNAVAILABLE_CAUSE`.
+    """
+
+    error: str = "plane_unavailable"
+    cause: str = ""
+
+
+#: The one ``PlaneUnavailable.cause`` value that means "the plane's own
+#: state store, not merely its process, is unreachable" — see that class's
+#: docstring and :meth:`~runbound.plane.PlaneClient._plane_loss_kind`.
+FLEET_STATE_UNAVAILABLE_CAUSE = "fleet_state_unavailable"
+
+
+@dataclass(frozen=True)
 class Controls:
     """The plane's execution-envelope controls for one service.
 
@@ -453,6 +489,18 @@ class HelloReply:
     #: that must tighten together and lift independently, never share one
     #: slot.
     halt_mode: str = "stop"
+    #: Whether the plane's own fleet state (the live store every halt,
+    #: latch and fleet budget lives in) could be read at all -- ``"ok"`` or
+    #: ``"unavailable"``. A plane whose store is unreachable still answers
+    #: the heartbeat itself (the link is fine), but every other field above
+    #: (``halt``, ``halt_mode``, ``policy_version``, ``circuits``,
+    #: ``posture``, ``controls_version``) then carries only its wire
+    #: default, never a real reading -- so ``"unavailable"`` is what tells
+    #: :meth:`runbound.shared.RemoteState.apply_hello` to hold what it
+    #: already knew rather than read that default as the plane's answer.
+    #: Absence (an older plane) decodes to ``"ok"``, the same "nothing to
+    #: report" reasoning every other field on this class follows.
+    fleet_state: str = "ok"
 
 
 @dataclass(frozen=True)
@@ -472,6 +520,37 @@ class PlaneStatus:
     plane while a fleet-wide halt is being enforced, and ``None`` whenever no
     halt is currently enforced (none received, or ``stale_halt="release"``
     already let a stale one lapse).
+
+    ``entries_window`` is how the last minute's session-entry decisions were
+    actually made — ``{"plane": n, "cache": n, "local": n, "local_causes":
+    {"timeout": n, "plane_loss": n, "plane_unavailable": n, "error": n}}``
+    — and ``entries_local_share`` is ``local / (plane + cache + local)``
+    over that same window, ``0.0`` with nothing in it yet. A link can
+    answer every heartbeat and still be having most entries decided
+    locally (a plane slow enough to miss ``control_plane_timeout_s`` on
+    the hot path, but fast enough to answer the background heartbeat) —
+    that is exactly what these two catch. ``local_causes`` is why each of
+    those local entries was decided locally: ``"timeout"`` (the client
+    gave up, or the entry was skipped outright on an already-degraded
+    link), ``"plane_loss"`` (a 503 naming
+    :data:`FLEET_STATE_UNAVAILABLE_CAUSE` — the plane's own state store is
+    unreachable), ``"plane_unavailable"`` (the same 503 shape with no such
+    cause — the plane answered but could not help for some other reason: a
+    saturated connection pool, a handler bug), or ``"error"`` (anything
+    else — no plane-shaped answer at all). ``mode`` reads ``"degraded"``
+    for the window case too, once it holds enough entries to mean
+    something, and ``reason`` says which path is failing: ``"heartbeat
+    failures"`` (the older, coarser failure count — wins when more than
+    one applies), ``"fleet state unavailable"`` (the plane answers the
+    heartbeat but cannot read its own live store — a hello reply's
+    ``fleet_state == "unavailable"`` — *or* the entry window's own majority
+    local cause is ``"plane_loss"``: the same fact, learned at a different
+    door), ``"entry timeouts"`` (the window's majority cause is genuine
+    timeouts), ``"plane unavailable"`` (the window's majority cause is the
+    plane answering but not helping, for no state-specific reason), or
+    ``"plane errors"`` (the window's majority cause is neither — a
+    connection refused, a malformed reply, and so on), or ``None`` while
+    nothing is wrong.
     """
 
     mode: str = "local"
@@ -480,6 +559,32 @@ class PlaneStatus:
     notice: str | None = None
     entitlements: dict = field(default_factory=dict)
     halt_stale_s: float | None = None
+    entries_window: dict = field(default_factory=dict)
+    entries_local_share: float = 0.0
+    reason: str | None = None
+
+
+#: Longest a ``batch_id`` may be — a plane column width, mirroring
+#: ``ANOMALY_ID_MAX``'s own reasoning: the SDK sends 32 hex characters
+#: (:func:`fresh_batch_id`'s own output), and this is simply how much
+#: room the wire leaves for one, in case a future SDK's id shape grows.
+BATCH_ID_MAX = 64
+
+
+def fresh_batch_id() -> str:
+    """A new id for one exported batch (``/v1/events``'s own envelope).
+
+    The exporter calls this exactly once per *genuinely new* batch it
+    assembles (:meth:`~runbound.export.Exporter._take`) and keeps the same
+    id across that batch's own resends — a batch the plane could not
+    confirm landed is retried with an unchanged id, so the plane can tell
+    "this is the same batch again" from "this is a new one" without
+    inspecting its contents. Random, not content-derived: two batches with
+    identical contents (a customer's own retried duplicate telemetry, not
+    this exporter's own resend) are still two different batches and must
+    not be folded into one.
+    """
+    return uuid.uuid4().hex
 
 
 def key_hash(key: str) -> str:
@@ -507,8 +612,9 @@ def event_to_wire(event: Event, key_hash: str | None, ts_wall: str) -> WireEvent
     ``None`` rather than a guess, because a guess would be a piece of the
     message, and the message may hold anything.
 
-    ``priced``, ``partial`` and ``tokens_estimated`` pass straight through;
-    ``loop_exempt`` is deliberately left off the wire — see :class:`WireEvent`.
+    ``priced``, ``partial``, ``tokens_estimated`` and ``provider`` pass
+    straight through; ``loop_exempt`` is deliberately left off the wire — see
+    :class:`WireEvent`.
     """
     return WireEvent(
         ts_wall=ts_wall,
@@ -527,6 +633,7 @@ def event_to_wire(event: Event, key_hash: str | None, ts_wall: str) -> WireEvent
         priced=event.priced,
         partial=event.partial,
         tokens_estimated=event.tokens_estimated,
+        provider=event.provider,
     )
 
 

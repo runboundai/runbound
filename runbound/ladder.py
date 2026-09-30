@@ -58,6 +58,15 @@ LEVELS: tuple[int, ...] = (
     LEVEL_BLOCKED,
 )
 
+#: Each rung's name, as a record or a console shows it.
+LEVEL_NAMES: dict[int, str] = {
+    LEVEL_QUIET: "quiet",
+    LEVEL_WATCHING: "watching",
+    LEVEL_LIMITED: "limited",
+    LEVEL_CLOSED: "closed",
+    LEVEL_BLOCKED: "blocked",
+}
+
 #: The reason of a transition that is not one: nothing moved, nothing is
 #: recorded in the session's ladder history.
 UNCHANGED = "unchanged"

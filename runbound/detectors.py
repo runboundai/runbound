@@ -1459,14 +1459,20 @@ def _apply_posture(state: SessionState, move: Transition) -> None:
     stand-in) is left alone: the ladder's allowance still works without it.
     Only the ladder's own entry is ever lifted here, never a manual one.
     """
+    level = ladder.LEVEL_NAMES.get(move.next_level)
     if Effect.SET_POSTURE in move.effects and move.posture:
         enter = getattr(state, "_enter_posture", None)
         if enter is not None:
-            enter(move.posture, _LADDER_REASONS.get(move.reason, move.reason), source="ladder")
+            enter(
+                move.posture,
+                _LADDER_REASONS.get(move.reason, move.reason),
+                source="ladder",
+                level=level,
+            )
     if Effect.CLEAR_POSTURE in move.effects:
         leave = getattr(state, "_exit_posture", None)
         if leave is not None:
-            leave(source="ladder")
+            leave(source="ladder", reason=move.reason, level=level)
 
 
 def _base_allowance(state: SessionState, config: GuardrailConfig) -> int:

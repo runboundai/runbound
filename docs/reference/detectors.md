@@ -54,8 +54,9 @@ Two behaviors worth knowing before you tune anything:
 
 - **A detector fires once per session.** A sustained overrun does not re-alert
   on every following event. `runbound.reset()` starts a new session and arms
-  them all again. (The loop detector under `on_loop="throttle"` or
-  `"escalate"` is the exception — see [When a loop is
+  them all again. (A *refusal* is not a detector firing: every refusal is
+  recorded, up to a cap per session, rule and tool. The loop detector under
+  `on_loop="throttle"` or `"escalate"` is the exception — see [When a loop is
   detected](#when-a-loop-is-detected) — and `spike` reports twice, once when it
   starts watching and once when it confirms.)
 - **A knob left at `None` disables its detector.** A session with no limits set
@@ -229,9 +230,10 @@ Three things make this a door in front of the wall, not a second wall:
   cannot be priced ahead of time, and refusing a call for a cost runbound cannot
   compute would be the SDK inventing a limit you never set. It is warned once
   per model, and the post-call `budget` check still watches the call.
-- **It is alerted once per session**, kept apart from an ordinary post-call
+- **Every refusal is recorded**, kept apart from an ordinary post-call
   `budget` trip by `details["rule"]` (`"reservation"` or `"admission"`), so
-  neither shadows the other.
+  neither shadows the other. Identical refusals are recorded one by one up to
+  100 per session, rule and tool, then summarised (see the changelog).
 
 **A soft line under the wall.** A fraction of `budget_usd` — say 80% — warns
 once, at the first call that takes the session past it (strictly greater,

@@ -167,6 +167,9 @@ ROUND_TRIPS = [
         consecutive_failures=3,
         notice=None,
         halt_stale_s=12.5,
+        entries_window={"plane": 2, "cache": 5, "local": 13},
+        entries_local_share=0.65,
+        reason="entry timeouts",
     ),
 ]
 
@@ -397,6 +400,21 @@ def test_event_to_wire_defaults_priced_partial_and_tokens_estimated():
     assert wire.priced is None
     assert wire.partial is False
     assert wire.tokens_estimated is False
+
+
+def test_event_to_wire_carries_the_provider():
+    event = Event(kind="llm_call", ts=1.0, step=1, model="gpt-4o", provider="openai@api.openai.com")
+    wire = event_to_wire(event, key_hash=None, ts_wall=TS)
+
+    assert wire.provider == "openai@api.openai.com"
+
+
+def test_an_event_and_its_wire_form_have_no_provider_by_default():
+    event = Event(kind="tool_call", ts=1.0, step=1, tool_name="search")
+
+    assert event.provider is None
+    assert event_to_wire(event, key_hash=None, ts_wall=TS).provider is None
+    assert WireEvent().provider is None
 
 
 def test_wire_event_never_carries_loop_exempt():

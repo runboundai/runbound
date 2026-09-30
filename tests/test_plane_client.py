@@ -10,6 +10,7 @@ import json
 import logging
 import threading
 import urllib.error
+from io import BytesIO
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -387,6 +388,180 @@ def test_other_http_errors_are_plain_failures():
         assert agent.hello({}) is None
     assert agent.key_state == "unknown"
     assert agent.consecutive_failures == 1
+
+
+# --- classifying why a call failed -------------------------------------------
+
+
+def http_error_with_body(code: int, body: dict) -> urllib.error.HTTPError:
+    """An ``HTTPError`` whose ``.read()`` returns ``body`` — the shape a real
+    503 plane-loss response takes, unlike :func:`http_error`'s bodyless one."""
+    payload = json.dumps(body).encode("utf-8")
+    return urllib.error.HTTPError(URL, code, "nope", {}, BytesIO(payload))
+
+
+def test_a_store_down_503_is_classified_as_plane_loss():
+    """Only a 503 naming the specific ``cause`` a genuine state outage
+    carries (a genuine live-store outage's own path, ``app.STORE_UNAVAILABLE`` on
+    the plane) is plane loss."""
+    error = http_error_with_body(
+        503, {"error": "plane_unavailable", "cause": "fleet_state_unavailable"}
+    )
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "plane_loss"
+
+
+def test_a_plain_plane_unavailable_503_is_not_plane_loss():
+    """The generic body ``app.FailOpenMiddleware`` answers *any* unhandled
+    SDK-path failure with (a saturated pool, a handler bug, a failed batch
+    write) carries no ``cause`` at all -- must read as its own, distinct
+    kind, never the specific "the plane's state is gone" one. This is the
+    exact mislabel this split exists to close: before the plane's ``cause``
+    field existed, this body was indistinguishable from a real state
+    outage."""
+    error = http_error_with_body(503, {"error": "plane_unavailable"})
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "plane_unavailable"
+    assert agent.last_failure_kind != "plane_loss"
+
+
+def test_a_plane_unavailable_503_with_an_unrecognized_cause_is_not_plane_loss():
+    """A future cause value this SDK does not know about must not be
+    mistaken for the one specific value that means plane loss."""
+    error = http_error_with_body(
+        503, {"error": "plane_unavailable", "cause": "something_new"}
+    )
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "plane_unavailable"
+
+
+def test_a_503_with_an_unrelated_body_is_a_plain_error():
+    error = http_error_with_body(503, {"error": "something_else"})
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "error"
+
+
+def test_a_503_with_no_readable_body_is_a_plain_error():
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=http_error(503))):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "error"
+
+
+def test_a_500_is_a_plain_error_not_plane_loss():
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=http_error(500))):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "error"
+
+
+def test_a_socket_timeout_is_classified_as_timeout():
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=TimeoutError("slow"))):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "timeout"
+
+
+def test_a_urlerror_wrapping_a_timeout_is_classified_as_timeout():
+    error = urllib.error.URLError(TimeoutError("slow"))
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "timeout"
+
+
+def test_a_connection_refused_is_a_plain_error_not_a_timeout():
+    error = urllib.error.URLError(ConnectionRefusedError("nope"))
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "error"
+
+
+def test_last_failure_kind_starts_none_and_clears_on_success():
+    agent = client()
+    assert agent.last_failure_kind is None
+
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=OSError("boom"))):
+        agent.hello({})
+    assert agent.last_failure_kind == "error"
+
+    with patch.object(plane_module, "urlopen", urlopen_mock({"org_id": "o"})):
+        agent.hello({})
+    assert agent.last_failure_kind is None
+
+
+# --- enter_with_kind: this call's own outcome, not the shared "last" one ----
+#
+# ``last_failure_kind`` is whole-client state (the test above proves it: a
+# ``hello`` clears what an ``enter`` set). A caller with concurrent traffic on
+# one client -- an entry call racing the background heartbeat, in practice --
+# cannot read it back afterward and trust it still describes *that* call: a
+# concurrent success on the same client can clear or overwrite it first.
+# ``enter_with_kind`` hands the caller its own call's classification directly,
+# at the moment this call decides it, so there is nothing to race.
+
+
+def test_enter_with_kind_reports_plane_loss_for_a_store_down_503():
+    error = http_error_with_body(
+        503, {"error": "plane_unavailable", "cause": "fleet_state_unavailable"}
+    )
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        decision, kind = client().enter_with_kind({})
+    assert decision is None
+    assert kind == "plane_loss"
+
+
+def test_enter_with_kind_reports_plane_unavailable_for_the_generic_503():
+    error = http_error_with_body(503, {"error": "plane_unavailable"})
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        decision, kind = client().enter_with_kind({})
+    assert decision is None
+    assert kind == "plane_unavailable"
+
+
+def test_enter_with_kind_reports_error_for_an_unrelated_503_body():
+    error = http_error_with_body(503, {"error": "something_else"})
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        decision, kind = client().enter_with_kind({})
+    assert decision is None
+    assert kind == "error"
+
+
+def test_enter_with_kind_reports_timeout_for_a_socket_timeout():
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=TimeoutError("slow"))):
+        decision, kind = client().enter_with_kind({})
+    assert decision is None
+    assert kind == "timeout"
+
+
+def test_enter_with_kind_reports_none_on_success():
+    mock = urlopen_mock({"allow": True})
+    with patch.object(plane_module, "urlopen", mock):
+        decision, kind = client().enter_with_kind({"key_hash": "abc"})
+    assert isinstance(decision, EntryDecision)
+    assert kind is None
+
+
+def test_enter_still_returns_only_the_decision_and_still_sets_last_failure_kind():
+    """``enter`` itself is unchanged: same return value, same whole-client
+    bookkeeping as before -- ``enter_with_kind`` is additive, not a
+    replacement other callers must migrate to."""
+    error = http_error_with_body(
+        503, {"error": "plane_unavailable", "cause": "fleet_state_unavailable"}
+    )
+    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
+        agent = client()
+        assert agent.enter({}) is None
+    assert agent.last_failure_kind == "plane_loss"
 
 
 # --- the poller ------------------------------------------------------------

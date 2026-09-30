@@ -319,7 +319,7 @@ def test_before_still_works_when_called_with_one_argument():
     api._HOOKS.before("openai")  # does not raise, and does not raise TypeError
 
 
-def test_before_alerts_once_per_model_per_process():
+def test_before_records_every_refusal():
     runbound.init(on_unpriced_model="refuse")
     observer = RecordingObserver()
     api._ENGINE.observers.append(observer)
@@ -331,7 +331,7 @@ def test_before_alerts_once_per_model_per_process():
     with pytest.raises(GuardrailTripped):
         api._HOOKS.before("openai", "another-mystery-model")
 
-    assert len(observer.sent) == 2  # one per distinct model, not per call
+    assert len(observer.sent) == 4  # every refusal is recorded, whatever the model
 
 
 def test_before_refuses_regardless_of_on_anomaly_callback_mode():

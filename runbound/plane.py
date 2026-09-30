@@ -28,11 +28,19 @@ import logging
 import threading
 import time
 from collections.abc import Callable
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from .plane_types import EntryDecision, HelloReply, TripReport, from_wire, to_wire
+from .plane_types import (
+    FLEET_STATE_UNAVAILABLE_CAUSE,
+    EntryDecision,
+    HelloReply,
+    PlaneUnavailable,
+    TripReport,
+    from_wire,
+    to_wire,
+)
 
 _LOG = logging.getLogger("runbound")
 
@@ -51,6 +59,22 @@ POLLER_JOIN_TIMEOUT_S = 1.0
 
 #: HTTP statuses that mean "your key is no good", as opposed to "try later".
 REJECTED_STATUSES = frozenset({401, 403})
+
+#: The ``"error"`` value every SDK-path 503 carries, whether or not the
+#: plane can say more about why — see :class:`~runbound.plane_types.
+#: PlaneUnavailable`. Alone, this means only "the plane could not answer
+#: normally," which covers a saturated connection pool, a handler bug, a
+#: failed batch write — anything its own generic fail-open path catches.
+#: :meth:`PlaneClient._plane_loss_kind` reports that alone as
+#: ``"plane_unavailable"``, and only a body whose ``cause`` is
+#: :data:`~runbound.plane_types.FLEET_STATE_UNAVAILABLE_CAUSE` as the more
+#: specific ``"plane_loss"`` — the live store itself is gone, not merely
+#: the plane's process. Before that ``cause`` field existed, every 503
+#: shaped like this looked identical, so a plane whose database pool was
+#: merely saturated (Redis perfectly healthy) read the same "fleet state
+#: unavailable" a real state outage would; that mislabel is what this
+#: split closes.
+PLANE_LOSS_ERROR_CODE = "plane_unavailable"
 
 
 class _PeriodicWarning:
@@ -114,6 +138,20 @@ class PlaneClient:
         self.key_state = "unknown"
         self.consecutive_failures = 0
         self.last_success: float | None = None
+        #: Why the *last* call to this client failed — ``"timeout"`` (the
+        #: socket itself timed out), ``"plane_loss"`` (a 503 naming
+        #: :data:`~runbound.plane_types.FLEET_STATE_UNAVAILABLE_CAUSE` —
+        #: the plane's own state is unreachable, not merely this call),
+        #: ``"plane_unavailable"`` (a 503 shaped like plane loss but naming
+        #: no such cause — a saturated pool, a handler bug, anything else
+        #: the plane's own generic fail-open catches), or ``"error"``
+        #: (anything else: connection refused, a malformed reply, a
+        #: rejected key). ``None`` before any call has failed, and cleared
+        #: on every success — see :meth:`_succeeded`.
+        #: :meth:`~runbound.shared.RemoteState._last_known_cause` reads
+        #: this to attribute the entry window; nothing else in this module
+        #: consumes it.
+        self.last_failure_kind: str | None = None
         self._now = now
         self._sdk_version = sdk_version
         self._lock = threading.Lock()
@@ -124,13 +162,41 @@ class PlaneClient:
 
     def hello(self, payload: dict) -> HelloReply | None:
         """Announce this worker and read back org state. ``None`` on failure."""
-        data = self._call("POST", "/v1/hello", payload, HELLO_TIMEOUT_S)
+        data, _kind = self._call("POST", "/v1/hello", payload, HELLO_TIMEOUT_S)
         return self._parse(HelloReply, data)
 
     def enter(self, payload: dict) -> EntryDecision | None:
-        """Ask whether a session may start. ``None`` means "decide locally"."""
-        data = self._call("POST", "/v1/enter", payload, self.timeout_s)
-        return self._parse(EntryDecision, data)
+        """Ask whether a session may start. ``None`` means "decide locally".
+
+        See :meth:`enter_with_kind` for a caller that also needs to know
+        *why*, without racing :attr:`last_failure_kind`.
+        """
+        decision, _kind = self.enter_with_kind(payload)
+        return decision
+
+    def enter_with_kind(self, payload: dict) -> tuple[EntryDecision | None, str | None]:
+        """Like :meth:`enter`, but also returns *this call's own* failure
+        kind -- ``None`` on success, else one of :attr:`last_failure_kind`'s
+        values.
+
+        :attr:`last_failure_kind` is whole-client state: any call on this
+        client can set or clear it, including one running concurrently on
+        another thread (the heartbeat, in practice). Reading it back after
+        this call returns is a race a concurrent success can win, clearing
+        it (or overwriting it with an unrelated kind) before the read -- a
+        real state outage's own run surfaced exactly this, misreading a
+        plane-loss 503 as a timeout about one call in thirty. This method
+        captures the kind synchronously, in this call's own stack, so
+        :meth:`~runbound.shared.RemoteState.enter` (its only caller that
+        needs the specific reason) never has to read it back at all.
+        """
+        data, kind = self._call("POST", "/v1/enter", payload, self.timeout_s)
+        if data is None:
+            return None, kind
+        decision = self._parse(EntryDecision, data)
+        if decision is None:
+            return None, "error"
+        return decision, None
 
     def trip(self, report: TripReport) -> bool:
         """Report a trip to the fleet. ``False`` if it did not get through."""
@@ -139,27 +205,31 @@ class PlaneClient:
         except Exception:
             self._failed("/v1/trip", exc_info=True)
             return False
-        return self._call("POST", "/v1/trip", body, self.timeout_s) is not None
+        data, _kind = self._call("POST", "/v1/trip", body, self.timeout_s)
+        return data is not None
 
     def events(self, batch: dict) -> bool:
         """Ship one batch of telemetry. ``False`` if it did not get through."""
-        return self._call("POST", "/v1/events", batch, EVENTS_TIMEOUT_S) is not None
+        data, _kind = self._call("POST", "/v1/events", batch, EVENTS_TIMEOUT_S)
+        return data is not None
 
     def policy(self, service: str) -> dict | None:
         """Fetch the org policy for ``service``. ``None`` on failure."""
         path = "/v1/policy?" + urlencode({"service": service})
-        return self._call("GET", path, None, POLICY_TIMEOUT_S)
+        data, _kind = self._call("GET", path, None, POLICY_TIMEOUT_S)
+        return data
 
     def controls(self, service: str) -> dict | None:
         """Fetch the Controls envelope for ``service``. ``None`` on
         failure. The reply is ``{"version", "dry_run", "controls"}``,
         exactly :meth:`policy`'s own shape."""
         path = "/v1/controls?" + urlencode({"service": service})
-        return self._call("GET", path, None, CONTROLS_TIMEOUT_S)
+        data, _kind = self._call("GET", path, None, CONTROLS_TIMEOUT_S)
+        return data
 
     def clear(self, key_hash: str) -> int | None:
         """Clear a key's fleet state; returns how many latches were cleared."""
-        data = self._call("POST", "/v1/clear", {"key_hash": key_hash}, CLEAR_TIMEOUT_S)
+        data, _kind = self._call("POST", "/v1/clear", {"key_hash": key_hash}, CLEAR_TIMEOUT_S)
         if data is None:
             return None
         cleared = data.get("cleared", 0)
@@ -173,35 +243,84 @@ class PlaneClient:
 
     # --- the transport ----------------------------------------------------
 
-    def _call(self, method: str, path: str, body: dict | None, timeout: float) -> dict | None:
-        """One request. Returns the decoded object, or ``None`` for any failure.
+    def _call(
+        self, method: str, path: str, body: dict | None, timeout: float
+    ) -> tuple[dict | None, str | None]:
+        """One request. Returns ``(decoded object, None)`` on success, or
+        ``(None, kind)`` for any failure -- ``kind`` is this call's own
+        classification, the same values :attr:`last_failure_kind` takes.
 
         A response with no body decodes to ``{}`` — that is a success, and the
         boolean calls rely on it. Anything else that goes wrong (a bad key, a
         socket error, a body that is not a JSON object, a payload that will not
         serialize) is a failure: counted, warned about at most once a minute,
-        and reported as ``None``.
+        and reported as ``(None, kind)``.
+
+        Every caller still has :attr:`last_failure_kind` for the whole
+        client's own last outcome (see its docstring); ``kind`` here is
+        this call's own answer, for a caller (:meth:`enter_with_kind`) that
+        cannot afford to read shared state a concurrent call might already
+        have changed.
         """
         if self.key_state == "invalid":
-            return None
+            return None, "error"
         try:
             request = self._request(method, path, body)
         except Exception:
             self._failed(path, exc_info=True)
-            return None
+            return None, "error"
         try:
             with urlopen(request, timeout=timeout) as response:
                 raw = response.read()
         except HTTPError as error:
             if getattr(error, "code", None) in REJECTED_STATUSES:
                 self._rejected()
-            else:
-                self._failed(path, exc_info=True)
-            return None
+                return None, "error"
+            kind = self._plane_loss_kind(error)
+            self._failed(path, exc_info=True, kind=kind)
+            return None, kind
+        except TimeoutError as error:
+            self._failed(path, exc_info=True, kind="timeout")
+            return None, "timeout"
+        except URLError as error:
+            kind = "timeout" if isinstance(error.reason, TimeoutError) else "error"
+            self._failed(path, exc_info=True, kind=kind)
+            return None, kind
         except Exception:
             self._failed(path, exc_info=True)
-            return None
-        return self._decode(raw, path)
+            return None, "error"
+        data = self._decode(raw, path)
+        return data, (None if data is not None else "error")
+
+    def _plane_loss_kind(self, error: HTTPError) -> str:
+        """``"plane_loss"`` for a 503 whose body names
+        :data:`~runbound.plane_types.FLEET_STATE_UNAVAILABLE_CAUSE`,
+        ``"plane_unavailable"`` for the same shape with no matching cause
+        (or none at all — an SDK-side default for a plane one version
+        behind this field), else ``"error"``.
+
+        Reading an ``HTTPError``'s body is exactly what ``urlopen`` handed
+        this client in the first place (it is itself a file-like response
+        object); a body that cannot be read or parsed — including a test
+        double built with no body at all — is simply not this shape, and
+        this returns ``"error"`` rather than raising, same as every other
+        failure classifier in this module. Parsed through
+        :func:`~runbound.plane_types.from_wire` like every other reply this
+        client reads, not by hand: a plane one version ahead sending fields
+        this SDK does not know about must not break this classification.
+        """
+        if getattr(error, "code", None) != 503:
+            return "error"
+        try:
+            raw = json.loads(error.read().decode("utf-8"))
+        except Exception:
+            return "error"
+        if not isinstance(raw, dict) or raw.get("error") != PLANE_LOSS_ERROR_CODE:
+            return "error"
+        body = from_wire(PlaneUnavailable, raw)
+        if body.cause == FLEET_STATE_UNAVAILABLE_CAUSE:
+            return "plane_loss"
+        return "plane_unavailable"
 
     def _request(self, method: str, path: str, body: dict | None) -> Request:
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -260,13 +379,15 @@ class PlaneClient:
         with self._lock:
             self.consecutive_failures = 0
             self.last_success = self._now()
+            self.last_failure_kind = None
             if self.key_state != "invalid":
                 self.key_state = "valid"
 
-    def _failed(self, path: str, exc_info: bool = False) -> None:
+    def _failed(self, path: str, exc_info: bool = False, kind: str = "error") -> None:
         with self._lock:
             self.consecutive_failures += 1
             failures = self.consecutive_failures
+            self.last_failure_kind = kind
         warn_periodically(
             self._failure_warning,
             "runbound: control plane call %s failed (%d in a row); using local state",
