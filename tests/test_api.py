@@ -231,7 +231,7 @@ def test_tool_error_message_is_truncated():
 
 
 def test_loop_trips_before_the_tool_body_runs():
-    runbound.init(loop_threshold=3, on_anomaly="raise")
+    runbound.init(loop_threshold=3, on_anomaly="raise", on_loop="break")
     calls: list[str] = []
 
     @runbound.tool

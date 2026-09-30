@@ -31,7 +31,8 @@ besides `init()`).
 | `tokens_per_minute_limit` | `int \| None` | `None` | Ceiling on tokens in any trailing 60-second window. |
 | `loop_threshold` | `int` | `3` | Identical tool-call hashes within the window that count as a loop. Must be >= 2. |
 | `loop_window` | `int` | `20` | How many recent tool calls are remembered. Must be >= `loop_threshold`. |
-| `on_loop` | `str \| None` | `None` | What to do about a loop specifically: `None` (use `on_anomaly`), `"break"`, `"throttle"`, or `"escalate"`. |
+| `on_loop` | `str \| None` | `None` | What to do about a loop specifically: `None` or `"graded"` (log at `loop_threshold`, page at `loop_alert_threshold`, contain through the spike ladder at `loop_contain_threshold`: the default since 0.7.0), or one of the legacy policies `"break"`, `"throttle"`, `"escalate"`. |
+| `loop_alert_threshold`, `loop_contain_threshold` | `int \| None` | `None` | The graded policy's second and third rungs: repeats before it pages, and before it hands the loop to the spike ladder. Default `2 *` and `3 * loop_threshold` (never past `loop_window`). Set explicitly they must satisfy `loop_threshold < loop_alert_threshold < loop_contain_threshold <= loop_window`. |
 | `loop_hard_threshold` | `int \| None` | `None` | Repeat count at which `on_loop="escalate"` stops the agent. Defaults to `2 * loop_threshold`. Must be greater than `loop_threshold`. |
 | `throttle_base_seconds` | `float` | `2.0` | First sleep applied by `on_loop="throttle"`; it doubles on each further repeat. Must be positive. |
 | `throttle_max_seconds` | `float` | `30.0` | Ceiling on the throttle sleep. Must be positive and >= `throttle_base_seconds`. |

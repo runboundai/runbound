@@ -7,7 +7,7 @@ import runbound
 from runbound.integrations.langchain import GuardrailCallbackHandler
 from langchain_core.tools import tool
 
-runbound.init(budget_usd=5.00, loop_threshold=3, on_anomaly="raise")
+runbound.init(budget_usd=5.00, loop_threshold=3, on_loop="break", on_anomaly="raise")
 
 orders_looked_up = []
 

@@ -37,6 +37,30 @@ VELOCITY_WINDOW_SECONDS = 60.0
 REPEATING_LOOP_POLICIES = ("throttle", "escalate")
 
 
+#: What a ladder move answers when it moved but has nothing to say (spending the
+#: allowance, like the spike detector's silent rungs).
+_NOTHING = object()
+
+
+def _canonical_cycle(unit: list) -> tuple:
+    """A cycle by its smallest rotation, so the same rotation of tools is one
+    loop whichever tool the window happens to end on."""
+    names = [str(name) for name in unit]
+    return min(tuple(names[i:] + names[:i]) for i in range(len(names)))
+
+
+def _spend_allowance(state: SessionState, config: GuardrailConfig) -> int:
+    """Charge one repeat to the limit; returns what is left. The caller holds
+    ``state.lock``. A session limited before this ever saw it carries no
+    allowance of its own, so it starts from its base."""
+    allowance = state.spike_allowance
+    if allowance is None:
+        allowance = _base_allowance(state, config)
+    allowance -= 1
+    state.spike_allowance = allowance
+    return allowance
+
+
 class _FireOnceDetector:
     """Shared bookkeeping: one anomaly per session, then silence.
 
@@ -149,11 +173,25 @@ class LoopDetector(_FireOnceDetector):
     sees "repeat" correctly even though "sequence"/"retry"/"stall" saw only
     that one event.
 
-    It fires once per session like every other detector, except under the
-    ``on_loop`` policies that react to each repeat ("throttle", "escalate"):
-    those need a verdict on every event, so the fire-once memo is bypassed —
-    and, exactly as before 0.4.0, only for "repeat"; the other three shapes
-    are never affected by ``on_loop``.
+    Under the legacy ``on_loop`` values it fires once per session like every
+    other detector, except the policies that react to each repeat ("throttle",
+    "escalate"): those need a verdict on every event, so the fire-once memo is
+    bypassed — and, exactly as before 0.4.0, only for "repeat"; the other three
+    shapes are never affected by them.
+
+    Under the **graded** policy (``on_loop`` ``None`` or ``"graded"``, the
+    default) a loop is answered in three rungs by how many times it has
+    repeated, each firing once per loop on the event that reaches it: a *log*
+    at ``loop_threshold`` (a ``warn``, reacted ``notify``), an *alert* at
+    ``loop_alert_threshold`` (a ``critical``, reacted ``notify``: a person is
+    paged, nothing is stopped) and *contain* at ``loop_contain_threshold``, where
+    the loop becomes an observation of the abuse ladder
+    (:attr:`~runbound.ladder.Observation.LOOP`): the session is limited to
+    ``restricted``, each further repeat spends the ladder's allowance, and the
+    last closes it with the cooldown, strikes and fleet-wide return of a spike
+    close. The anomalies keep detector ``loop``. It covers "repeat", "sequence"
+    and "retry" (each reports how many times it has repeated); "stall" keeps its
+    one-shot critical. See :meth:`_graded`.
     """
 
     name = "loop"
@@ -166,6 +204,13 @@ class LoopDetector(_FireOnceDetector):
         self._all_hashes: dict[str, set] = {}
         #: session_id -> turn of the last hash this session had never seen before.
         self._last_new_turn: dict[str, int] = {}
+        #: (session_id, shape, identity) -> the highest graded rung fired for that
+        #: loop (0 none, 1 log, 2 alert, 3 contain reached, 4 closed).
+        self._rungs: dict[tuple, int] = {}
+        #: session_id -> how many separate loops the graded policy has seen.
+        self._loop_episodes: dict[str, int] = {}
+        #: session_id -> how many times the loop limited the session.
+        self._limit_episodes: dict[str, int] = {}
         #: session_id -> deque[(turn, tool_name)] of tool_error events, maxlen loop_window.
         self._errors: dict[str, deque] = {}
 
@@ -180,6 +225,8 @@ class LoopDetector(_FireOnceDetector):
         "repeat" when no such policy is set — fires at most once per session.
         """
         self._track(state, event, config)
+        if config.is_graded_loop():
+            return self._graded(state, event, config)
         if config.on_loop in REPEATING_LOOP_POLICIES and "repeat" in getattr(
             config, "loop_shapes", ("repeat",)
         ):
@@ -273,6 +320,268 @@ class LoopDetector(_FireOnceDetector):
                 "usd_inside_loop": _usd_inside_loop(state, started_turn),
             },
         )
+
+    # --- the graded policy --------------------------------------------------
+
+    def _progress(
+        self, state: SessionState, event: Event, config: GuardrailConfig
+    ) -> list[dict]:
+        """How far along each loop this event is part of, in the graded
+        policy's terms: one dict per shape that currently sees a loop, with the
+        ``repeats`` so far and the ``threshold`` it started at."""
+        shapes = getattr(config, "loop_shapes", ("repeat",))
+        found: list[dict] = []
+        threshold = config.loop_threshold
+        if "repeat" in shapes and event.kind in HASHED_KINDS and event.args_hash:
+            with state.lock:
+                count = state.recent_hashes.count(event.args_hash)
+            if count >= threshold:
+                tool = event.tool_name or "<unknown>"
+                started = self._started_turn(state, event.args_hash)
+                what = "model requested tool" if event.kind == "tool_request" else "tool"
+                found.append({
+                    "shape": "repeat", "ident": event.args_hash, "repeats": count,
+                    "threshold": threshold, "started_turn": started,
+                    "period_tools": [tool], "tool_name": event.tool_name,
+                    "args_hash": event.args_hash,
+                    "phrase": f"{what} {tool!r} repeated {count}x",
+                })
+        if "sequence" in shapes:
+            cycle = self._sequence_cycle(state, event, config)
+            if cycle is not None:
+                period, unit, repeats, started = cycle
+                found.append({
+                    "shape": "sequence", "ident": _canonical_cycle(unit), "repeats": repeats,
+                    "threshold": threshold, "started_turn": started,
+                    "period_tools": unit, "period": period,
+                    "phrase": f"a period-{period} sequence {unit!r} repeated {repeats}x",
+                })
+        if "retry" in shapes and event.kind == "tool_error" and event.tool_name:
+            errors = self._errors.get(state.session_id)
+            if errors:
+                matches = [turn for turn, name in errors if name == event.tool_name]
+                bar = threshold * 2 if event.retryable else threshold
+                if len(matches) >= bar:
+                    found.append({
+                        "shape": "retry", "ident": event.tool_name, "repeats": len(matches),
+                        "threshold": bar, "started_turn": matches[0],
+                        "period_tools": [event.tool_name], "tool_name": event.tool_name,
+                        "phrase": f"tool {event.tool_name!r} failed and was retried {len(matches)}x",
+                    })
+        return found
+
+    def _sequence_cycle(
+        self, state: SessionState, event: Event, config: GuardrailConfig
+    ) -> tuple[int, list, int, int] | None:
+        """``(period, unit, repeats, started_turn)`` of the tool-name cycle the
+        window currently ends in, ``repeats`` counting every full cycle back to
+        back (at least ``loop_threshold``), or ``None``. The same detection as
+        :meth:`_evaluate_sequence`, extended to count past the threshold."""
+        if event.kind not in HASHED_KINDS or not event.args_hash or event.loop_exempt:
+            return None
+        window = self._windows.get(state.session_id)
+        if not window:
+            return None
+        items = list(window)
+        threshold = config.loop_threshold
+        for period in range(2, config.loop_max_period + 1):
+            if period * threshold > len(items):
+                break
+            unit = [name for _, name, _ in items[-period:]]
+            if len(set(unit)) < 2:
+                continue
+            repeats = 0
+            while (repeats + 1) * period <= len(items):
+                tail = items[-(repeats + 1) * period:]
+                if not all(tail[i][1] == unit[i % period] for i in range(len(tail))):
+                    break
+                repeats += 1
+            if repeats >= threshold:
+                return period, unit, repeats, items[-repeats * period][0]
+        return None
+
+    def _graded(
+        self, state: SessionState, event: Event, config: GuardrailConfig
+    ) -> Anomaly | None:
+        """The graded policy: log, then alert, then contain.
+
+        Each loop (a shape and what repeats) has a rung it has reached; an
+        event that makes the repeat count reach a higher rung's threshold fires
+        that rung once. A loop that falls back under its threshold is over and
+        re-arms. Above the contain rung every further repeat is an observation
+        for the ladder until the session is closed. The most advanced rung the
+        event produced is the anomaly returned.
+        """
+        progress = self._progress(state, event, config)
+        self._track_activity(state, event, config)
+        session_id = state.session_id
+        alert, contain = config.alert_loop_threshold(), config.contain_loop_threshold()
+        for key in [k for k in self._rungs if k[0] == session_id]:
+            if not self._still_looping(state, key, config, progress):
+                self._rungs.pop(key, None)  # the loop is over: a new one starts from the log
+        best: Anomaly | None = None
+        best_rank = -1
+        for item in progress:
+            key = (session_id, item["shape"], item["ident"])
+            repeats = item["repeats"]
+            rung = 3 if repeats >= contain else 2 if repeats >= alert else 1
+            fired = self._rungs.get(key, 0)
+            if fired == 0:
+                self._loop_episodes[session_id] = self._loop_episodes.get(session_id, 0) + 1
+            if rung < 3 and rung <= fired:
+                continue
+            if rung == 3 and fired >= 4:
+                continue
+            anomaly = self._rung_anomaly(state, config, item, rung)
+            if anomaly is None:
+                continue  # an observation the ladder had nothing to say about
+            self._rungs[key] = self._memo_after(anomaly, rung)
+            rank = rung * 1000 + repeats
+            if anomaly is not None and rank > best_rank:
+                best, best_rank = anomaly, rank
+        return best
+
+    def _still_looping(
+        self, state: SessionState, key: tuple, config: GuardrailConfig, progress: list[dict]
+    ) -> bool:
+        """Is the loop ``key`` (session, shape, what repeats) still at or above
+        its threshold? Judged from the session's own window, not from the one
+        event in hand, so a loop interleaved with other calls is not re-armed by
+        them."""
+        _, shape, ident = key
+        threshold = config.loop_threshold
+        if shape == "repeat":
+            with state.lock:
+                return state.recent_hashes.count(ident) >= threshold
+        if shape == "retry":
+            errors = self._errors.get(state.session_id) or ()
+            return sum(1 for _, name in errors if name == ident) >= threshold
+        return any(item["shape"] == shape and item["ident"] == ident for item in progress)
+
+    @staticmethod
+    def _memo_after(anomaly: Anomaly, rung: int) -> int:
+        """What to remember once ``anomaly`` fired: the rung, or 4 once closed."""
+        details = anomaly.details if isinstance(anomaly.details, dict) else {}
+        if details.get("action") == "rollover" or details.get("contained") is False:
+            return 4  # closed, or the ladder cannot act: nothing more to observe
+        return rung
+
+    def _track_activity(
+        self, state: SessionState, event: Event, config: GuardrailConfig
+    ) -> None:
+        """Keep ``state.loop_active`` true while any call in the window is
+        repeated ``loop_threshold`` times, so the ladder does not heal a session
+        a loop limited on an ordinary model call between two repeats."""
+        if event.kind not in HASHED_KINDS or not event.args_hash:
+            return
+        with state.lock:
+            hashes = list(state.recent_hashes)
+        worst = max((hashes.count(h) for h in set(hashes)), default=0)
+        state.loop_active = worst >= config.loop_threshold
+
+    def _rung_anomaly(
+        self, state: SessionState, config: GuardrailConfig, item: dict, rung: int
+    ) -> Anomaly | None:
+        """The anomaly for one rung. Rung 3 asks the ladder; when the ladder
+        cannot act (off, unkeyed, or the app never stops sessions) it says so
+        and is a critical notice like rung 2."""
+        session_id = state.session_id
+        base = {
+            "session_id": session_id,
+            "shape": item["shape"],
+            "period_tools": item["period_tools"],
+            "repeats": item["repeats"],
+            "count": item["repeats"],
+            "threshold": item["threshold"],
+            "window": config.loop_window,
+            "started_turn": item["started_turn"],
+            "usd_inside_loop": _usd_inside_loop(state, item["started_turn"]),
+            "policy": "graded",
+            "episode": self._loop_episodes.get(session_id, 1),
+        }
+        for name in ("tool_name", "args_hash", "period"):
+            if name in item:
+                base[name] = item[name]
+        phrase = f"Loop detected: {item['phrase']} in last {config.loop_window} actions"
+        if rung == 1:
+            return Anomaly(self.name, "warn", phrase, {**base, "rung": "log"})
+        if rung == 2:
+            return Anomaly(self.name, "critical", phrase, {**base, "rung": "alert"})
+        contained = self._contain(state, config, item, base)
+        if contained is not None:
+            return contained if contained is not _NOTHING else None
+        why = self._cannot_contain(state, config)
+        return Anomaly(
+            self.name, "critical", f"{phrase}; not contained: {why}",
+            {**base, "rung": "contain", "contained": False, "why_not": why},
+        )
+
+    @staticmethod
+    def _cannot_contain(state: SessionState, config: GuardrailConfig) -> str:
+        if getattr(state, "key", None) is None:
+            return "this is the default session, which has no key to close"
+        if getattr(config, "on_anomaly", "raise") != "raise":
+            return "on_anomaly is not 'raise', so this app never stops a session"
+        if not getattr(config, "loop_contain_allowed", True):
+            return "the control plane's Controls say to notify only"
+        return "the spike ladder is off (on_spike is not 'limit')"
+
+    def _contain(
+        self, state: SessionState, config: GuardrailConfig, item: dict, base: dict
+    ) -> Anomaly | object | None:
+        """Hand the loop to the abuse ladder. ``None`` when the ladder is not
+        allowed to act; ``_NOTHING`` when it acted silently (spending the
+        allowance); otherwise the anomaly for the limit or the close."""
+        spike_enabled = getattr(config, "spike_enabled", None)
+        if spike_enabled is None:
+            spike_enabled = config.spike_detection
+        if not (
+            spike_enabled
+            and _ladder_active(state, config)
+            and getattr(config, "on_anomaly", "raise") == "raise"
+            and getattr(config, "loop_contain_allowed", True)
+        ):
+            return None
+        session_id = state.session_id
+        with state.lock:
+            level = int(getattr(state, "spike_level", 0) or 0)
+            move = ladder.transition(level, Observation.LOOP, config)
+            if Effect.SPEND_ALLOWANCE in move.effects and _spend_allowance(state, config) <= 0:
+                move = ladder.transition(move.next_level, Observation.ALLOWANCE_GONE, config)
+            if Effect.SET_ALLOWANCE in move.effects:
+                allowance = _base_allowance(state, config)
+                state.spike_allowance = allowance
+                state.spike_allowance_start = allowance
+            _apply_posture(state, move)
+            if not move.moved:
+                return _NOTHING
+            state.spike_level = move.next_level
+            bar = float(item["threshold"])
+            state.record_ladder_transition(
+                level, move.next_level, move.reason,
+                trigger=("loop_repeats", float(item["repeats"]), bar, item["repeats"] / bar, None),
+            )
+            strikes = int(getattr(state, "strikes", 0) or 0) + 1
+        allowance = _base_allowance(state, config)
+        if Effect.CLOSE in move.effects:
+            return Anomaly(
+                self.name, "critical",
+                f"Loop closed: {item['phrase']}; the session was limited and spent its limit",
+                {**base, "rung": "contain", "level": move.next_level, "action": "rollover",
+                 "allowance": allowance, "strikes": strikes,
+                 "cooldown_seconds": getattr(config, "spike_cooldown_seconds", 300.0),
+                 "max_strikes": getattr(config, "spike_max_strikes", 3),
+                 "episode": self._limit_episodes.get(session_id, 1)},
+            )
+        if Effect.SET_ALLOWANCE in move.effects:
+            episode = self._limit_episodes[session_id] = self._limit_episodes.get(session_id, 0) + 1
+            return Anomaly(
+                self.name, "warn",
+                f"Loop contained: {item['phrase']}; the session is limited to a restricted posture",
+                {**base, "rung": "contain", "level": move.next_level, "action": "limit",
+                 "allowance": allowance, "confirmed": True, "episode": episode},
+            )
+        return _NOTHING
 
     def _started_turn(self, state: SessionState, args_hash: str) -> int:
         """The earliest turn this detector's own window has ``args_hash`` at.
@@ -1260,6 +1569,7 @@ class SpikeDetector:
             abnormal_recent=sum(self._flags[session_id]),
             noticed=session_id in self._warned,
             config=config,
+            loop_active=bool(getattr(state, "loop_active", False)),
         )
         with state.lock:
             level = int(getattr(state, "spike_level", 0) or 0)
@@ -1297,12 +1607,7 @@ class SpikeDetector:
         detector instance ever saw it carries no allowance of its own, so it
         starts from its base.
         """
-        allowance = state.spike_allowance
-        if allowance is None:
-            allowance = _base_allowance(state, config)
-        allowance -= 1
-        state.spike_allowance = allowance
-        return allowance
+        return _spend_allowance(state, config)
 
     def _report(
         self,
@@ -1448,6 +1753,7 @@ def _ladder_active(state: SessionState, config: GuardrailConfig) -> bool:
 #: What a ladder rung says when it narrows a session, in a customer's words.
 _LADDER_REASONS = {
     "confirmed": "limited: a confirmed spike on this session",
+    "loop": "limited: a tool call repeating on this session",
     "allowance_spent": "closed: this session spent its limit",
 }
 

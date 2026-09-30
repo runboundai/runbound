@@ -210,7 +210,7 @@ def test_a_streamed_call_through_the_class_patch_records_once_at_the_end():
 
 
 def test_a_model_looping_on_one_tool_trips_with_nothing_wrapped():
-    runbound.init(on_anomaly="raise")
+    runbound.init(on_anomaly="raise", on_loop="break")
     client = openai_at(
         "http://mock.local/v1", json_transport(chat_completion(tool_calls=weather_tool_call()))
     )

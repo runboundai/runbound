@@ -314,7 +314,7 @@ def test_a_retry_loop_that_ignores_the_predicate_is_stopped_by_the_loop_detector
     every attempt after that into an instant, free refusal rather than an
     unbounded stream of real ones."""
     threshold = 3
-    runbound.init(on_anomaly="raise", loop_threshold=threshold, tool_policy={"deny": ["wire_money"]})
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=threshold, tool_policy={"deny": ["wire_money"]})
 
     @runbound.tool
     def wire_money():

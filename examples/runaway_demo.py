@@ -113,8 +113,8 @@ def scenario_loop() -> None:
     print("=" * 72)
     print("SCENARIO 1  the refactoring loop: same tool, same arguments, forever")
     print("=" * 72)
-    print("  runbound.init(loop_threshold=3, on_anomaly='raise')")
-    runbound.init(loop_threshold=3, on_anomaly="raise")
+    print("  runbound.init(loop_threshold=3, on_loop='break', on_anomaly='raise')")
+    runbound.init(loop_threshold=3, on_loop="break", on_anomaly="raise")
     client = runbound.wrap(fake_openai_client())
     summarize(*run_agent(client, 25, _looping_args))
 

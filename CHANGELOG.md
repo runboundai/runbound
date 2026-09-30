@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-30
+
+### Changed
+
+- **A loop is now answered in three rungs instead of stopping the session at
+  the first repeat.** `on_loop=None` (the default) now means the new
+  `on_loop="graded"` policy. Before, a call repeated `loop_threshold` times
+  (3) was a critical anomaly that, with `on_anomaly="raise"`, latched the
+  session with no way back until you cleared it. Now, 3 is worth a line, 6 is
+  worth a person, 9 is a runaway: the third repeat is a warning in your log and
+  in `runbound.events()` (reacted `notify`, so it pages no route); the sixth
+  (`loop_alert_threshold`, twice `loop_threshold`) is a critical that pages your
+  alert routes and stops nothing; the ninth (`loop_contain_threshold`, three
+  times) hands the loop to the spike ladder: the session is limited to the
+  `restricted` posture, so financial, external and destructive tools are refused
+  before they execute while reads and writes still run, each further repeat
+  spends the ladder's allowance, and the last closes the session for the
+  cooldown and lets the key back in across the fleet when it is served, with a
+  strike counted as for a spike. The anomalies keep detector `loop`. It covers
+  the repeated-call, tool-cycle and retry shapes. Containment needs a keyed
+  session, `on_spike="limit"` and `on_anomaly="raise"`; otherwise the ninth
+  repeat is one more critical notice that says why it was not contained. A
+  normal model call between two repeats no longer heals a session a loop limited.
+  **To keep the old behaviour, name it:** `on_loop="break"` stops the session at
+  the threshold (what `None` did under `on_anomaly="raise"`); `"throttle"` and
+  `"escalate"` are unchanged. `loop_alert_threshold` and
+  `loop_contain_threshold` move the rungs.
+- **Every branch refused at the fan-out door is its own record.** A branch
+  turned away by `max_active_sessions` (rule `active`), `max_session_depth` or
+  `max_child_sessions` used to reach the record only once per session and rule,
+  however many branches were refused. Each is now recorded and exported as its
+  own anomaly and `Decision`, under the same cap and summary as every other
+  refusal.
+
 ## [0.6.0] - 2026-09-30
 
 ### Added

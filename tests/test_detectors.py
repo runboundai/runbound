@@ -69,7 +69,10 @@ def replay(events: list[Event], session_id: str = "s1", loop_window: int = 20) -
 
 
 def test_loop_fires_at_exactly_threshold():
-    config = GuardrailConfig(loop_threshold=3, loop_window=20)
+    # The legacy policy: a critical at the threshold. (The default, graded,
+    # answers the threshold with a warn and escalates from there; see
+    # test_loop_graded.py.)
+    config = GuardrailConfig(loop_threshold=3, loop_window=20, on_loop="break")
     events = [tool_event(step=i, ts=float(i)) for i in range(1, 4)]
     state = replay(events)
 

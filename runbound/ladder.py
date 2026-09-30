@@ -94,6 +94,16 @@ class Observation(Enum):
     CONFIRMED_SPIKE = "confirmed_spike"
     #: A limited session just spent the last of its allowance.
     ALLOWANCE_GONE = "allowance_gone"
+    #: A tool call is being repeated past the graded loop policy's contain
+    #: rung (``loop_contain_threshold``). A loop is a confirmed runaway on its
+    #: own account, so it limits the session as a confirmed spike does, and
+    #: every further repeat spends one of the allowance.
+    LOOP = "loop"
+    #: A call that looks normal while a loop is still going on. A looping
+    #: agent makes ordinarily-sized model calls between its repeats; those must
+    #: not heal a session the loop limited, or it would be restricted, healed
+    #: and restricted again and never close.
+    NORMAL_CALL_LOOP_ACTIVE = "normal_call_loop_active"
     #: The key is entered again on a session the ladder closed.
     ENTRY_AFTER_CLOSE = "entry_after_close"
     #: ...and this rollover spends the key's last strike.
@@ -170,6 +180,26 @@ _RUNGS: dict[tuple[int, Observation], Transition] = {
         Effect.SET_POSTURE,
         posture="restricted",
     ),
+    # A loop past the contain rung goes straight to limited (its two notices,
+    # the log and the page, were the watching), and each further repeat spends
+    # the allowance until it is gone: the close below.
+    (LEVEL_QUIET, Observation.LOOP): _to(
+        LEVEL_LIMITED,
+        "loop",
+        Effect.SET_ALLOWANCE,
+        Effect.SET_POSTURE,
+        posture="restricted",
+    ),
+    (LEVEL_WATCHING, Observation.LOOP): _to(
+        LEVEL_LIMITED,
+        "loop",
+        Effect.SET_ALLOWANCE,
+        Effect.SET_POSTURE,
+        posture="restricted",
+    ),
+    (LEVEL_LIMITED, Observation.LOOP): _to(
+        LEVEL_LIMITED, "allowance_spent", Effect.SPEND_ALLOWANCE
+    ),
     (LEVEL_WATCHING, Observation.ABNORMAL_CALL): _to(LEVEL_WATCHING, "first_abnormal"),
     (LEVEL_WATCHING, Observation.NORMAL_CALL_STILL_SPIKING): _to(
         LEVEL_LIMITED,
@@ -245,22 +275,27 @@ def transition(
 
 
 def observation(
-    *, abnormal: bool, abnormal_recent: int, noticed: bool, config: GuardrailConfig
+    *,
+    abnormal: bool,
+    abnormal_recent: int,
+    noticed: bool,
+    config: GuardrailConfig,
+    loop_active: bool = False,
 ) -> Observation:
     """Name what one model call looked like.
 
     ``abnormal`` is this call's own verdict, ``abnormal_recent`` how many of
     the trailing window were abnormal (``spike_confirm`` of them confirm a
     spike), and ``noticed`` whether this session has already been reported
-    on once.
+    on once. ``loop_active`` says a repeated tool call is still going on in
+    this session (the graded loop policy): a normal call is then
+    :attr:`Observation.NORMAL_CALL_LOOP_ACTIVE`, which the machine leaves alone.
     """
     confirmed = abnormal_recent >= getattr(config, "spike_confirm", 2)
     if not abnormal:
-        return (
-            Observation.NORMAL_CALL_STILL_SPIKING
-            if confirmed
-            else Observation.NORMAL_CALL
-        )
+        if confirmed:
+            return Observation.NORMAL_CALL_STILL_SPIKING
+        return Observation.NORMAL_CALL_LOOP_ACTIVE if loop_active else Observation.NORMAL_CALL
     if confirmed:
         return Observation.CONFIRMED_SPIKE
     return (

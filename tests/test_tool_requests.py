@@ -566,7 +566,7 @@ def test_a_wrapper_installed_without_hooks_is_silent():
 
 def test_three_identical_model_requests_trip_the_loop_after_the_response():
     """No ``@tool`` anywhere: the model asking three times is the loop."""
-    runbound.init(on_anomaly="raise", loop_threshold=3)
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=3)
     create = FakeCreate(repeat=chat_response(("search", '{"q": "weather"}')))
     client = runbound.wrap(openai_client(create))
 
@@ -625,7 +625,7 @@ def test_requests_with_different_arguments_are_not_a_loop():
 
 
 def test_two_requests_in_one_response_both_count():
-    runbound.init(on_anomaly="raise", loop_threshold=3)
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=3)
     create = FakeCreate(
         repeat=chat_response(("search", '{"q": "weather"}'), ("search", '{"q": "weather"}'))
     )
@@ -639,7 +639,7 @@ def test_two_requests_in_one_response_both_count():
 
 
 def test_anthropic_requests_trip_the_loop_end_to_end():
-    runbound.init(on_anomaly="raise", loop_threshold=3)
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=3)
     create = FakeCreate(repeat=anthropic_response(("search", {"q": "weather"})))
     client = runbound.wrap(anthropic_client(create))
 

@@ -438,6 +438,10 @@ class SessionState:
         self.children = 0
         self.tags: dict = dict(tags) if tags else {}
         self.spike_level = 0
+        # True while a repeated tool call is going on in this session (the graded
+        # loop policy sets and clears it): the abuse ladder does not heal a
+        # session limited by a loop on a normal model call while it is.
+        self.loop_active = False
         self.spike_baseline: tuple[float, float] | None = None
         self.spike_baseline_source: str | None = None
         self.spike_baseline_samples: int | None = None
@@ -758,7 +762,8 @@ class SessionState:
 
         Called by the spike detector and the api at the moment of each
         transition — ``reason`` one of ``"first_abnormal"``, ``"confirmed"``,
-        ``"healed"``, ``"allowance_spent"``, ``"rollover"``, ``"blocked"``,
+        ``"loop"`` (a repeated tool call past the graded loop policy's contain
+        rung), ``"healed"``, ``"allowance_spent"``, ``"rollover"``, ``"blocked"``,
         ``"cleared"`` or ``"restored"`` (a worker restart re-entering this
         key at the rung the plane last knew it on) — so a
         customer-facing ``why`` never has to be

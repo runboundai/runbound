@@ -301,7 +301,9 @@ def test_the_active_limit_holds_across_threads():
 # --- alerting ---------------------------------------------------------------
 
 
-def test_a_refusal_alerts_once_however_often_it_is_retried():
+def test_every_refusal_is_its_own_record_however_often_it_is_retried():
+    """Each branch the door turns away is evidence: three refusals, three
+    records (paging is deduplicated by the control plane, not here)."""
     runbound.init(max_session_depth=1)
     alerter = recording()
 
@@ -311,9 +313,28 @@ def test_a_refusal_alerts_once_however_often_it_is_retried():
                 with runbound.session("c"):
                     pass
 
-    assert [(a.detector, a.details["rule"]) for a in alerter.sent] == [
-        ("fanout", "depth")
-    ]
+    assert [(a.detector, a.details["rule"]) for a in alerter.sent] == [("fanout", "depth")] * 3
+
+
+def test_a_hundred_and_fifty_refused_branches_are_capped_then_summarised():
+    """The per-(session, detector, rule, tool) cap every refusal has: 100 records,
+    then one summary with the count, reported when the run's block exits. The
+    branches are the run's own key entered again past ``max_active_sessions``."""
+    runbound.init(max_active_sessions=1)
+    alerter = recording()
+
+    with runbound.session("run"):
+        for _ in range(150):
+            with pytest.raises(GuardrailTripped):
+                with runbound.session("run"):
+                    pass
+
+    records = [a for a in alerter.sent if a.detector == "fanout"]
+    plain = [a for a in records if "suppressed_count" not in a.details]
+    summaries = [a for a in records if "suppressed_count" in a.details]
+    assert len(plain) == 100 and {a.details["rule"] for a in plain} == {"active"}
+    assert [a.details["suppressed_count"] for a in summaries] == [50]
+    assert summaries[0].details["rule"] == "active"
 
 
 # --- fail-open --------------------------------------------------------------

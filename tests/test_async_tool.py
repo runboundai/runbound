@@ -108,7 +108,7 @@ def test_tool_call_event_is_emitted_before_the_body_is_awaited():
 
 
 def test_loop_trips_before_the_third_async_body_runs():
-    runbound.init(loop_threshold=3, on_anomaly="raise")
+    runbound.init(loop_threshold=3, on_anomaly="raise", on_loop="break")
     calls: list[str] = []
 
     @runbound.tool
@@ -200,7 +200,7 @@ def test_a_trip_while_recording_an_async_failure_keeps_the_tools_exception():
 
 
 def test_sync_tools_still_trip_before_the_body_runs():
-    runbound.init(loop_threshold=3, on_anomaly="raise")
+    runbound.init(loop_threshold=3, on_anomaly="raise", on_loop="break")
     calls: list[str] = []
 
     @runbound.tool

@@ -206,7 +206,7 @@ def test_a_different_input_hashes_differently(handler):
 
 
 def test_repeated_identical_tool_calls_trip_the_loop_detector(handler):
-    runbound.init(on_anomaly="raise", loop_threshold=3)
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=3)
 
     handler.on_tool_start({"name": "search"}, "cats")
     handler.on_tool_start({"name": "search"}, "cats")

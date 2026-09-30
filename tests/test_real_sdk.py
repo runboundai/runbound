@@ -553,7 +553,7 @@ def test_a_400_from_the_sdk_never_opens_the_circuit():
 def test_a_model_looping_on_one_tool_trips_without_any_tool_decorator():
     transport = json_transport(chat_completion(tool_calls=weather_tool_call()))
     client = runbound.wrap(openai_client(transport))
-    runbound.init(on_anomaly="raise")
+    runbound.init(on_anomaly="raise", on_loop="break")
 
     chat(client)
     chat(client)
@@ -580,7 +580,7 @@ def test_a_responses_api_function_call_loops_the_same_way():
     )
     transport = json_transport(body)
     client = runbound.wrap(openai_client(transport))
-    runbound.init(on_anomaly="raise")
+    runbound.init(on_anomaly="raise", on_loop="break")
 
     client.responses.create(model=CHAT_MODEL, input="hi")
     client.responses.create(model=CHAT_MODEL, input="hi")
@@ -698,7 +698,7 @@ def test_a_cache_write_is_priced_at_its_125_percent_premium():
 def test_repeated_tool_use_blocks_trip_the_loop():
     transport = anthropic_transport(messages_body(tool_use=True))
     client = runbound.wrap(anthropic_client(transport))
-    runbound.init(on_anomaly="raise")
+    runbound.init(on_anomaly="raise", on_loop="break")
 
     message(client)
     message(client)

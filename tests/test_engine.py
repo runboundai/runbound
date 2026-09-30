@@ -74,7 +74,7 @@ def session(loop_window: int = 20) -> SessionState:
 
 
 def test_process_records_before_detecting_so_loop_counts_current_event():
-    config = GuardrailConfig(loop_threshold=3, on_anomaly="raise")
+    config = GuardrailConfig(loop_threshold=3, on_anomaly="raise", on_loop="break")
     engine = Engine(config)
     state = session()
 

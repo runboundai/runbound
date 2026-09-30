@@ -83,7 +83,18 @@ def _warn_env_plane_url_no_token() -> None:
 
 
 ON_ANOMALY_MODES = ("warn", "raise", "callback")
-ON_LOOP_POLICIES = (None, "break", "throttle", "escalate")
+ON_LOOP_POLICIES = (None, "graded", "break", "throttle", "escalate")
+
+#: The graded loop policy's three rungs, as multiples of ``loop_threshold``.
+#: 3 is worth a line, 6 is worth a person, 9 is a runaway: a call repeated
+#: ``loop_threshold`` times (3) is logged, ``LOOP_ALERT_MULTIPLE`` times (6)
+#: pages someone, ``LOOP_CONTAIN_MULTIPLE`` times (9) is contained by the spike
+#: ladder. The alert multiple is the SDK's own precedent for "a second, harder
+#: bar" (``loop_hard_threshold`` defaults to twice ``loop_threshold``). Both
+#: scale with the customer's own ``loop_threshold``; ``loop_alert_threshold``
+#: and ``loop_contain_threshold`` set them outright.
+LOOP_ALERT_MULTIPLE = 2
+LOOP_CONTAIN_MULTIPLE = 3
 
 #: The four loop shapes ``LoopDetector`` can catch. "repeat": the same
 #: hash over and over (period 1) — the original, unchanged behavior.
@@ -244,8 +255,14 @@ class GuardrailConfig:
     tokens_per_minute_limit: int | None = None
     loop_threshold: int = 3  # k identical action-hashes => loop
     loop_window: int = 20  # sliding window size (events)
-    on_loop: str | None = None  # None (inherit on_anomaly) | "break" | "throttle" | "escalate"
+    # None means "graded" (log, then alert, then contain: see LOOP_ALERT_MULTIPLE).
+    # "break" | "throttle" | "escalate" keep their exact behaviour.
+    on_loop: str | None = None
     loop_hard_threshold: int | None = None  # escalate's hard stop; default 2 * loop_threshold
+    # The graded policy's second and third rungs. None: LOOP_ALERT_MULTIPLE and
+    # LOOP_CONTAIN_MULTIPLE times loop_threshold (never past loop_window).
+    loop_alert_threshold: int | None = None
+    loop_contain_threshold: int | None = None
     # The longest period LoopDetector's "sequence" shape will look for —
     # a period-k cycle (2 <= k <= loop_max_period) repeated loop_threshold
     # times. Bounds the per-call cost: checking every period from 2 up to
@@ -589,6 +606,32 @@ class GuardrailConfig:
             return self.loop_hard_threshold
         return 2 * self.loop_threshold
 
+    def is_graded_loop(self) -> bool:
+        """Does the graded loop policy govern this config (``on_loop`` is
+        ``None`` or ``"graded"``)?"""
+        return self.on_loop in (None, "graded")
+
+    def alert_loop_threshold(self) -> int:
+        """Repeat count at which the graded policy pages someone.
+
+        ``loop_alert_threshold`` when set, otherwise
+        :data:`LOOP_ALERT_MULTIPLE` times ``loop_threshold``, never past
+        ``loop_window`` (a window can only ever hold that many repeats) and
+        never below ``loop_threshold``.
+        """
+        if self.loop_alert_threshold is not None:
+            return self.loop_alert_threshold
+        return max(self.loop_threshold, min(LOOP_ALERT_MULTIPLE * self.loop_threshold, self.loop_window))
+
+    def contain_loop_threshold(self) -> int:
+        """Repeat count at which the graded policy hands the loop to the spike
+        ladder: ``loop_contain_threshold`` when set, otherwise
+        :data:`LOOP_CONTAIN_MULTIPLE` times ``loop_threshold``, never past
+        ``loop_window`` and never below the alert threshold."""
+        if self.loop_contain_threshold is not None:
+            return self.loop_contain_threshold
+        return max(self.alert_loop_threshold(), min(LOOP_CONTAIN_MULTIPLE * self.loop_threshold, self.loop_window))
+
     def resolved_worker_id(self) -> str:
         """This process's name inside the fleet.
 
@@ -891,6 +934,7 @@ class GuardrailConfig:
                 f"loop_hard_threshold must be an int greater than loop_threshold "
                 f"({self.loop_threshold!r}) or None, got {self.loop_hard_threshold!r}"
             )
+        self._validate_graded_thresholds()
         for name in ("throttle_base_seconds", "throttle_max_seconds"):
             value = getattr(self, name)
             if value <= 0:
@@ -899,6 +943,38 @@ class GuardrailConfig:
             raise ValueError(
                 f"throttle_max_seconds ({self.throttle_max_seconds!r}) must be >= "
                 f"throttle_base_seconds ({self.throttle_base_seconds!r})"
+            )
+
+    def _validate_graded_thresholds(self) -> None:
+        """The graded policy's rungs must be ints in order: ``loop_threshold`` <
+        ``loop_alert_threshold`` < ``loop_contain_threshold`` <= ``loop_window``
+        (a window cannot hold more repeats than its size). Only the ones set
+        explicitly are checked; the defaults are derived to fit."""
+        for name in ("loop_alert_threshold", "loop_contain_threshold"):
+            value = getattr(self, name)
+            if value is not None and (not isinstance(value, int) or isinstance(value, bool)):
+                raise ValueError(f"{name} must be an int or None, got {value!r}")
+        alert, contain = self.loop_alert_threshold, self.loop_contain_threshold
+        if alert is not None and alert <= self.loop_threshold:
+            raise ValueError(
+                f"loop_alert_threshold ({alert!r}) must be greater than loop_threshold "
+                f"({self.loop_threshold!r})"
+            )
+        if contain is not None:
+            floor = alert if alert is not None else self.loop_threshold
+            if contain <= floor:
+                raise ValueError(
+                    f"loop_contain_threshold ({contain!r}) must be greater than "
+                    f"{'loop_alert_threshold' if alert is not None else 'loop_threshold'} ({floor!r})"
+                )
+            if contain > self.loop_window:
+                raise ValueError(
+                    f"loop_contain_threshold ({contain!r}) must be <= loop_window "
+                    f"({self.loop_window!r}): the window cannot hold more repeats than its size"
+                )
+        if alert is not None and alert > self.loop_window:
+            raise ValueError(
+                f"loop_alert_threshold ({alert!r}) must be <= loop_window ({self.loop_window!r})"
             )
 
     def _validate_spike(self) -> None:

@@ -425,14 +425,19 @@ class Engine:
             self._alert(anomaly, session)
 
         worst = self._winner(anomalies)
-        if worst.detector == LOOP_DETECTOR and self.config.on_loop is not None:
+        if worst.detector == LOOP_DETECTOR and (
+            self.config.on_loop is not None or _detail(worst, "policy", None) == "graded"
+        ):
             # A loop policy must never shadow a co-firing non-loop critical:
             # fire-once detectors get no second chance to stop the run.
             others = [a for a in anomalies if a.detector != LOOP_DETECTOR]
             if others and self._winner(others).severity == "critical":
                 self._react(self._winner(others), session)
                 return
-            self._react_to_loop(worst, session)
+            if self.config.is_graded_loop():
+                self._react_graded(worst, session)
+            else:
+                self._react_to_loop(worst, session)
             return
         if worst.detector == BUDGET_DETECTOR and worst.severity != "critical":
             # The soft line is a notice under the wall, never a stop —
@@ -2090,6 +2095,9 @@ class Engine:
                 "max_cost_per_call_usd", self.config.max_cost_per_call_usd
             ),
         )
+        # The plane's Controls can say a loop is notify-only: the graded policy's
+        # contain rung then does not touch the ladder.
+        cfg.loop_contain_allowed = self.controls_detector_override(LOOP_DETECTOR) not in ("warn", "dry_run")
         cfg.loop_shapes = loop_shapes["shapes"]
         cfg.loop_max_period = loop_shapes["max_period"]
         cfg.loop_stall_turns = loop_shapes["stall_turns"]
@@ -2449,6 +2457,9 @@ class Engine:
             anomaly.severity,
             _detail(anomaly, "level", None),
             _detail(anomaly, "episode", None),
+            # The graded loop policy's rungs (log, alert, contain) are three
+            # different things to tell someone, whatever their severity.
+            _detail(anomaly, "rung", None),
         )
         if anomaly.detector in (CIRCUIT_DETECTOR, INFLIGHT_DETECTOR):
             # A circuit — and a full endpoint — belongs to a provider, not to
@@ -2569,6 +2580,15 @@ class Engine:
         """
         self._alert(anomaly, session, "door")
 
+    def record_door_refusal(self, session: SessionState, anomaly: Anomaly) -> None:
+        """Record one refusal made at the door of a :func:`~runbound.session`
+        block that has no event to hang it off (a fan-out limit), as its own
+        record: the capped per-(session, detector, rule, tool) path every
+        refusal takes, tagged ``"door"``. Unlike :meth:`notify_door` (a knock on
+        a key that is already stopped, reported per knock through the trip),
+        each of these is a distinct refused branch."""
+        self._alert(anomaly, session, "door", refusal=True)
+
     def _reacted_for(self, anomaly: Anomaly) -> str:
         """What this anomaly is about to cost the run, in one word.
 
@@ -2610,6 +2630,19 @@ class Engine:
             return "warn"
         if anomaly.detector == BUDGET_DETECTOR and anomaly.severity != "critical":
             return "warn"  # the soft line never stops the run
+        if (
+            anomaly.detector == LOOP_DETECTOR
+            and self.config.is_graded_loop()
+            and _detail(anomaly, "policy", None) == "graded"
+        ):
+            # The graded policy: only the ladder's close stops the session;
+            # its limit is the ladder's warn; the log, the page and a contain
+            # the ladder cannot perform are notices ("notify"): recorded, paged
+            # if critical, never latched.
+            action = _detail(anomaly, "action", None)
+            if action == "rollover":
+                return "raise"
+            return "warn" if action == "limit" else "notify"
         if anomaly.detector == LOOP_DETECTOR and self.config.on_loop is not None:
             if self.config.on_loop == "break":
                 return "raise"
@@ -2657,6 +2690,34 @@ class Engine:
                     type(observer).__name__,
                     exc_info=True,
                 )
+
+    def _react_graded(self, anomaly: Anomaly, session: SessionState) -> None:
+        """React to one rung of the graded loop policy.
+
+        The log and the page (and a contain the ladder could not perform) are
+        notices: logged here, exported and paged by their severity, never a
+        stop. The ladder's limit is a warn, logged. Only its close, the
+        rollover, stops the session: it latches it (the cooldown, strikes and
+        fleet return are the ladder's) and raises on the call that closed it.
+        A plane Controls override on ``"loop"`` applies to a critical rung as
+        it does under the legacy policies. An anomaly that carries no rung (the
+        opt-in "stall" shape) is reacted to as any other detector's.
+        """
+        if _detail(anomaly, "policy", None) != "graded":
+            if anomaly.severity == "critical":
+                self._react(anomaly, session)
+            else:
+                _LOG.warning("[runbound] %s", anomaly.message)
+            return
+        if anomaly.severity == "critical":
+            override = self.controls_detector_override(anomaly.detector)
+            if override in ("warn", "dry_run"):
+                _LOG.warning("[runbound] %s", anomaly.message)
+                return
+            if override == "stop" or _detail(anomaly, "action", None) == "rollover":
+                self._latch(session, anomaly)
+                raise GuardrailTripped(anomaly)
+        _LOG.warning("[runbound] %s", anomaly.message)
 
     def _react_to_loop(self, anomaly: Anomaly, session: SessionState) -> None:
         """Apply ``on_loop`` to a loop anomaly, in place of the global mode.

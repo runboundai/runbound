@@ -432,7 +432,7 @@ def test_an_over_budget_session_with_ttl_1_retrips_on_its_next_event(clock):
 
 def test_a_loop_latch_heals_and_a_new_repeat_retrips(clock):
     """A loop latch heals and a *new* repeat of the same call re-trips."""
-    config = GuardrailConfig(on_anomaly="raise", loop_threshold=3, latch_ttl_seconds=1.0)
+    config = GuardrailConfig(on_anomaly="raise", on_loop="break", loop_threshold=3, latch_ttl_seconds=1.0)
     config.validate()
     engine = Engine(config, detectors=[LoopDetector()])
     session = SessionState("s1")

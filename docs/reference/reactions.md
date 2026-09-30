@@ -35,7 +35,7 @@ out) does not carry one — `exc.decision` is `None` there.
 | `on_trip` | `"latch"` / `"once"` | `"latch"` | What a critical trip does to the session **afterwards**. **latch**: the session stays stopped — every later call is refused (raise / callback again, no re-alert), and under `"raise"` even entering `session(key)` raises, so a blocked key costs zero model calls until `clear()` or `latch_ttl_seconds`. **once**: stop that one call only; the next call is evaluated afresh (a caught exception lets the caller continue — pick this only if you handle blocking yourself). |
 | `latch_ttl_seconds` | `None` / seconds | `None` | Only matters with `on_trip="latch"`. **None**: the latch is permanent until `clear()`. **A number**: the latch expires that many seconds after it was set — every detector is re-armed and the session's next event is judged fresh, on the same cumulative counters. This **re-admits, it does not reset**: a session still over budget re-trips immediately, with the same detector; only `clear()` zeroes the counters themselves. Opt-in — nothing expires unless you set it. |
 | `on_spike` and the ladder's own tuning | `"notify"` / `"trip"` / `"limit"`, plus nine tuning keywords — all free, local `init()` keywords | `"notify"` | What a *confirmed* spike does (a first spike is always notify-only). **notify**: log and alert, never stop — thinking mode alone is not an incident. **trip**: treat it as critical and follow `on_anomaly` / `on_trip`. **limit**: climb [the spike ladder](../guides/spike-detection.md#many-callers-behind-one-service-the-abuse-ladder) instead of slamming the door — a confirmed spike narrows the session to [`restricted`](../guides/policy.md#classify-by-capability) (its riskier tools stop acting, its model calls go on) with an allowance of abnormal model calls, a session that behaves again heals back to `full`, the closed rung sets `stopped`, and only an exhausted allowance closes it, with a cooldown and a strike (requires `on_trip="latch"`, which enforces the cooldown). Explicit hard caps (`max_call_seconds`, `max_tokens_out_per_call`) always trip regardless — you set that number on purpose. A connected plane can only escalate `on_spike` (`notify < trip < limit`), lengthen the cooldown, or otherwise tighten the nine tuning knobs — never loosen any of them. |
-| `on_loop` | `None` / `"break"` / `"throttle"` / `"escalate"` | `None` | The reaction to a loop only (details [below](#when-a-loop-is-detected)). **None**: follow `on_anomaly`. **break**: raise immediately, whatever `on_anomaly` says. **throttle**: sleep before each repeat, never raise — a blocking `time.sleep()` on a sync call, and under a running event loop the engine hands the delay to the async wrapper instead, which `await asyncio.sleep()`s it, so the loop is never blocked either way. **escalate**: warn first, raise at `loop_hard_threshold`. |
+| `on_loop` | `None` / `"graded"` / `"break"` / `"throttle"` / `"escalate"` | `None` | The reaction to a loop only (details [below](#when-a-loop-is-detected)). **None** / **graded**: log, then page, then contain through the spike ladder (`loop_threshold`, `loop_alert_threshold`, `loop_contain_threshold`). **break**: raise immediately, whatever `on_anomaly` says. **throttle**: sleep before each repeat, never raise — a blocking `time.sleep()` on a sync call, and under a running event loop the engine hands the delay to the async wrapper instead, which `await asyncio.sleep()`s it, so the loop is never blocked either way. **escalate**: warn first, raise at `loop_hard_threshold`. |
 | `on_provider_failure` | `"notify"` / `"open"` | `"notify"` | What a provider that keeps failing does to your calls. **notify**: count the failures and alert once when `circuit_failure_threshold` of them land inside `circuit_window_seconds` — nothing is ever blocked. **open**: also refuse calls — the wrapped client raises `CircuitOpen` (a `GuardrailTripped`, with `.provider`) **before** touching the provider for `circuit_cooldown_seconds`, then lets exactly one probe through; a successful probe closes the circuit. Your app catches it and picks its own fallback — [we never route](circuit-breaker.md#retry-storms-and-the-provider-circuit-breaker). The circuit is per provider and process-wide, so it stops nobody's session and latches nothing. |
 | `max_active_sessions`, `max_session_depth`, `max_child_sessions` | `None` / a number | `None` | The fan-out limits. A `session()` block that would take the run past one of them raises `GuardrailTripped` (detector `fanout`) **at the door, before its body runs**. **This row ignores `on_anomaly`** — like the per-call caps, these are numbers you stated — and it **latches nothing**: what was wrong is the shape of the run, not this key, so the next block is judged on its own. See [Time and fan-out limits](limits.md#time-and-fan-out-limits). |
 | `max_actions_per_run` | a number, free and local | unset | How many `@runbound.tool` calls one run may execute. Under `envelope=True` (the default), the `(cap + 1)`th call raises `GuardrailTripped` (detector `fanout`, `details["rule"] == "actions"`) **before its body runs**. **This row ignores `on_anomaly`** and **latches**, exactly like `max_steps` — a run that has spent its action budget stays stopped, the same way a step-limited one does. `envelope=False` disables it entirely, since it is an envelope control. A connected plane can only lower the cap, or state one from scratch where you leave it unset, never raise it. |
@@ -105,14 +105,40 @@ sometimes you would rather slow it down than kill it. `on_loop` sets the
 reaction for the `loop` detector only; every other detector keeps following
 `on_anomaly`.
 
+**By default a loop is graded.** 3 is worth a line, 6 is worth a person, 9 is a
+runaway. The same call repeated `loop_threshold` times (3) is a `warn` in your
+log and in `runbound.events()`, reacted `notify`: it pages nobody, on any
+default route. At `loop_alert_threshold` (6, twice `loop_threshold`) it is a
+`critical`, still reacted `notify`: it pages your alert routes and stops
+nothing. At `loop_contain_threshold` (9, three times) the loop is handed to the
+[spike ladder](../guides/spike-detection.md): the session is limited to the
+`restricted` posture (reads and writes still run, external, financial and
+destructive tools are refused before they execute), each further repeat spends
+the ladder's allowance, and the last closes the session for the cooldown, counts
+a strike and lets the key back in across the fleet when it is served, exactly as
+a spike does. The anomalies keep detector `loop`. It covers the `repeat`,
+`sequence` and `retry` shapes, counting each shape's own repeats. Each rung
+fires once per loop, on the event that reaches it, and a loop that ends re-arms.
+A normal model call between two repeats does not heal a session a loop limited.
+
+Rung 3 needs the ladder to be able to act: a keyed session, `on_spike="limit"`
+with spike detection on, and `on_anomaly="raise"`. When it cannot (or the control
+plane's Controls say to notify only), the ninth repeat is one more `critical`
+notice that says why it was not contained, and nothing is stopped.
+
 | `on_loop` | What happens on a repeat |
 |---|---|
-| `None` (default) | Nothing changes: the loop follows `on_anomaly`, and fires once per session. |
-| `"break"` | Raises `GuardrailTripped` as soon as the loop threshold is reached, even if `on_anomaly` is `"warn"`. Use it when a loop is always a bug. |
+| `None` (default) or `"graded"` | Log at `loop_threshold`, page at `loop_alert_threshold`, contain through the spike ladder at `loop_contain_threshold`, as above. Before 0.7.0 `None` meant "follow `on_anomaly`", which latched the session at the threshold with no way back; that is now `"break"`. |
+| `"break"` | Raises `GuardrailTripped` as soon as the loop threshold is reached, even if `on_anomaly` is `"warn"`, and latches the session. Use it when a loop is always a bug and you want the old behaviour. |
 | `"throttle"` | Sleeps before the repeated tool runs, doubling from `throttle_base_seconds` on each further repeat, up to `throttle_max_seconds`. Never raises. On a sync call this is a blocking `time.sleep()` on the agent's thread. Under a running event loop the sleep is instead `await`ed by the async tool wrapper (and, for a model-requested loop, by the async client wrapper) before the body runs — the delay travels through a `contextvar` from wherever the engine decided it, so the event loop is never blocked either way — except a synchronous tool called directly on the event-loop thread, which has nothing to await with and is not throttled. Use it to stop a burn while the run finishes. |
 | `"escalate"` | Logs a warning on each repeat, then raises `GuardrailTripped` once the count reaches `loop_hard_threshold` (default `2 * loop_threshold`). Use it when a few repeats are normal and many are not. |
 
 ```python
+# The graded default, with the rungs moved:
+runbound.init(loop_threshold=4, loop_alert_threshold=8, loop_contain_threshold=12,
+              on_spike="limit", on_anomaly="raise")
+
+# The behaviour before 0.7.0, or any legacy policy, by naming it:
 runbound.init(loop_threshold=3, on_loop="escalate",
                 loop_hard_threshold=8,
                 on_anomaly="warn")   # still applies to budget, velocity, steps

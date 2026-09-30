@@ -42,6 +42,8 @@ NORMAL_SPIKING = Observation.NORMAL_CALL_STILL_SPIKING
 ABNORMAL = Observation.ABNORMAL_CALL
 ABNORMAL_AGAIN = Observation.ABNORMAL_CALL_ALREADY_NOTICED
 CONFIRMED = Observation.CONFIRMED_SPIKE
+LOOP = Observation.LOOP
+NORMAL_LOOPING = Observation.NORMAL_CALL_LOOP_ACTIVE
 GONE = Observation.ALLOWANCE_GONE
 ENTRY = Observation.ENTRY_AFTER_CLOSE
 LAST_ENTRY = Observation.ENTRY_OUT_OF_STRIKES
@@ -76,6 +78,8 @@ LADDER: dict[tuple[int, Observation], tuple] = {
     (LEVEL_QUIET, ABNORMAL): (LEVEL_WATCHING, "first_abnormal", (), None),
     (LEVEL_QUIET, ABNORMAL_AGAIN): stay(LEVEL_QUIET),
     (LEVEL_QUIET, CONFIRMED): (LEVEL_LIMITED, "confirmed", (SET, NARROW), "restricted"),
+    (LEVEL_QUIET, LOOP): (LEVEL_LIMITED, "loop", (SET, NARROW), "restricted"),
+    (LEVEL_QUIET, NORMAL_LOOPING): stay(LEVEL_QUIET),
     (LEVEL_QUIET, GONE): stay(LEVEL_QUIET),
     (LEVEL_QUIET, ENTRY): ROLL,
     (LEVEL_QUIET, LAST_ENTRY): BLOCKED,
@@ -85,6 +89,8 @@ LADDER: dict[tuple[int, Observation], tuple] = {
     (LEVEL_WATCHING, ABNORMAL): (LEVEL_WATCHING, "first_abnormal", (), None),
     (LEVEL_WATCHING, ABNORMAL_AGAIN): stay(LEVEL_WATCHING),
     (LEVEL_WATCHING, CONFIRMED): (LEVEL_LIMITED, "confirmed", (SET, NARROW), "restricted"),
+    (LEVEL_WATCHING, LOOP): (LEVEL_LIMITED, "loop", (SET, NARROW), "restricted"),
+    (LEVEL_WATCHING, NORMAL_LOOPING): stay(LEVEL_WATCHING),
     (LEVEL_WATCHING, GONE): stay(LEVEL_WATCHING),
     (LEVEL_WATCHING, ENTRY): ROLL,
     (LEVEL_WATCHING, LAST_ENTRY): BLOCKED,
@@ -96,6 +102,11 @@ LADDER: dict[tuple[int, Observation], tuple] = {
     (LEVEL_LIMITED, ABNORMAL): (LEVEL_LIMITED, "allowance_spent", (SPEND,), None),
     (LEVEL_LIMITED, ABNORMAL_AGAIN): (LEVEL_LIMITED, "allowance_spent", (SPEND,), None),
     (LEVEL_LIMITED, CONFIRMED): (LEVEL_LIMITED, "allowance_spent", (SPEND,), None),
+    # A loop past the contain rung limits like a confirmed spike and spends the
+    # allowance on every further repeat; a normal model call while the loop is
+    # still going on does NOT heal the session.
+    (LEVEL_LIMITED, LOOP): (LEVEL_LIMITED, "allowance_spent", (SPEND,), None),
+    (LEVEL_LIMITED, NORMAL_LOOPING): stay(LEVEL_LIMITED),
     (LEVEL_LIMITED, GONE): (LEVEL_CLOSED, "allowance_spent", (CLOSE, NARROW), "stopped"),
     (LEVEL_LIMITED, ENTRY): ROLL,
     (LEVEL_LIMITED, LAST_ENTRY): BLOCKED,
@@ -106,6 +117,8 @@ LADDER: dict[tuple[int, Observation], tuple] = {
     (LEVEL_CLOSED, ABNORMAL): stay(LEVEL_CLOSED),
     (LEVEL_CLOSED, ABNORMAL_AGAIN): stay(LEVEL_CLOSED),
     (LEVEL_CLOSED, CONFIRMED): stay(LEVEL_CLOSED),
+    (LEVEL_CLOSED, LOOP): stay(LEVEL_CLOSED),
+    (LEVEL_CLOSED, NORMAL_LOOPING): stay(LEVEL_CLOSED),
     (LEVEL_CLOSED, GONE): stay(LEVEL_CLOSED),
     (LEVEL_CLOSED, ENTRY): ROLL,
     (LEVEL_CLOSED, LAST_ENTRY): BLOCKED,
@@ -116,6 +129,8 @@ LADDER: dict[tuple[int, Observation], tuple] = {
     (LEVEL_BLOCKED, ABNORMAL): stay(LEVEL_BLOCKED),
     (LEVEL_BLOCKED, ABNORMAL_AGAIN): stay(LEVEL_BLOCKED),
     (LEVEL_BLOCKED, CONFIRMED): stay(LEVEL_BLOCKED),
+    (LEVEL_BLOCKED, LOOP): stay(LEVEL_BLOCKED),
+    (LEVEL_BLOCKED, NORMAL_LOOPING): stay(LEVEL_BLOCKED),
     (LEVEL_BLOCKED, GONE): stay(LEVEL_BLOCKED),
     (LEVEL_BLOCKED, ENTRY): ROLL,
     (LEVEL_BLOCKED, LAST_ENTRY): BLOCKED,
@@ -213,6 +228,7 @@ def test_every_reason_is_one_the_session_history_documents():
     known = {
         "first_abnormal",
         "confirmed",
+        "loop",
         "healed",
         "allowance_spent",
         "rollover",
@@ -296,3 +312,20 @@ def test_one_strike_is_a_legal_ladder_and_blocks_on_the_first_rollover():
     config = ladder_config(spike_max_strikes=1)
     assert entry_observation(1, config) is LAST_ENTRY
     assert transition(LEVEL_CLOSED, LAST_ENTRY, config).effects == {ROLLOVER, BLOCK}
+
+
+# --- a loop that is still going on -------------------------------------------------
+
+
+def test_a_normal_call_while_a_loop_is_going_on_is_its_own_observation(config):
+    """A looping agent makes ordinary model calls between its repeats; the
+    ladder must be able to tell them from a session that is simply behaving."""
+    assert observation(abnormal=False, abnormal_recent=0, noticed=False, config=config, loop_active=True) is NORMAL_LOOPING
+    assert observation(abnormal=False, abnormal_recent=0, noticed=False, config=config) is NORMAL
+
+
+def test_a_still_spiking_window_and_an_abnormal_call_are_unaffected_by_a_loop(config):
+    kwargs = dict(noticed=False, config=config, loop_active=True)
+    assert observation(abnormal=False, abnormal_recent=2, **kwargs) is NORMAL_SPIKING
+    assert observation(abnormal=True, abnormal_recent=1, **kwargs) is ABNORMAL
+    assert observation(abnormal=True, abnormal_recent=2, **kwargs) is CONFIRMED

@@ -143,7 +143,6 @@ _DOOR_REFUSALS: dict[str, int] = {}
 #: A refused caller (or a retrying agent) walks into the same wall on every
 #: attempt, and the on-call wants to hear about the wall once. Emptied with the
 #: registry, under ``_LOCK``.
-_FANOUT_ALERTED: set[tuple[str, str]] = set()
 
 #: The detector name a fan-out refusal is reported under. It is not a detector
 #: in the ``check(state, event, config)`` sense — nothing has happened yet when
@@ -384,7 +383,6 @@ def _forget_sessions() -> None:
     _GENERATIONS.clear()
     _STRIKES.clear()
     _DOOR_REFUSALS.clear()
-    _FANOUT_ALERTED.clear()
     _INFLIGHT.clear()
     _EXITS.clear()
     _ACTIVE = 0
@@ -1980,24 +1978,22 @@ def _fanout(
 
 
 def _alert_fanout(engine: Engine, anomaly: Anomaly, state: SessionState) -> None:
-    """Page once per (session, rule), then stay quiet however often it retries.
+    """Record one branch refused at the fan-out door, as its own record.
 
-    An agent that walks into a fan-out limit walks into it on every attempt,
-    and the on-call learns nothing from the second one. The engine dedups per
-    (session, detector, severity) on top of this, so a session that later
-    breaks a *second* fan-out rule is refused as firmly as ever but does not
-    page again. Fail-open, like every other notification path: a refusal is
-    never lost to a broken alerter.
+    Every branch a limit turns away is a refusal and is evidence: it is
+    recorded and exported as its own anomaly and Decision through the same
+    capped path every other refusal takes (per session, detector, rule and
+    tool, with a summary past the cap; see
+    :meth:`~runbound.engine.Engine.record_door_refusal`). Before, only the
+    first refusal of a rule per session reached the record, however many
+    branches were refused. Paging stays deduplicated, by the control plane.
+    Fail-open, like every other notification path: a refusal is never lost to
+    a broken alerter.
     """
     try:
-        memo = (getattr(state, "session_id", ""), anomaly.details["rule"])
-        with _LOCK:
-            if memo in _FANOUT_ALERTED:
-                return
-            _FANOUT_ALERTED.add(memo)
-        engine.notify_door(state, anomaly)
+        engine.record_door_refusal(state, anomaly)
     except Exception:
-        _LOG.warning("runbound could not alert on a fan-out refusal", exc_info=True)
+        _LOG.warning("runbound could not record a fan-out refusal", exc_info=True)
 
 
 # --- the abuse ladder's rollover --------------------------------------------

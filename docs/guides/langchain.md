@@ -13,7 +13,7 @@ pip install "runbound[langchain]"   # pulls in langchain-core
 import runbound
 from runbound.integrations.langchain import GuardrailCallbackHandler
 
-runbound.init(budget_usd=5.00, loop_threshold=3, on_anomaly="raise")
+runbound.init(budget_usd=5.00, loop_threshold=3, on_loop="break", on_anomaly="raise")
 
 agent.invoke(
     {"input": "research the market"},

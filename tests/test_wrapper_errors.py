@@ -449,7 +449,7 @@ def test_a_storm_of_failures_trips_the_session():
 
 
 def test_three_identical_model_requests_are_a_loop():
-    runbound.init(on_anomaly="raise", loop_threshold=3)
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=3)
 
     api._HOOKS.tool_request("search", "req:abc")
     api._HOOKS.tool_request("search", "req:abc")

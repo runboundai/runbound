@@ -233,7 +233,7 @@ def _run_period_3_cycle() -> None:
 def test_a_cycle_shape_loop_fires_locally_with_no_plane_at_all():
     """``loop_shapes`` defaults to ``("repeat", "sequence", "retry")`` --
     "sequence" is free, on by default, no plane needed."""
-    runbound.init(on_anomaly="raise")
+    runbound.init(on_anomaly="raise", on_loop="break")
 
     with pytest.raises(GuardrailTripped) as excinfo:
         _run_period_3_cycle()
@@ -247,7 +247,7 @@ def test_the_stall_shape_fires_once_the_plane_adds_it(plane):
     call below is identical -- the same hash, over and over -- which
     "stall" (no *new* hash for stall_turns turns) reads as stalled, not a
     repeat: repeat is unreachable here at loop_threshold=100."""
-    init_connected(on_anomaly="raise", loop_threshold=100, loop_window=200)
+    init_connected(on_anomaly="raise", on_loop="break", loop_threshold=100, loop_window=200)
     deliver(plane, {"loop_shapes": {"shapes": ["repeat", "stall"], "stall_turns": 2}})
 
     @runbound.tool

@@ -153,26 +153,33 @@ def test_init_rejects_a_bad_loop_policy():
 # --- default (None) keeps today's behavior ----------------------------------
 
 
-def test_default_policy_inherits_on_anomaly():
+def test_the_default_policy_is_graded_not_inherited_from_on_anomaly():
+    """Before 0.7.0, ``on_loop=None`` meant "follow ``on_anomaly``": under
+    ``"raise"`` the third repeat raised. It now means the graded policy, which
+    logs at the threshold and raises nothing until the ladder closes the
+    session (see ``test_loop_graded.py`` for every rung); an explicit ``"break"``
+    is the old behaviour."""
     engine = Engine(GuardrailConfig(loop_threshold=3, on_anomaly="raise"))
     state = session()
 
-    with pytest.raises(GuardrailTripped) as excinfo:
-        loop_repeats(engine, state, 3)
+    loop_repeats(engine, state, 3)  # no GuardrailTripped: the third repeat is a log line
 
+    explicit = Engine(GuardrailConfig(loop_threshold=3, on_anomaly="raise", on_loop="break"))
+    with pytest.raises(GuardrailTripped) as excinfo:
+        loop_repeats(explicit, session(), 3)
     assert excinfo.value.anomaly.detector == "loop"
     assert excinfo.value.anomaly.severity == "critical"
 
 
-def test_default_policy_keeps_the_loop_detector_firing_once():
-    observer = RecordingObserver()
-    engine = Engine(
-        GuardrailConfig(loop_threshold=3, on_anomaly="warn"), observers=[observer]
-    )
+def test_the_default_policy_and_an_explicit_graded_are_the_same():
+    observed = {}
+    for label, kwargs in (("default", {}), ("graded", {"on_loop": "graded"})):
+        observer = RecordingObserver()
+        engine = Engine(GuardrailConfig(loop_threshold=3, on_anomaly="warn", **kwargs), observers=[observer])
+        loop_repeats(engine, session(), 6)
+        observed[label] = [(a.severity, a.details["rung"]) for a in observer.sent]
 
-    loop_repeats(engine, session(), 6)
-
-    assert len(observer.sent) == 1
+    assert observed["default"] == observed["graded"] == [("warn", "log"), ("critical", "alert")]
 
 
 # --- break ------------------------------------------------------------------

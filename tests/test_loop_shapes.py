@@ -78,6 +78,11 @@ def init_with_shapes(plane: FakePlane, shapes, max_period=6, stall_turns=5, **kw
         "control_plane_poll_s": 3600.0,
         "export_events": False,
         "auto_wrap": False,
+        # These tests are about what each shape *detects*. Since the graded
+        # default (PS-1f) answers a loop in rungs instead of tripping at the
+        # threshold, they pin the legacy "break" policy, which trips on the
+        # first anomaly, so a shape's detection is what they observe.
+        "on_loop": "break",
     }
     fields.update(kwargs)
     runbound.init(**fields)
@@ -164,7 +169,7 @@ def test_period_3_sequence_at_threshold(plane):
 
 def test_period_1_repeat_is_unchanged():
     """Same tool, same arguments, still just "repeat" -- the original shape."""
-    runbound.init(on_anomaly="raise", loop_threshold=3)
+    runbound.init(on_anomaly="raise", on_loop="break", loop_threshold=3)
 
     @runbound.tool
     def search(query):
@@ -440,7 +445,7 @@ def test_a_new_hash_resets_the_stall_clock(plane):
 
 
 def test_usd_inside_loop_equals_spend_since_started_turn():
-    runbound.init(on_anomaly="raise", custom_prices=CENTS)
+    runbound.init(on_anomaly="raise", on_loop="break", custom_prices=CENTS)
 
     @runbound.tool
     def search(query):
@@ -472,7 +477,7 @@ def test_usd_inside_loop_is_bounded_by_the_spike_window_honestly(plane):
         control_plane_url=PLANE_URL, token="k", service="checkout",
         worker_id="host-1:42", control_plane_poll_s=3600.0,
         export_events=False, auto_wrap=False,
-        on_anomaly="raise", custom_prices=CENTS,
+        on_anomaly="raise", on_loop="break", custom_prices=CENTS,
     )
     plane.controls_body = {"version": 1, "controls": spike_controls_body(spike_window=3, spike_warmup_calls=2)}
     api._SHARED.apply_hello(HelloReply(controls_version=1))
@@ -507,7 +512,7 @@ def test_usd_inside_loop_is_zero_with_no_model_calls_yet():
 
 
 def test_repeat_message_never_contains_the_args_hash():
-    runbound.init(on_anomaly="raise")
+    runbound.init(on_anomaly="raise", on_loop="break")
 
     @runbound.tool
     def search(query):
@@ -604,7 +609,8 @@ def test_sequence_comparison_cost_per_call_does_not_grow_with_history():
     grows past loop_window regardless of how many events preceded it.
     """
     config = GuardrailConfig(
-        loop_threshold=3, loop_window=12, loop_shapes=("sequence",), loop_max_period=4
+        loop_threshold=3, loop_window=12, loop_shapes=("sequence",), loop_max_period=4,
+        on_loop="break",  # the legacy policy: this measures detection, not the graded rungs
     )
 
     def per_call_costs(n_events: int) -> list[int]:
