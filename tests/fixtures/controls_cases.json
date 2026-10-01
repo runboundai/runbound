@@ -193,6 +193,34 @@
         { "path": "posture", "base": "stopped", "candidate": "full" },
         { "path": "envelope", "base": true, "candidate": false }
       ]
+    },
+    {
+      "name": "a lower token budget tightens",
+      "base": { "limits": { "org": { "budget_tokens": 1000000 } } },
+      "candidate": { "limits": { "org": { "budget_tokens": 500000 } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "a higher token budget loosens",
+      "base": { "limits": { "org": { "budget_tokens": 500000 } } },
+      "candidate": { "limits": { "org": { "budget_tokens": 1000000 } } },
+      "accepted": false,
+      "violations": [{ "path": "limits.org.budget_tokens", "base": 500000, "candidate": 1000000 }]
+    },
+    {
+      "name": "introducing a token budget where none existed tightens",
+      "base": { "limits": { "org": { "budget_usd": 10.0 } } },
+      "candidate": { "limits": { "org": { "budget_usd": 10.0, "budget_tokens": 250000 } } },
+      "accepted": true,
+      "violations": []
+    },
+    {
+      "name": "removing a token budget entirely loosens",
+      "base": { "limits": { "service": { "budget_tokens": 250000 } } },
+      "candidate": { "limits": { "service": {} } },
+      "accepted": false,
+      "violations": [{ "path": "limits.service.budget_tokens", "base": 250000, "candidate": null }]
     }
   ],
   "combine": [
@@ -305,6 +333,24 @@
         },
         "envelope": true
       }
+    },
+    {
+      "name": "the lower of two token budgets wins",
+      "a": { "limits": { "org": { "budget_tokens": 1000000 } } },
+      "b": { "limits": { "org": { "budget_tokens": 400000 } } },
+      "combined": { "limits": { "org": { "budget_tokens": 400000 } } }
+    },
+    {
+      "name": "a token budget only one side states is taken from that side",
+      "a": { "limits": { "org": { "budget_tokens": 300000 } } },
+      "b": { "limits": { "org": { "budget_usd": 5.0 } } },
+      "combined": { "limits": { "org": { "budget_usd": 5.0, "budget_tokens": 300000 } } }
+    },
+    {
+      "name": "a token budget and a dollar budget are strictest independently",
+      "a": { "limits": { "org": { "budget_usd": 10.0, "budget_tokens": 100000 } } },
+      "b": { "limits": { "org": { "budget_usd": 4.0, "budget_tokens": 900000 } } },
+      "combined": { "limits": { "org": { "budget_usd": 4.0, "budget_tokens": 100000 } } }
     }
   ]
 }

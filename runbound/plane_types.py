@@ -324,7 +324,7 @@ class Controls:
       ``level`` in ``("org", "service", "agent", "key", "run", "action")``
       and ``field`` in ``("budget_usd", "window_s", "max_steps",
       "max_events", "loop_threshold", "max_cost_per_call_usd",
-      "max_call_seconds", "max_tokens_out_per_call")``. This worker
+      "max_call_seconds", "max_tokens_out_per_call", "budget_tokens")``. This worker
       collapses every level it can read (org, service, run — see
       :mod:`runbound.controls_merge`) into one effective number per field;
       ``agent``, ``key`` and ``action`` are carried and shown but not

@@ -66,6 +66,10 @@ LIMIT_FIELDS = (
     "max_cost_per_call_usd",
     "max_call_seconds",
     "max_tokens_out_per_call",
+    #: A budget in tokens. Merged like ``budget_usd`` (the lower cap wins) and
+    #: carried with the rest of a body's limits; this worker has no token
+    #: budget of its own to hold it against, so nothing here enforces it.
+    "budget_tokens",
 )
 
 #: The levels this worker can actually collapse into one effective number —
@@ -334,9 +338,32 @@ def fold_levels(limits_by_level: Mapping | None) -> dict:
         if not isinstance(row, Mapping):
             continue
         for field in LIMIT_FIELDS:
-            if field in row:
-                folded[field] = _stricter_limit(folded.get(field), row.get(field))
+            # A value that is not a number is set aside for this field alone (see
+            # :func:`malformed_limits`); it must not take the rest of the body with it.
+            if field in row and _is_limit_value(row[field]):
+                folded[field] = _stricter_limit(folded.get(field), row[field])
     return folded
+
+
+def _is_limit_value(value: Any) -> bool:
+    """A limit is a number or ``None`` ("no limit"). A bool, a string or NaN is neither."""
+    if value is None:
+        return True
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value
+
+
+def malformed_limits(limits_by_level: Mapping | None) -> tuple:
+    """``("limits.org.budget_usd", ...)`` — each limit an enforceable level states as
+    something other than a number or ``None``. :func:`fold_levels` ignores these, so
+    one bad value costs only its own limit; the caller says so once, in a log."""
+    by_level = limits_by_level if isinstance(limits_by_level, Mapping) else {}
+    found = []
+    for level in ENFORCEABLE_LEVELS:
+        row = by_level.get(level)
+        if not isinstance(row, Mapping):
+            continue
+        found += [f"limits.{level}.{field}" for field in LIMIT_FIELDS if field in row and not _is_limit_value(row[field])]
+    return tuple(found)
 
 
 def effective_limits(code: Mapping | None, plane_limits_by_level: Mapping | None) -> tuple:

@@ -63,7 +63,7 @@ from .policy import ToolCall, ToolPolicy, Violation
 from .responses import Refusal
 from .state import PostureState, SessionState
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 __all__ = [
     "Anomaly",

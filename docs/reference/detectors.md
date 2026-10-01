@@ -201,6 +201,26 @@ sent to the control plane — readable at any moment as
 runbound.init(budget_usd=5.0, on_anomaly="raise")   # "capped" is the default
 ```
 
+**Tokens ride the same reservation, but not the same reaction.** With a token limit in force
+(`max_total_tokens`, which a control plane can only tighten by stating `budget_tokens`, and
+`run_max_total_tokens`), the same stage also holds the call's worst case in tokens:
+`ceil(characters / 4)` of the request plus its output cap
+(`runbound.pricing.admission_worst_case_tokens`). It needs no price, so a model with none is
+reserved too. Both holds are taken together or not at all, and a call whose worst case is
+exactly what remains is admitted. A call that would cross the limit is **refused at the door
+only under `on_anomaly="raise"`**: `GuardrailTripped` with `decision.boundary == "tokens"` and
+`details["reason"] == "reservation"`, plus `worst_case_tokens`, `reserved_tokens` and
+`remaining_tokens`. Under `"warn"` (the default) or `"callback"` it records the same anomaly
+and decision, notifies your observers and lets the call go out; the post-call wall then stops
+the next call. The two limits differ on purpose. The dollar door is a hard stop by design: you
+set a money budget, and since 0.4.0 the call that would cross it is refused before it goes
+out, whatever `on_anomaly` says. The token door follows `on_anomaly` because it was added in
+front of a limit that could already just warn. It is gated by `budget_admission` as the dollar
+reservation is, and the envelope's stated-cap check and the wall enforce the same limit
+without it, so a limit is never unenforced, only unreserved. **Admission is per worker; the
+fleet total is applied at entry.** The hold is this worker's own, so two workers can each admit
+a call that together crosses the budget, and the wall then stops the next one.
+
 **The trade-off.** A call whose cap-priced worst case exceeds what is left is refused even if it
 would have used less: with $0.10 left, a request capped at 15,000 output
 tokens on a $10-per-million model is refused although its answer might have

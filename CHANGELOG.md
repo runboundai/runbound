@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-01
+
+### Fixed
+
+- A dollar reservation's refusal no longer shares an alert key with the budget wall's own
+  alert for the same session. Its anomaly now carries `details["reservation_level"]` where it
+  carried `level`, so under `on_anomaly="warn"` the wall's alert is no longer dropped after a
+  reservation refusal.
+- A malformed limit value from a control plane is now ignored for that limit alone;
+  the rest of the plane's limits still apply. Before, one value that was not a
+  number, on a limit your code also caps, set the whole plane body aside. It is
+  logged once, at warning level, naming the limit.
+
+### Changed
+
+- A token budget stated by a control plane is now merged like a dollar budget: the
+  stricter one wins, across the org, service and run levels and against what your
+  code sets. It is the control plane's name for `max_total_tokens`, and is
+  enforced like it (next item).
+- **A token budget is now enforced at the door as well as after the call.** A token limit
+  (`max_total_tokens`, or a stricter `budget_tokens` a control plane states) is reserved
+  like a dollar budget: the call's worst case (its input at four characters a token plus its
+  output cap) is held until the call closes out. A call that would cross the limit is refused
+  with `GuardrailTripped` before it goes out **only under `on_anomaly="raise"`**; under
+  `"warn"` (the default) or `"callback"` the anomaly and its decision are recorded, your
+  observers are told, and the call goes out, and the post-call wall stops the next call. A call
+  that exactly reaches the limit is admitted. This follows `budget_admission` (default
+  `"capped"`, so it applies to requests that state an output cap), needs no price (an
+  unpriced model is reserved too), and is per worker: the fleet total is applied at entry. The
+  dollar door is unchanged and still refuses whatever `on_anomaly` says. Set
+  `budget_admission=False` to keep the post-call wall alone.
+
 ## [0.7.0] - 2026-09-30
 
 ### Changed

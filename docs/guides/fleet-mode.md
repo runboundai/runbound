@@ -95,6 +95,13 @@ runbound.plane_status()
 
 ## What fleet mode adds
 
+- **Scope: per session key, not per application.** In the SDK a service-level budget
+  applies per session key; at the gateway per application. A dollar or token budget a
+  plane states for a service is read the first way by the SDK.
+- **Token admission is per worker.** Admission is per worker; the fleet total is applied
+  at entry. A token reservation is this worker's own, so two workers can each admit a call
+  that together crosses the budget between entries; the post-call wall catches it.
+
 - **A bounded fleet budget, not a hard one.** The entry answer carries what
   the rest of the fleet has already spent under this key; the SDK folds it in
   as an offset, and the `budget` detector counts local spend **plus** that

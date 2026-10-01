@@ -23,7 +23,9 @@ from runbound.controls_merge import (
     effective_envelope,
     effective_limits,
     fold_levels,
+    malformed_limits,
     merge,
+    LIMIT_FIELDS,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "controls_cases.json"
@@ -126,6 +128,20 @@ def test_effective_limits_the_plane_introducing_a_limit_tightens():
 
     assert effective["budget_usd"] == 5.0
     assert violations == []
+
+
+def test_effective_limits_a_plane_token_budget_is_merged_like_a_dollar_budget():
+    effective, violations = effective_limits({}, {"org": {"budget_tokens": 500_000}, "service": {"budget_tokens": 200_000}})
+
+    assert effective["budget_tokens"] == 200_000  # org and service compete: the lower cap
+    assert violations == []
+
+
+def test_effective_limits_the_plane_cannot_loosen_a_token_budget_the_code_holds():
+    effective, violations = effective_limits({"budget_tokens": 100_000}, {"org": {"budget_tokens": 900_000}})
+
+    assert effective["budget_tokens"] == 100_000
+    assert violations == [Violation("limits.budget_tokens", 100_000, 900_000)]
 
 
 def test_effective_limits_with_no_plane_body_at_all_is_the_code_unchanged():
@@ -265,3 +281,50 @@ def test_effective_detector_mode_is_free_when_unstated_and_baseline_is_notify():
 
     assert spec == {"action": "notify", "mode": "enforce"}
     assert violations == []
+
+
+# --- a malformed plane value costs its own limit and nothing else -----------------------------
+
+MALFORMED = ("lots", True, [1], {"n": 1}, float("nan"))
+
+
+def _other(field: str) -> str:
+    return "max_events" if field == "max_steps" else "max_steps"
+
+
+@pytest.mark.parametrize("bad", MALFORMED, ids=repr)
+@pytest.mark.parametrize("field", LIMIT_FIELDS)
+def test_a_malformed_plane_value_is_ignored_for_that_field_alone(field: str, bad) -> None:
+    other = _other(field)
+    plane = {"org": {field: bad, other: 5}}
+
+    without_cap, violations = effective_limits({other: 20}, plane)
+    assert without_cap[field] is None and without_cap[other] == 5 and violations == []
+
+    with_cap, violations = effective_limits({field: 100, other: 20}, plane)
+    assert with_cap[field] == 100 and with_cap[other] == 5  # the code's own cap stands; the valid tightening applies
+    assert violations == []  # a value that was never a limit is not a loosening either
+
+
+@pytest.mark.parametrize("field", LIMIT_FIELDS)
+def test_a_malformed_value_at_one_level_leaves_a_valid_one_at_another(field: str) -> None:
+    folded = fold_levels({"org": {field: "lots"}, "service": {field: 7}})
+
+    assert folded[field] == 7
+
+
+@pytest.mark.parametrize("field", LIMIT_FIELDS)
+def test_none_is_still_a_limit_not_a_malformed_one(field: str) -> None:
+    assert malformed_limits({"org": {field: None}}) == ()
+    assert fold_levels({"org": {field: None}}) == {field: None}
+
+
+def test_malformed_limits_names_each_one_on_an_enforceable_level_and_no_others() -> None:
+    found = malformed_limits({
+        "org": {"budget_usd": "x", "max_steps": 3},
+        "service": {"budget_tokens": True},
+        "agent": {"budget_usd": "ignored: this worker does not read the agent level"},
+    })
+
+    assert found == ("limits.org.budget_usd", "limits.service.budget_tokens")
+    assert malformed_limits(None) == () and malformed_limits({"org": "nope"}) == ()

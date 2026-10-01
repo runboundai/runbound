@@ -54,12 +54,12 @@ from .policy import (
     merge,
 )
 from .plane_types import key_hash as _key_hash_fn
-from .pricing import admission_worst_case, price_for, request_chars
+from .pricing import admission_worst_case, admission_worst_case_tokens, price_for, request_chars
 from .quota import MAX_COOLDOWN_S, Quota, cooldown_for, headers_of, read_quota
 from .shared import LocalState
 from . import posture as posture_module
 from .posture import Posture
-from .state import Hold, PostureState, SessionState, make_posture_state
+from .state import CompositeHold, Hold, PostureState, SessionState, make_posture_state
 
 _LOG = logging.getLogger("runbound")
 
@@ -317,6 +317,9 @@ class Engine:
             "max_cost_per_call_usd": config.max_cost_per_call_usd,
             "max_call_seconds": config.max_call_seconds,
             "max_tokens_out_per_call": config.max_tokens_out_per_call,
+            # The Controls name for the key-level token limit the code states as
+            # ``max_total_tokens``: a plane can tighten it, never loosen it.
+            "budget_tokens": config.max_total_tokens,
         }
         self._code_capabilities: dict = dict(getattr(config, "capabilities", None) or {})
         self._code_envelope: bool | None = config.envelope
@@ -361,6 +364,8 @@ class Engine:
             "confirm": config.spike_confirm,
         }
         self._controls_lock = threading.Lock()
+        #: Limits already reported as malformed, so a poll that repeats one logs it once.
+        self._malformed_limits_warned: set[str] = set()
         # Identity-cached against the last Controls body actually read from
         # the plane (``is``, not equality — the plane link only ever hands
         # over a *new* dict object when something changed), so a hot
@@ -957,12 +962,13 @@ class Engine:
         self._admit_stopped(session)
         self._admit_circuit(provider, session)
         self._admit_unpriced(session, model)
+        tokens_reported = False
         if self._effective_envelope():
             self._admit_steps(session)
             self._admit_run_time(session)
-            self._admit_tokens(session, model, request)
+            tokens_reported = self._admit_tokens(session, model, request)
         if self.config.budget_admission:
-            return self._admit_budget(session, model, request)
+            return self._admit_budget(session, model, request, tokens_reported=tokens_reported)
         return None
 
     def _admit_action(
@@ -1207,7 +1213,11 @@ class Engine:
         self.refuse(session, anomaly, decision, exc=GuardrailTripped, reacted="door")
 
     def _admit_budget(
-        self, session: SessionState, model: str | None, request: dict | None
+        self,
+        session: SessionState,
+        model: str | None,
+        request: dict | None,
+        tokens_reported: bool = False,
     ) -> "Hold | None":
         """The opt-in phase: would this call's estimated cost cross the budget?
 
@@ -1241,6 +1251,17 @@ class Engine:
         Never latches (see :meth:`admit`): raises straight from here, never
         through :meth:`_react`/:meth:`_latch`.
 
+        Tokens ride the same stage: with a token limit in force (``max_total_tokens``
+        or a plane-stated ``budget_tokens``, whichever is stricter, and
+        ``run_max_total_tokens``) the worst case is ``ceil(chars / 4)`` of the
+        request plus its output cap, held as ``"tokens"`` in the same ``session.lock``
+        section as the dollars, so one call is refused with nothing held or admitted
+        holding both. No price is needed, so an unpriced model is still reserved.
+        A worst case of exactly what remains is allowed. The hold is this worker's
+        own: the fleet's settled tokens arrive at entry (``tokens_offset``), so two
+        workers can each admit a call that together crosses the budget, and the
+        post-call wall is what catches that.
+
         Run and key budgets: with ``config.run_budget_usd`` also (or only)
         set, ``estimate`` is checked against whichever of the run's own
         remaining (``run_budget_usd - run_cost_usd``, reset fresh on every
@@ -1256,7 +1277,11 @@ class Engine:
         config = self.config
         budget_usd = self._limit("budget_usd")
         run_budget_usd = config.run_budget_usd
-        if budget_usd is None and run_budget_usd is None:
+        budget_tokens = self._limit("budget_tokens")
+        run_budget_tokens = config.run_max_total_tokens
+        money_on = budget_usd is not None or run_budget_usd is not None
+        tokens_on = budget_tokens is not None or run_budget_tokens is not None
+        if not money_on and not tokens_on:
             return None
         stated_cap = _admission_output_cap(request)
         reserving = config.budget_admission == "capped"
@@ -1265,42 +1290,100 @@ class Engine:
             # post-call wall is the only check, exactly as in 0.3.0.
             return None
         try:
-            price = price_for(model, config.custom_prices)
-            if price is None:
-                self._warn_admission_unpriced(model)
+            estimate = None
+            if money_on:
+                price = price_for(model, config.custom_prices)
+                if price is None:
+                    # No price, no dollar estimate: skipped, and said so once. The
+                    # token worst case below needs none, so it is still reserved.
+                    self._warn_admission_unpriced(model)
+                    money_on = False
+                else:
+                    estimate = _admission_worst_case(
+                        price, stated_cap, config.admission_output_tokens, request
+                    )
+            if not money_on and not tokens_on:
                 return None
-            estimate = _admission_worst_case(
-                price, stated_cap, config.admission_output_tokens, request
+            token_estimate = (
+                _admission_worst_case_tokens(stated_cap, config.admission_output_tokens, request)
+                if tokens_on
+                else None
             )
+            money_decision = tokens_decision = ALLOW
+            money_hold = None
             with session.lock:
-                if budget_usd is not None:
+                if budget_usd is not None or budget_tokens is not None:
                     session.roll_budget_window(config.budget_window)
-                reserved = session.reserved.get("usd", 0.0)
-                key_remaining = (
-                    None
-                    if budget_usd is None
-                    else budget_usd
-                    - (session.total_cost_usd + session.spend_offset_usd)
-                    - reserved
-                )
-                run_remaining = (
-                    None
-                    if run_budget_usd is None
-                    else run_budget_usd - session.run_cost_usd - reserved
-                )
-                remaining, level, limit = _tighter_budget(key_remaining, run_remaining, budget_usd, run_budget_usd)
-                if estimate <= remaining:
-                    return session.hold("usd", estimate)
-            decision = admission.money(
-                estimate, remaining, limit=limit, reserved=reserved, level=level
-            )
-            if reserving:
-                anomaly = _reservation_anomaly(
-                    session, model, stated_cap, estimate, remaining, reserved, limit, level
-                )
+                if money_on:
+                    reserved = session.reserved.get("usd", 0.0)
+                    key_remaining = (
+                        None
+                        if budget_usd is None
+                        else budget_usd
+                        - (session.total_cost_usd + session.spend_offset_usd)
+                        - reserved
+                    )
+                    run_remaining = (
+                        None
+                        if run_budget_usd is None
+                        else run_budget_usd - session.run_cost_usd - reserved
+                    )
+                    remaining, level, limit = _tighter_budget(
+                        key_remaining, run_remaining, budget_usd, run_budget_usd
+                    )
+                    if estimate > remaining:
+                        money_decision = admission.money(
+                            estimate, remaining, limit=limit, reserved=reserved, level=level
+                        )
+                if tokens_on and money_decision is ALLOW:
+                    tokens_reserved = int(session.reserved.get("tokens", 0))
+                    key_tokens_remaining = (
+                        None
+                        if budget_tokens is None
+                        else budget_tokens
+                        - (session.total_tokens + session.tokens_offset)
+                        - tokens_reserved
+                    )
+                    run_tokens_remaining = (
+                        None
+                        if run_budget_tokens is None
+                        else run_budget_tokens - session.run_tokens - tokens_reserved
+                    )
+                    t_remaining, t_level, t_limit = _tighter_budget(
+                        key_tokens_remaining, run_tokens_remaining, budget_tokens, run_budget_tokens
+                    )
+                    tokens_decision = admission.tokens_reserved(
+                        token_estimate, t_remaining, limit=t_limit, reserved=tokens_reserved, level=t_level
+                    )
+                if money_decision is ALLOW and tokens_decision is ALLOW:
+                    # Both or neither: a refusal above took nothing, so no hold is
+                    # left behind by the other one.
+                    holds = []
+                    if money_on:
+                        holds.append(session.hold("usd", estimate))
+                    if tokens_on:
+                        holds.append(session.hold("tokens", token_estimate))
+                    return holds[0] if len(holds) == 1 and holds[0].resource == "usd" else CompositeHold(holds)
+                if money_decision is ALLOW and money_on:
+                    # Only the tokens would refuse. Whether they do is on_anomaly's say
+                    # (below, outside the lock); the dollars they were admitted on are
+                    # held either way, so a call let through with a warning is still
+                    # reserved against the dollar budget. Never a token hold.
+                    money_hold = session.hold("usd", estimate)
+            if money_decision is not ALLOW:
+                decision = money_decision
+                if reserving:
+                    anomaly = _reservation_anomaly(
+                        session, model, stated_cap, estimate, remaining, reserved, limit, level
+                    )
+                else:
+                    anomaly = _admission_anomaly(
+                        session, model, estimate, remaining, reserved, budget_usd
+                    )
             else:
-                anomaly = _admission_anomaly(
-                    session, model, estimate, remaining, reserved, budget_usd
+                decision = tokens_decision
+                anomaly = _token_reservation_anomaly(
+                    session, model, stated_cap, token_estimate, t_remaining, tokens_reserved, t_limit, t_level
                 )
         except Exception:
             _LOG.warning(
@@ -1310,6 +1393,23 @@ class Engine:
                 exc_info=True,
             )
             return None
+        if decision.boundary == "tokens" and tokens_reported:
+            # The envelope's own token stage already told the observers about this crossing
+            # and let the call through; the dollars it was admitted on stay held.
+            return money_hold
+        if decision.boundary == "tokens":
+            # The token reservation follows ``on_anomaly`` like the envelope's own token
+            # stage: "raise" refuses here; "warn" and "callback" file the anomaly and its
+            # decision, notify the observers, and let the call through (the wall behind
+            # the door reacts to a real crossing, as it always has). A plane override of
+            # the ``budget`` detector applies as it does at every door stage. Never latches.
+            try:
+                self._react_at_door(session, anomaly, decision, latches=False)
+            except BaseException:
+                if money_hold is not None:
+                    money_hold.release()
+                raise
+            return money_hold
         self.refuse(session, anomaly, decision, exc=GuardrailTripped, reacted="door")
 
     def _warn_admission_unpriced(self, model: str | None) -> None:
@@ -1392,7 +1492,7 @@ class Engine:
 
     def _admit_tokens(
         self, session: SessionState, model: str | None, request: dict | None
-    ) -> None:
+    ) -> bool:
         """Stand in front of the tokens half of ``BudgetDetector``.
 
         Only a request that states its own cap can be checked exactly (see
@@ -1403,25 +1503,34 @@ class Engine:
         runs (CONTROLS §2.5): a projection from a stated cap says nothing
         about the next call, the same reasoning that keeps the money
         estimate from latching.
+
+        Returns ``True`` when it found the stated cap would cross the limit and let the
+        call through with a notice (``"warn"``/``"callback"``): the reservation behind it
+        then does not say the same thing twice.
         """
         try:
             config = self.config
-            if config.max_total_tokens is None:
-                return
+            max_total_tokens = self._limit("budget_tokens")
+            if max_total_tokens is None:
+                return False
             stated_cap = _admission_output_cap(request)
             with session.lock:
+                # Every read of the key's counters that feeds a budget decision rolls
+                # the window first (see ``SessionState.roll_budget_window``).
+                session.roll_budget_window(self.config.budget_window)
                 total_tokens = session.total_tokens + session.tokens_offset
-            decision = admission.tokens(total_tokens, stated_cap, config.max_total_tokens)
+            decision = admission.tokens(total_tokens, stated_cap, max_total_tokens)
         except Exception:
             _LOG.warning(
                 "runbound could not check the token limit at the door; the call proceeds",
                 exc_info=True,
             )
-            return
+            return False
         if decision is ALLOW:
-            return
+            return False
         anomaly = _tokens_door_anomaly(session, model, decision)
         self._react_at_door(session, anomaly, decision, latches=False)
+        return True
 
     def _admit_actions(self, session: SessionState) -> None:
         """Refuse the ``(max_actions_per_run + 1)``\\ th *executed* tool action.
@@ -1768,9 +1877,16 @@ class Engine:
         """
         try:
             safe_body = body if isinstance(body, dict) else {}
-            limits, limit_violations = controls_merge.effective_limits(
-                self._code_limits, safe_body.get("limits") if isinstance(safe_body.get("limits"), dict) else {}
-            )
+            plane_limits = safe_body.get("limits") if isinstance(safe_body.get("limits"), dict) else {}
+            limits, limit_violations = controls_merge.effective_limits(self._code_limits, plane_limits)
+            for path in controls_merge.malformed_limits(plane_limits):
+                if path not in self._malformed_limits_warned:
+                    self._malformed_limits_warned.add(path)
+                    _LOG.warning(
+                        "runbound: the control plane states %s as something other than a number; "
+                        "ignoring that limit (the rest of the plane's limits still apply)",
+                        path,
+                    )
             capabilities, cap_violations = controls_merge.effective_capabilities(
                 self._code_capabilities,
                 safe_body.get("capabilities") if isinstance(safe_body.get("capabilities"), dict) else {},
@@ -2086,6 +2202,7 @@ class Engine:
         cfg = dataclasses.replace(
             self.config,
             max_events=limits.get("max_events", self.config.max_events),
+            max_total_tokens=limits.get("budget_tokens", self.config.max_total_tokens),
             loop_threshold=limits.get("loop_threshold", self.config.loop_threshold),
             max_call_seconds=limits.get("max_call_seconds", self.config.max_call_seconds),
             max_tokens_out_per_call=limits.get(
@@ -3083,7 +3200,55 @@ def _reservation_anomaly(
             "reserved_usd": reserved,
             "remaining_usd": remaining,
             "budget_usd": limit,
-            "level": level,
+            # Not ``level``: the alert dedupe key reads that, and this door notice must not share a key
+            # with (and so swallow) the wall's own anomaly for the same crossing.
+            "reservation_level": level,
+        },
+    )
+
+
+def _token_reservation_anomaly(
+    session: SessionState,
+    model: str | None,
+    stated_cap: "int | None",
+    worst_case: int,
+    remaining: int,
+    reserved: int,
+    limit: int,
+    level: str = "key",
+) -> Anomaly:
+    """Describe a call refused because its worst case could cross the token budget.
+
+    ``worst_case_tokens`` is the input estimate plus the stated output cap (else
+    the assumed one). ``reserved_tokens`` is what other calls in flight on this
+    worker already hold; ``remaining_tokens`` already has it subtracted. ``level``
+    names which budget bound the call, ``"run"`` or ``"key"``.
+    """
+    key = getattr(session, "key", None)
+    whose = f" for session {key!r}" if key else ""
+    field = "run_max_total_tokens" if level == "run" else "budget_tokens"
+    return Anomaly(
+        detector=BUDGET_DETECTOR,
+        severity="critical",
+        message=(
+            f"Reservation refused{whose}: a call on model {model!r} could use up to "
+            f"{worst_case} tokens, and {remaining} are left of {field} {limit}"
+        ),
+        details={
+            "session_id": getattr(session, "session_id", ""),
+            "key": key,
+            "tags": dict(getattr(session, "tags", None) or {}),
+            "reason": "reservation",
+            "rule": "reservation",
+            "model": model,
+            "cap_tokens": stated_cap,
+            "worst_case_tokens": worst_case,
+            "reserved_tokens": reserved,
+            "remaining_tokens": remaining,
+            "budget_tokens": limit,
+            # Not ``level``: the alert dedupe key reads that, and this door notice must not
+            # share a key with (and so swallow) the wall's own anomaly for the same crossing.
+            "reservation_level": level,
         },
     )
 
@@ -3125,7 +3290,9 @@ def _admission_anomaly(
             "reserved_usd": reserved,
             "remaining_usd": remaining,
             "budget_usd": limit,
-            "level": level,
+            # Not ``level``: the alert dedupe key reads that, and this door notice must not share a key
+            # with (and so swallow) the wall's own anomaly for the same crossing.
+            "reservation_level": level,
         },
     )
 
@@ -3350,6 +3517,19 @@ def _admission_worst_case(
     """
     output_tokens = stated_cap if stated_cap is not None else admission_output_tokens
     return admission_worst_case(price, output_tokens, _admission_request_chars(request))
+
+
+def _admission_worst_case_tokens(
+    stated_cap: int | None, admission_output_tokens: int, request: dict | None
+) -> int:
+    """The token worst case of one call: input estimate plus capped output.
+
+    The tokens counterpart of :func:`_admission_worst_case`: the same two terms
+    (``stated_cap`` over ``admission_output_tokens``, and the request's input
+    characters over four), and no price, so it exists for an unpriced model too.
+    """
+    output_tokens = stated_cap if stated_cap is not None else admission_output_tokens
+    return admission_worst_case_tokens(output_tokens, _admission_request_chars(request))
 
 
 def _admission_request_chars(request: dict | None) -> int:

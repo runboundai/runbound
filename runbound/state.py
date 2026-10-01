@@ -121,6 +121,38 @@ def make_posture_state(name: str, reason: object, source: str) -> PostureState:
     return PostureState(name, text[:POSTURE_REASON_MAX], source, time.time())
 
 
+class CompositeHold:
+    """The holds one admission took together (money and tokens), given back as one.
+
+    Duck-typed like :class:`Hold` for the callers that only ever release or
+    settle it. :meth:`settle` takes the call's actual *dollars*, as
+    :func:`runbound.api._settle_hold` reads them, and records it on the money
+    member; the tokens member is released, its actual being what the session's
+    own token counter already counted.
+    """
+
+    def __init__(self, holds: "list[Hold]") -> None:
+        self.holds = list(holds)
+
+    @property
+    def released(self) -> bool:
+        return all(h.released for h in self.holds)
+
+    def release(self) -> None:
+        for hold in self.holds:
+            hold.release()
+
+    def settle(self, actual: object) -> None:
+        for hold in self.holds:
+            if hold.resource == "usd":
+                hold.settle(actual)
+            else:
+                hold.release()
+
+    def adjust(self, amount: float) -> None:
+        """No-op, like :meth:`Hold.adjust`."""
+
+
 class Hold:
     """Money (or another resource) reserved for the lifetime of one call.
 

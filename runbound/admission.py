@@ -186,6 +186,40 @@ def money(
     )
 
 
+def tokens_reserved(
+    estimate: int,
+    remaining: int,
+    *,
+    limit: int | None = None,
+    reserved: int | None = None,
+    level: str = "session",
+) -> Decision:
+    """Would this call's worst-case tokens cross the token budget?
+
+    The tokens counterpart of :func:`money`, with the same boundary condition:
+    a worst case of exactly what is ``remaining`` is allowed. ``remaining``
+    already has what is settled (the fleet's included) and what other calls on
+    this worker hold subtracted; ``limit`` and ``reserved`` are folded into
+    ``evaluation`` when given, so the refusal states every number it was made from.
+    """
+    if estimate <= remaining:
+        return ALLOW
+    evaluation = {"remaining": remaining, "estimate": estimate}
+    if limit is not None:
+        evaluation["limit"] = limit
+    if reserved is not None:
+        evaluation["reserved"] = reserved
+    return Decision(
+        verdict="deny",
+        kind="model_call",
+        boundary="tokens",
+        level=level,
+        detector="budget",
+        reason=f"estimated {estimate} tokens would exceed {remaining} remaining",
+        evaluation=evaluation,
+    )
+
+
 def actions(executed: int, max_actions_per_run: int | None) -> Decision:
     """Would the action about to run be the ``(max_actions_per_run + 1)``\\ th *executed* one?
 

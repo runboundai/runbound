@@ -465,6 +465,17 @@ def admission_worst_case(price: tuple, output_tokens: int, input_chars: int) -> 
     return (input_tokens / 1_000_000.0) * price[0] + (max(int(output_tokens), 0) / 1_000_000.0) * price[1]
 
 
+def admission_worst_case_tokens(output_tokens: int, input_chars: int) -> int:
+    """The token worst case of one call: input estimate plus output.
+
+    The tokens counterpart of :func:`admission_worst_case`, and the same two
+    terms: the input is ``estimated_tokens(input_chars)`` (characters divided by
+    four, rounded up) and the output is what the call may produce. No price
+    enters into it, so a model with no price has a token worst case all the same.
+    """
+    return estimated_tokens(input_chars) + max(int(output_tokens), 0)
+
+
 def _get(obj: Any, name: str) -> Any:
     """``name`` off a mapping or an attribute-style object; ``None`` if absent or unreadable."""
     try:

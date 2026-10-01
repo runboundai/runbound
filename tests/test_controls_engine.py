@@ -12,9 +12,12 @@ socket. The plane link itself is a tiny fake with a settable
 :class:`~runbound.shared.RemoteState` answers with.
 """
 
+import logging
+
 import pytest
 
 from runbound.config import GuardrailConfig
+from runbound.controls_merge import LIMIT_FIELDS
 from runbound.engine import Engine
 from runbound.events import Anomaly, Event
 from runbound.exceptions import GuardrailTripped
@@ -234,6 +237,40 @@ def test_a_malformed_controls_body_fails_open_never_loosening_and_never_crashing
 
     assert eng._limit("budget_usd") == 10.0
     assert eng.controls_refusals() == []
+
+
+def test_a_plane_stated_token_budget_is_merged_and_carried():
+    plane = FakeControlsPlane({"limits": {"org": {"budget_tokens": 500_000}, "service": {"budget_tokens": 200_000}}})
+    eng = engine(GuardrailConfig(budget_usd=10.0), plane)
+
+    assert eng._limit("budget_tokens") == 200_000
+    assert eng._limit("budget_usd") == 10.0  # nothing else moved
+    assert eng.controls_refusals() == []
+
+
+def test_a_malformed_token_budget_never_crashes_or_stops_the_rest_of_the_body_applying():
+    plane = FakeControlsPlane({"limits": {"org": {"budget_tokens": "lots", "budget_usd": 1.0}}})
+    eng = engine(GuardrailConfig(budget_usd=10.0), plane)
+
+    assert eng._limit("budget_usd") == 1.0  # the well-formed field still tightens
+    assert eng.controls_refusals() == []
+
+
+@pytest.mark.parametrize("field", LIMIT_FIELDS)
+def test_a_malformed_limit_is_ignored_alone_and_said_once(field, caplog):
+    other = "max_events" if field == "max_steps" else "max_steps"
+    plane = FakeControlsPlane({"limits": {"org": {field: "lots", other: 5}}})
+    eng = engine(GuardrailConfig(), plane)
+
+    with caplog.at_level(logging.WARNING, logger="runbound"):
+        assert eng._limit(other) == 5  # the valid tightening applies
+        assert eng._limit(field) == eng._code_limits.get(field)  # the malformed one is as if unstated
+        plane.body = {"limits": {"org": {field: "still lots", other: 4}}}  # the next poll repeats it
+        assert eng._limit(other) == 4
+        assert eng.controls_refusals() == []
+
+    said = [r for r in caplog.records if f"limits.org.{field}" in r.getMessage()]
+    assert len(said) == 1 and said[0].name == "runbound" and said[0].levelno == logging.WARNING
 
 
 def test_a_directive_that_raises_fails_open():
