@@ -3349,7 +3349,7 @@ def _stamp_decision(
     that built it already stated, plus ``provider_called`` — folded in here,
     once, so no refusal site has to remember to add it by hand. An ``allow``
     Decision is returned completely unchanged: there is nothing to explain
-    about a call that went through. ``details["key_hash"]`` is a salted hash
+    about a call that went through. ``details["key_hash"]`` is an unsalted sha256 hash
     of the session's key (``None`` for the default, unkeyed session, or with
     no session at all) — together with ``decision.level`` this is what
     ``exc.scope`` reads.

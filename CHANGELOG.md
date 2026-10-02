@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-03
+
+### Added
+
+- **`runbound.check()` and `python -m runbound check`: what is guarded in this process, in one report.**
+  Wrapped clients by provider, decorated tools with their capability classes, whether a plane is connected (its
+  address, never its key), the posture in force, the budgets and limits, and the last ten events. It makes no
+  network call. `check()` is called in your own process; `python -m runbound check [--json] [TARGET]` loads a script
+  or module first (as `runbound_check`, so an `if __name__ == "__main__":` block does not run) and exits `0` when
+  something is guarded, `1` when nothing is, `2` when the target cannot be loaded. `--json` has a stable shape
+  (`schema` 1). A new guide, "Attach with an agent", is a prompt a coding agent follows to attach the SDK or the
+  gateway, and a test checks that every command in it exists.
+
+### Changed
+
+- The configuration reference is grouped by purpose (budgets and limits; loops, spikes and failing providers;
+  postures and tools; the plane; privacy; other), with each parameter's type, its real default and whether a
+  connected plane can tighten it. Three `init()` parameters the old page never listed are there now:
+  `budget_window`, `run_budget_usd` and `run_max_total_tokens`. A test reads the page against `GuardrailConfig`,
+  so a parameter cannot be missing, duplicated, or shown with a wrong default. The repository manual is the
+  canonical one; the site renders it at build time.
+
 ## [0.9.0] - 2026-10-02
 
 ### Changed

@@ -75,6 +75,11 @@ REQUIRED_IDS = (
     "self-hosted-init",
     "session-per-caller",
     "tool-rule-on-decorator",
+    "graded-loop",
+    "runaway-arc",
+    "runtime-change",
+    "verify-events",
+    "check-process",
 )
 
 _START_PREFIX = "# docs: "

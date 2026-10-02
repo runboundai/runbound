@@ -63,7 +63,9 @@ from .policy import ToolCall, ToolPolicy, Violation
 from .responses import Refusal
 from .state import PostureState, SessionState
 
-__version__ = "0.9.0"
+__version__ = "0.10.0"
+
+from ._check import check  # noqa: E402  (after __version__: the report prints it)
 
 __all__ = [
     "Anomaly",
@@ -87,6 +89,7 @@ __all__ = [
     "active_sessions",
     "assert_guarded",
     "budget",
+    "check",
     "circuit_state",
     "clear",
     "coverage",

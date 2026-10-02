@@ -64,7 +64,9 @@ with runbound.session("user:8842"):
 ```
 
 A call is checked against both at once and refused by whichever is tighter —
-`exc.decision.level` says `"run"` or `"key"`. See [Runs keyed by any
+`exc.decision.level` says `"run"` or `"key"`. The dollar figure is a list-price
+estimate (the model's published per-token price times the tokens counted), not
+your invoice; see [What is exact and what is estimated](concepts/what-it-sees.md). See [Runs keyed by any
 id](guides/runs.md) for the full picture, including what happens when the key
 outlives the process.
 
@@ -86,7 +88,7 @@ def issue_refund(user: str, amount: float) -> str:
 
 runbound.enter_safe_mode(reason="spend looks abnormal", posture="restricted")
 
-issue_refund("u1", 20.0)   # raises SafeModeViolation before the body runs
+issue_refund("u1", 20.0)   # refused before the body runs
 ```
 
 The refusal carries the same `Decision` every refusal does:
@@ -106,10 +108,66 @@ runbound.init(on_anomaly="raise", max_actions_per_run=2)
 A third decorated tool call in that run raises before its body runs, with
 `exc.decision.boundary == "blast_radius"`.
 
+**A loop is answered in rungs, not all at once.** A tool called again and
+again with the same arguments is a loop. The third repeat is a line in your
+log, the sixth pages a person, and the ninth narrows the session to the
+`restricted` posture, so the financial tool is refused before its body runs
+while reads and writes still work. If it keeps repeating, the session is
+closed for a cooldown and then served again. **Containment is off until you
+set `on_spike="limit"`**: with the default (`"notify"`) the ninth call is one
+more notice and the tool runs. It also needs a keyed session and
+`on_anomaly="raise"`.
+
+```python
+import time
+
+import runbound
+
+runbound.init(
+    on_anomaly="raise",
+    on_spike="limit",               # without this, containment is off: the ninth call would just run
+    spike_limit_calls=2,            # how many more repeats the limited session gets before it is closed
+    spike_cooldown_seconds=0.5,     # the default is 300; short here so this page can run
+)
+
+ran = []
+
+@runbound.tool(effects={"financial"})
+def issue_refund(amount: float) -> str:
+    ran.append(amount)
+    return "refunded"
+
+refused = []
+with runbound.session("user:7"):
+    for call in range(1, 13):               # the same refund, again and again
+        try:
+            issue_refund(25.0)
+        except runbound.ExecutionRefused as exc:
+            refused.append((call, exc.reason))
+
+# Eight calls ran. The ninth was refused before its body ran, and so was every one after it.
+print(len(ran), "ran; first refused:", refused[0])
+
+# The session was closed for its cooldown. Entering it now is refused; once the cooldown is
+# over, the same key is served again.
+try:
+    with runbound.session("user:7"):
+        pass
+except runbound.ExecutionRefused:
+    pass
+time.sleep(0.7)
+with runbound.session("user:7"):
+    print(issue_refund(25.0))
+```
+
+For the same story told from `events()`, see [A runaway, start to
+finish](guides/a-runaway.md).
+
 **4. Handle the refusal.** Every stop — a budget, a posture, a policy, a
-provider outage — raises the same typed exception,
-`runbound.ExecutionRefused` (`GuardrailTripped` is the identical class under
-its older name). It is never a fake success and never silently swallowed:
+provider outage — raises a subclass of one typed exception,
+`runbound.ExecutionRefused`; catch that one name. (`SafeModeViolation` and
+`PolicyViolation` are `ExecutionRefused`; `GuardrailTripped` is the same class
+under its older name.) It is never a fake success and never silently swallowed:
 
 ```python
 from runbound import ExecutionRefused
@@ -138,6 +196,41 @@ runbound.assert_guarded()    # raises loudly if a provider SDK is imported
                                 # but no guarded call has been recorded
 ```
 
+Or ask runbound for the whole picture in one command: which clients are
+wrapped, which tools are guarded and under what capability classes, whether a
+plane is connected (its address, never its key), the posture in force, the
+budgets and limits, and the last ten events. It makes no network call and needs
+no key:
+
+```python
+import runbound
+
+runbound.init(budget_usd=5.0, max_steps=50, on_anomaly="raise")
+
+@runbound.tool(effects={"financial"})
+def issue_refund(user: str, amount: float) -> str:
+    return "refunded"
+
+@runbound.tool(effects={"read"})
+def lookup_order(order_id: str) -> str:
+    return "found"
+
+report = runbound.check()        # prints what is guarded in THIS process, and returns it
+assert report["guarded"]          # the same fact `python -m runbound check` turns into its exit code
+```
+
+From a terminal, or a CI step, point the same report at a script or a module:
+
+```bash
+python -m runbound check agent.py        # add --json for a stable machine-readable form
+```
+
+It loads the target as `runbound_check` (so an `if __name__ == "__main__":`
+block, a server loop for instance, does not run), then reports; it exits `0` when
+at least one client, tool or guarded call exists, `1` when nothing is guarded,
+and `2` when the target cannot be loaded. Code that wires runbound only inside a
+`main()` should call `runbound.check()` there instead.
+
 `coverage()` reports `auto_wrapped` labels, `wrapped_clients`,
 `decorated_tools`, `guarded_calls`, `tool_calls_seen`, `keyed_sessions_seen`,
 `providers_imported`, `providers_unguarded` (imported but never seen guarded),
@@ -147,8 +240,30 @@ sure](concepts/what-it-sees.md#how-to-be-sure) for the full picture,
 including the once-per-process warning that fires on its own if a provider is
 imported and nothing guarded has happened.
 
+**6. Verify it.** Everything above leaves a record. Print what this process
+saw:
+
+```python
+import runbound
+
+runbound.init(budget_usd=0.01, on_anomaly="raise")
+
+try:
+    runbound.record_call("gpt-4o", 1_000_000, 1_000_000)   # far over a one-cent budget
+except runbound.ExecutionRefused:
+    pass
+
+for event in runbound.events():
+    print(event["kind"], event.get("detector"), event.get("reacted"))
+```
+
+You should see an `anomaly` row and a `refusal` row, both from the `budget`
+detector: the refusal you just caused. With a control plane connected, the
+same `refusal` appears as a row on the console's Refused actions page.
+
 See it work against real code, offline, with no API key and no `openai`
-package installed:
+package installed. These examples are in the repository, not in the pip
+package, so this step needs the clone from step 1:
 
 ```bash
 .venv/bin/python examples/core_loop_demo.py

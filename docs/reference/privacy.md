@@ -6,7 +6,7 @@ Telemetry here is **content-minimizing, not content-free** — say plainly what
 it still reveals rather than call it "safe" and leave you to find out. What it
 reveals: tool names, model names, call timing, counts (tokens, steps, calls),
 estimated dollars, provider error classes, salted argument-equality hashes
-(below), session-key hashes, your `tags`, detector messages with the key
+(below), session-key hashes (unsalted), your `tags`, detector messages with the key
 redacted, and the [tool report](../guides/fleet-mode.md#what-we-send--hashes-and-counts-never-content)
 (parameter names and annotations, module, a docstring's first line). What it
 never reveals: prompts, replies, tool arguments themselves, or error text.
@@ -18,6 +18,10 @@ never reveals: prompts, replies, tool arguments themselves, or error text.
   hashes differently in a different process, so `args_hash` is an equality
   token for spotting a repeat inside this process, not a stable fingerprint
   someone could use to correlate calls across your fleet from the hash alone.
+- **Session keys are hashed too, but unsalted.** A key is a plain sha256 digest,
+  so the same caller hashes the same in every worker: that is what lets a shared
+  budget, a latch and a strike follow one caller across the fleet. The salt on
+  tool arguments (above) does not apply to keys.
 - **Raw arguments never leave your process.** They are not stored, not logged,
   and not included in any alert payload. An [action
   policy](#action-policy--rules-for-what-your-agent-may-do) hands them to your

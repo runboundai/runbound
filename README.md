@@ -32,7 +32,16 @@ extra: `pip install "runbound[langchain]"`.
 import runbound
 runbound.init(budget_usd=5.0, max_steps=50, on_anomaly="raise")
 
-client = runbound.wrap(OpenAI())   # automatic for a client built after init()
+runbound.record_call("gpt-4o", tokens_in=1_000, tokens_out=500)   # guarded; needs no provider package
+```
+
+With a provider SDK (`pip install openai`), `runbound.init()` wraps the client
+for you, automatic for a client built after `init()`:
+
+```python
+from openai import OpenAI
+
+client = OpenAI()   # wrapped: every call below is counted, priced and limited
 ```
 
 Give it a user key when a limit should follow that person across requests
@@ -56,7 +65,11 @@ def issue_refund(user: str, amount: float): ...
 
 The five-minute version — wiring every limit, checking what's actually
 guarded, and handling a refusal — is in
-[Getting started](docs/getting-started.md).
+[Getting started](docs/getting-started.md), which also shows the graded loop
+and [a runaway, start to finish](docs/guides/a-runaway.md).
+
+Not a Python agent? [Which door](docs/which-door.md) covers the gateway (change
+one base URL) and the action API (one HTTP call before an action).
 
 ## Three levels of protection
 
@@ -112,7 +125,8 @@ from reading what an agent said or what a model answered:
 - Prompts and model replies are never read, stored, or sent.
 - Tool arguments are sha256-hashed before storage, salted per process; raw
   arguments never leave your process.
-- A session key reaches a connected plane as a hash, never in the clear.
+- A session key reaches a connected plane as a hash, never in the clear. That
+  hash is unsalted, so the same caller is recognisable across your workers.
 - No network calls except the ones you configure — no telemetry, no
   phone-home, nothing sent anywhere with no `token` set.
 

@@ -2,14 +2,19 @@
 
 [← README](../README.md)
 
-The SDK's manual. Every page here is also published, with executed snippets,
-at [runbound.co/docs](https://runbound.co/docs).
+The SDK's manual. This repository manual is canonical: the site at
+[runbound.co/docs](https://runbound.co/docs) renders it at build time, with the
+snippets that tests execute, so a page here and its published twin cannot differ.
 
 ## Getting started
 
+- [Start here: which door](which-door.md) — the SDK, the gateway or the action
+  API, by the shape of your workload.
+
 - [Getting started](getting-started.md) — install, run the demo, then build
   the same core loop yourself: a budget, a run and key pair, a decorated
-  tool, a narrowed posture, a stop, and handling the refusal.
+  tool, a narrowed posture, a graded loop, a stop, handling the refusal, and a
+  verify step.
 
 ## Concepts
 
@@ -36,6 +41,17 @@ at [runbound.co/docs](https://runbound.co/docs).
   job, a tenant or a customer.
 - [Fleet mode](guides/fleet-mode.md) — one truth across all your workers: a
   shared budget, a shared latch, shared strikes and org-wide action policy.
+- [Attach: the gateway](guides/attach-gateway.md) — point `OPENAI_BASE_URL` or
+  `ANTHROPIC_BASE_URL` at it; identity, refusals, fail mode, streams, what it
+  cannot see.
+- [Attach: the action API](guides/attach-action-api.md) — admit and report,
+  the Decision, idempotency and held duplicates.
+- [Attach with an agent](guides/attach-with-an-agent.md) — a prompt a coding agent
+  follows to attach the SDK or the gateway, ending in `python -m runbound check`.
+- [A runaway, start to finish](guides/a-runaway.md) — one incident told from
+  `events()`: detected, contained, explained, recovered.
+- [What changed](guides/what-changed.md) — the `runtime_change` record: the
+  model, provider or policy version behind a call moved.
 - [Spike detection](guides/spike-detection.md) — the zero-config ladder that
   learns what a session normally looks like and reacts when it changes.
 - [Action policy](guides/policy.md) — rules for what your agent may do, and

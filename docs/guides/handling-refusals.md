@@ -64,7 +64,7 @@ Every refusal exposes:
   budget crossing discovered after the call returned — the call happened,
   it is billed, and its result is withheld.
 - **`scope`** — `{"level": ..., "key_hash": str | None}`: which scope decided,
-  and a salted hash of the session's key, never the key itself. `level` is one of
+  and a sha256 hash of the session's key (unsalted, so the same caller matches across workers), never the key itself. `level` is one of
   `"session"` (this session's own safe mode, or a limit that is the session's),
   `"process"` (the whole process: `runbound.enter_safe_mode`, a provider's open
   circuit, a capability rule given to `init()`, the in-flight cap), `"fleet"` (a
