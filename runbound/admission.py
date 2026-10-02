@@ -38,6 +38,7 @@ def circuit(allowed: bool, provider: str, state: str, cooldown_s: float) -> Deci
         verdict="deny",
         kind="model_call",
         boundary="circuit",
+        level="process",  # one breaker per provider in this process
         detector="circuit",
         reason=f"provider {provider!r} circuit is {state}",
         evaluation={"cooldown_s": cooldown_s},
@@ -245,7 +246,9 @@ def actions(executed: int, max_actions_per_run: int | None) -> Decision:
     )
 
 
-def stopped(is_stopped: bool, posture_name: str, source: str, reason: str) -> Decision:
+def stopped(
+    is_stopped: bool, posture_name: str, source: str, reason: str, level: str = "session"
+) -> Decision:
     """The very first stage a model call passes: is the effective posture ``stopped``?
 
     Unlike every other posture, ``stopped`` says "the run is latched; nothing
@@ -253,7 +256,9 @@ def stopped(is_stopped: bool, posture_name: str, source: str, reason: str) -> De
     capability classes — so it is the one posture a *model call* itself must
     also be refused for, not only a decorated tool's classes. ``is_stopped``
     is the caller's own answer (``effective_posture(session).name ==
-    "stopped"``); this stage only shapes it into a :class:`Decision`.
+    "stopped"``); this stage only shapes it into a :class:`Decision`. ``level`` is the
+    scope whose posture stopped it: a ``"session"``'s own safe mode, the ``"process"``'s,
+    or the ``"fleet"``'s (a posture the control plane states, or a Narrow halt).
     """
     if not is_stopped:
         return ALLOW
@@ -261,19 +266,23 @@ def stopped(is_stopped: bool, posture_name: str, source: str, reason: str) -> De
         verdict="deny",
         kind="model_call",
         boundary="posture",
+        level=level,
         detector="safe_mode",
         reason=reason,
         evaluation={"posture": posture_name, "source": source},
     )
 
 
-def posture(verdict: str, denied_class: str, posture_name: str, source: str, reason: str) -> Decision:
+def posture(
+    verdict: str, denied_class: str, posture_name: str, source: str, reason: str, level: str = "session"
+) -> Decision:
     """What the effective posture says about a tool carrying some capability class.
 
     ``verdict`` is :meth:`~runbound.posture.Posture.allows`'s own answer
     (``"allow"``, ``"deny"`` or ``"approve"``); an ``"approve"`` with no
     approval queue yet still refuses, reported as ``"restrict"`` — the
-    class is not banned, only unreachable right now.
+    class is not banned, only unreachable right now. ``level`` is the scope whose
+    posture decided, as for :func:`stopped`.
     """
     if verdict == "allow":
         return ALLOW
@@ -281,6 +290,7 @@ def posture(verdict: str, denied_class: str, posture_name: str, source: str, rea
         verdict="restrict" if verdict == "approve" else "deny",
         kind="action",
         boundary="posture",
+        level=level,
         detector="safe_mode",
         reason=reason,
         evaluation={"posture": posture_name, "denied_class": denied_class, "source": source},
@@ -295,6 +305,7 @@ def capability(verdict: str, denied_class: str) -> Decision:
         verdict="restrict" if verdict == "approve" else "deny",
         kind="action",
         boundary="capability",
+        level="process",  # init(capabilities=...) is this process's own rule
         detector="safe_mode",
         reason=f"a capability class rule on init() denies {denied_class}",
         evaluation={"denied_class": denied_class},

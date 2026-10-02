@@ -133,7 +133,7 @@ class ExecutionRefused(Exception):
       only for a post-call budget crossing, where the call already happened
       and its result is withheld.
     - ``scope`` — ``{"level": ..., "key_hash": ...}``: which scope decided
-      (``"session"``, ``"process"`` or ``"fleet"``) and a salted hash of the
+      (``"session"``, ``"process"``, ``"fleet"``, or for a budget ``"run"`` / ``"key"``) and a salted hash of the
       session's key, never the key itself.
     - ``refusal`` — the customer's own status and sentence (unchanged from
       earlier releases; see :mod:`runbound.responses`).
@@ -225,7 +225,8 @@ class ExecutionRefused(Exception):
     def scope(self) -> dict:
         """Which scope decided, and a salted hash of the session's key.
 
-        ``{"level": "session" | "process" | "fleet", "key_hash": str | None}``.
+        ``{"level": <one of events.DECISION_LEVELS>, "key_hash": str | None}``: ``"session"``,
+        ``"process"``, ``"fleet"``, or, for a budget, ``"run"`` / ``"key"``.
         ``key_hash`` is ``None`` for the default (unkeyed) session and
         whenever no session was in scope at all — never the raw key, the same
         salted digest :func:`runbound.key_hash` computes.

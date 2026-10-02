@@ -167,8 +167,8 @@ class Decision:
     the execution-envelope dimension involved (``"money"``, ``"steps"``,
     ``"time"``, ``"tokens"``, ``"concurrency"``, ``"blast_radius"``,
     ``"posture"``, ``"capability"``, ``"circuit"``, or ``None`` for an
-    ordinary allow); ``level`` is which scope decided (session, process or
-    fleet); ``reason`` is the human sentence; ``detector`` is the same string
+    ordinary allow); ``level`` is which scope decided (session, process, fleet,
+    or, for a budget, run or key); ``reason`` is the human sentence; ``detector`` is the same string
     an :class:`Anomaly` carries, so a refusal's Decision and its anomaly
     always agree on who is speaking; ``policy_version`` is the org policy
     version in force, when there is one; ``evaluation`` is the numbers behind

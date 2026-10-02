@@ -63,9 +63,27 @@ Every refusal exposes:
   refusal? `False` for every admission (pre-call) refusal; `True` only for a
   budget crossing discovered after the call returned — the call happened,
   it is billed, and its result is withheld.
-- **`scope`** — `{"level": "session" | "process" | "fleet", "key_hash":
-  str | None}`: which scope decided, and a salted hash of the session's
-  key, never the key itself.
+- **`scope`** — `{"level": ..., "key_hash": str | None}`: which scope decided,
+  and a salted hash of the session's key, never the key itself. `level` is one of
+  `"session"` (this session's own safe mode, or a limit that is the session's),
+  `"process"` (the whole process: `runbound.enter_safe_mode`, a provider's open
+  circuit, a capability rule given to `init()`, the in-flight cap), `"fleet"` (a
+  posture the control plane states, a Narrow halt, a decision the plane relayed),
+  and, for a budget, `"run"` or `"key"` (the per-run or per-key limit that was
+  tighter). A refusal because the run is stopped, or because a tool's class is
+  denied by a posture, names the scope of the posture that did it.
+
+  The same refusal through the model gateway says the gateway's own scope in
+  `x-runbound-level` (`fleet` = the whole application, `key` = one caller, `run`
+  = one run). Where the two meet:
+
+  | SDK `level` | What decided | Gateway `level` for the same rule |
+  | --- | --- | --- |
+  | `session` | one session's own posture or limit | `key` (a session is one key's run of calls) |
+  | `key` | the key's own budget | `key` |
+  | `run` | the run's own budget | `run` |
+  | `process` | this process: `runbound.enter_safe_mode`, a provider's circuit, a capability rule, the in-flight cap | no equivalent: the gateway's circuit is per application, so `fleet` |
+  | `fleet` | the control plane: a posture it states, a Narrow or Stop halt, a relayed decision | `fleet` |
 - **`refusal`** — the customer-facing status and sentence you configured
   (see [the reactions reference](../reference/reactions.md#what-the-caller-sees--your-words-your-status)),
   unaffected by anything on this page.

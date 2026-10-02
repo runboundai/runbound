@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-02
+
+### Changed
+
+- A refusal's `decision.level` (and `exc.scope["level"]`) now names the scope that really decided,
+  where it used to read `"session"` for all of these: an open provider circuit and a capability
+  rule given to `init()` say `"process"`; a refusal because the run is stopped, or because a
+  tool's class is denied by a posture, says `"session"`, `"process"` or `"fleet"` according to
+  whose posture did it (a session's own safe mode, `runbound.enter_safe_mode`, or a posture or
+  Narrow halt the control plane states). When several narrowings apply, the one that is actually
+  the effective posture is named, along with its `source` and `reason`, rather than the first
+  one set. Code that compared `decision.level == "session"` for these refusals should read the
+  boundary and `level` together.
+
 ## [0.8.0] - 2026-10-01
 
 ### Fixed

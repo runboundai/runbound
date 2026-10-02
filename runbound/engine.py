@@ -1052,7 +1052,7 @@ class Engine:
             is_stopped = effective.name == "stopped"
             if not is_stopped:
                 return
-            state = self.posture_state(session)
+            state, level = self.posture_decider(session)
             source = state.source if state is not None else "posture"
             reason = state.reason if state is not None else effective.name
         except Exception:
@@ -1062,7 +1062,7 @@ class Engine:
                 exc_info=True,
             )
             return
-        decision = admission.stopped(True, effective.name, source, reason)
+        decision = admission.stopped(True, effective.name, source, reason, level)
         anomaly = _stopped_door_anomaly(session, decision, source, reason)
         self.refuse(
             session, anomaly, decision, exc=GuardrailTripped, reacted="door",
@@ -1733,6 +1733,35 @@ class Engine:
         own = getattr(session, "posture", None) if session is not None else None
         return own or self.process_posture() or self.plane_posture() or self.halt_posture()
 
+    def posture_decider(self, session: SessionState | None) -> "tuple[PostureState | None, str]":
+        """The narrowing that decided what a session may do, and the scope it speaks for.
+
+        ``(state, level)``: the session's own is ``"session"``, the process's ``"process"``, the
+        plane's Controls-stated one and a Narrow halt's ``"fleet"``. Of the four, the one whose
+        posture IS the effective one (the strictest; the narrowest scope when two agree), so a
+        session merely restricted never names itself for a stop the process ordered. When no
+        single state states it (two postures tightened into a combined one), the first narrowing,
+        as :meth:`posture_state` names it. ``(None, "session")`` with nothing narrowed.
+        """
+        own = getattr(session, "posture", None) if session is not None else None
+        scoped = [
+            (state, level)
+            for state, level in (
+                (own, "session"),
+                (self.process_posture(), "process"),
+                (self.plane_posture(), "fleet"),
+                (self.halt_posture(), "fleet"),
+            )
+            if state is not None
+        ]
+        if not scoped:
+            return None, "session"
+        effective = self.effective_posture(session).name
+        for state, level in scoped:
+            if self.resolve_posture(state.name).name == effective:
+                return state, level
+        return scoped[0]
+
     def effective_posture(self, session: SessionState | None) -> Posture:
         """The posture an action on ``session`` is judged under.
 
@@ -1763,7 +1792,7 @@ class Engine:
         verdict = effective.allows(effects)
         rules = posture_module.class_rules(self._effective_capabilities())
         rule_verdict = rules.allows(effects)
-        state = self.posture_state(session)
+        state, level = self.posture_decider(session)
         if posture_module.stricter(verdict, rule_verdict) == rule_verdict and rule_verdict != verdict:
             return {
                 "verdict": rule_verdict,
@@ -1778,6 +1807,7 @@ class Engine:
             "source": state.source if state is not None else "posture",
             "posture": effective.name,
             "reason": state.reason if state is not None else effective.name,
+            "level": level,
         }
 
     def refuse_by_posture(
@@ -1815,7 +1845,8 @@ class Engine:
             decision = admission.capability(judgment["verdict"], denied)
         else:
             decision = admission.posture(
-                judgment["verdict"], denied, judgment["posture"], judgment["source"], violation.reason
+                judgment["verdict"], denied, judgment["posture"], judgment["source"], violation.reason,
+                judgment.get("level", "session"),
             )
         self.refuse(session, anomaly, decision, exc=SafeModeViolation, reacted="blocked", violation=violation)
 

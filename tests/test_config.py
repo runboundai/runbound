@@ -186,7 +186,7 @@ def test_runbound_tripped_is_catchable_as_raised():
 
 
 def test_package_exports_version_and_core_names():
-    assert runbound.__version__ == "0.8.0"
+    assert runbound.__version__ == "0.9.0"
     assert runbound.Event is Event
     assert runbound.Anomaly is Anomaly
     assert runbound.GuardrailConfig is GuardrailConfig
