@@ -54,7 +54,14 @@ from .policy import (
     merge,
 )
 from .plane_types import key_hash as _key_hash_fn
-from .pricing import admission_worst_case, admission_worst_case_tokens, price_for, request_chars
+from .pricing import (
+    admission_worst_case,
+    admission_worst_case_tokens,
+    price_for,
+    request_chars,
+    request_multiplier,
+    token_estimate_factor,
+)
 from .quota import MAX_COOLDOWN_S, Quota, cooldown_for, headers_of, read_quota
 from .shared import LocalState
 from . import posture as posture_module
@@ -1302,12 +1309,12 @@ class Engine:
                     money_on = False
                 else:
                     estimate = _admission_worst_case(
-                        price, stated_cap, config.admission_output_tokens, request
+                        price, stated_cap, config.admission_output_tokens, request, model
                     )
             if not money_on and not tokens_on:
                 return None
             token_estimate = (
-                _admission_worst_case_tokens(stated_cap, config.admission_output_tokens, request)
+                _admission_worst_case_tokens(stated_cap, config.admission_output_tokens, request, model)
                 if tokens_on
                 else None
             )
@@ -3534,7 +3541,11 @@ _ADMISSION_OUTPUT_CAP_FIELDS = ("max_tokens", "max_completion_tokens", "max_outp
 
 
 def _admission_worst_case(
-    price: tuple, stated_cap: int | None, admission_output_tokens: int, request: dict | None
+    price: tuple,
+    stated_cap: int | None,
+    admission_output_tokens: int,
+    request: dict | None,
+    model: str | None = None,
 ) -> float:
     """The dollar worst case of one call: input estimate plus capped output.
 
@@ -3549,11 +3560,17 @@ def _admission_worst_case(
     the call how much a cache will serve).
     """
     output_tokens = stated_cap if stated_cap is not None else admission_output_tokens
-    return admission_worst_case(price, output_tokens, _admission_request_chars(request))
+    return admission_worst_case(
+        price,
+        output_tokens,
+        _admission_request_chars(request),
+        token_estimate_factor(model),
+        request_multiplier(model, request),
+    )
 
 
 def _admission_worst_case_tokens(
-    stated_cap: int | None, admission_output_tokens: int, request: dict | None
+    stated_cap: int | None, admission_output_tokens: int, request: dict | None, model: str | None = None
 ) -> int:
     """The token worst case of one call: input estimate plus capped output.
 
@@ -3562,7 +3579,9 @@ def _admission_worst_case_tokens(
     characters over four), and no price, so it exists for an unpriced model too.
     """
     output_tokens = stated_cap if stated_cap is not None else admission_output_tokens
-    return admission_worst_case_tokens(output_tokens, _admission_request_chars(request))
+    return admission_worst_case_tokens(
+        output_tokens, _admission_request_chars(request), token_estimate_factor(model)
+    )
 
 
 def _admission_request_chars(request: dict | None) -> int:

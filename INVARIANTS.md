@@ -23,8 +23,8 @@ word this file never lets stand in for either:
   one: `chars/4` tokens when an endpoint reports no usage, dollars from a
   static list-price table, the opt-in admission estimate. An estimate is
   never called exact anywhere, and the full list of which numbers are which
-  is the README's [What is exact and what is
-  estimated](README.md#what-is-exact-and-what-is-estimated) table.
+  is the [What is exact and what is
+  estimated](docs/concepts/what-it-sees.md) table.
 
 ---
 
@@ -63,9 +63,9 @@ reserves an assumed cap for uncapped calls, which is an estimate. The soft line
 (`budget_soft`) is a warning under the wall and bounds nothing. The dollars on both sides of that line
 come from a static price table, so the comparison is exact and the total it
 compares is an estimate of the bill (see the README table named above).
-Fleet: for one key, worst-case overspend over `budget_usd` is the sum over
+Fleet — Intended bound: for one key, worst-case overspend over `budget_usd` is the sum over
 workers of (the spend of that worker's one in-flight block + the spend of
-any blocks it admitted during its staleness window).
+any blocks it admitted during its staleness window). Not yet asserted by a test (needs a live multi-worker race; v1.1).
 
 `budget_usd` is the **key**'s own limit — it accumulates over every run
 this key has ever made unless `budget_window` (`"hour"`/`"day"`/`"month"`,
@@ -92,8 +92,7 @@ within one turn of the single-worker wall.
   `::test_budget_offset_alone_can_trip_a_session_that_spent_nothing`;
   `tests/test_session_sync.py::test_the_fleet_spend_offset_trips_mid_block`,
   `::test_the_offset_never_double_counts_this_workers_own_spend`.
-- **Not yet asserted:** a test that names the quantified worst-case bound
-  itself (`workers × one turn + cache window`) as a single guarantee — the
+- Intended bound: worst-case fleet overspend of `workers × one turn + cache window`. Not yet asserted by a test (needs a live multi-worker race; v1.1). The
   pieces above prove the mechanism (offsets fold in correctly, the check is
   exact once the offset lands), but no test drives an actual multi-worker
   race and measures the overshoot against that general formula. The Acme
@@ -193,10 +192,9 @@ rest of the run rather than the host's call being failed by our own bug.
   `::test_an_async_llm_decorator_holds_and_releases_too`.
 - `record_call` never holds anything, because the call it describes is
   already over: `::test_record_call_never_holds_anything`.
-- **Not yet asserted:** a fleet-wide version of this bound — N concurrent
-  calls spread across *workers* racing one shared `budget_usd` — since
-  `reserved` is deliberately worker-local and the plane never sees it; only
-  the single-worker floor is measured today.
+- Intended bound: the same upper bound for N concurrent calls spread across
+  *workers* racing one shared `budget_usd`. Not yet asserted by a test (needs a live multi-worker race; v1.1). `reserved` is
+  deliberately worker-local and the plane never sees it; only the single-worker floor is measured today.
 
 ---
 
@@ -206,10 +204,13 @@ rest of the run rather than the host's call being failed by our own bug.
 is held; a hold is taken last, and released if a later stage denies.
 
 **The bound.** Single process: exact, by the order `Engine.admit` runs its
-stages in — for a model call, circuit, unpriced model, then (under
-`config.envelope`) steps, run time and tokens, and only after all of those
-pass does the money hold (`_admit_budget`) run, as the *last* stage; there is
-nothing after it to release a hold *for*. A call denied by any earlier stage
+stages in — for a model call, the stopped posture first, then circuit,
+unpriced model, then (under `config.envelope`) steps, run time and tokens, and
+only after all of those pass does the money hold (`_admit_budget`) run, as the
+*last* stage of `admit`. The one check that runs after it is the in-flight cap,
+which lives in the api's registry and runs right after `admit` returns; when it
+refuses, the hold is given back
+(`tests/test_reservation_ledger.py::test_an_in_flight_refusal_after_the_money_was_admitted_gives_the_hold_back`). A call denied by any earlier stage
 holds nothing at all — `tests/test_envelope.py::test_a_call_that_breaks_both_money_and_steps_reports_steps_and_holds_nothing`
 configures a call that would be refused by both the step limit and the
 money estimate and asserts the cheaper check (steps) wins and
@@ -235,10 +236,10 @@ consistency bounds").
 
 **The bound.** Single process: immediate — the very next `session()` entry
 (under `on_anomaly="raise"`) or the very next guarded call (otherwise) sees
-the latch, because it lives in the same process's memory. Fleet: a latch set
+the latch, because it lives in the same process's memory. Fleet — Intended bound: a latch set
 on one worker reaches another within `control_plane_cache_s` **plus one
 in-flight turn** — the same window the budget bound uses, because both ride
-the same cached entry answer.
+the same cached entry answer. Not yet asserted by a test (needs a live multi-worker race; v1.1).
 
 **Asserted by:**
 - Local, single-process latch-before-the-call: `tests/test_latch.py::test_entering_a_latched_session_raises_before_the_body_runs`,
@@ -249,8 +250,7 @@ the same cached entry answer.
 - Acme scorecard scenario 2 ("abuser blocked on the other worker") — a
   cross-process demonstration with a real latency measurement proving no
   model call happened.
-- **Not yet asserted:** the exact phrase-level guarantee as a concurrency
-  property — e.g. a test that starts a call already in flight when a latch
+- Intended bound: a call already in flight when a latch lands is unaffected and the *next* one is refused. Not yet asserted by a test (needs a live multi-worker race; v1.1). For example, a test that starts a call already in flight when a latch
   lands mid-call and shows that call is unaffected while the *next* one is
   refused. What exists proves "the door checks before the body runs," not a
   race between an in-flight call and a landing latch.
@@ -269,9 +269,9 @@ consistency bounds").
 through, and a fleet circuit does the same thing for every worker at once
 under one shared decision. That decision is shared, not instantaneous: a
 worker that did not see the failures itself adopts the plane's circuit on its
-next heartbeat, not the moment another worker opens it — around 1.5-2 s in
-the Acme scorecard's scenario 4, but that is an observed number from a
-polling loop, not a numeric bound the scenario asserts.
+next heartbeat, not the moment another worker opens it. Intended bound: one heartbeat
+(`control_plane_poll_s`). Not yet asserted by a test (needs a live multi-worker race; v1.1). The Acme scorecard's scenario 4 observes
+around 1.5-2 s from a polling loop; that is an observation, not an asserted bound.
 
 **Asserted by:** `tests/test_circuit.py::test_it_opens_exactly_at_the_failure_threshold`,
 `::test_the_cooldown_lets_exactly_one_probe_through`,
@@ -318,11 +318,11 @@ matching limits.
 - The *version-never-goes-backward* half is verified by the control plane's
   own test suite: versions climb per scope and never repeat, and a
   transition that walks backward is refused.
-- **Not yet asserted** as one named invariant: no single test combines both
-  halves into "a stale worker, mid-propagation, never enforces something
-  looser than it already had" — the two properties above are each tested on
+- Intended bound: a stale worker, mid-propagation, never enforces something
+  looser than it already had. Not yet asserted by a test (needs a live multi-worker race; v1.1). No single test combines both
+  halves — the two properties above are each tested on
   their own, and nothing in this repo uses the literal term
-  `policy_monotonic`. Treat the sentence above as implied by the two proven
+  `policy_monotonic`. Treat it as implied by the two proven
   halves, not as a directly-asserted guarantee.
 
 ---
@@ -349,8 +349,8 @@ Three limits, stated rather than hidden: it covers only tools declared with
 `@runbound.tool` (an undecorated function, or a framework tool seen only
 through the LangChain handler, is not refused); a bug reading the posture is
 fail-open like every other internal error — the call runs and a warning is
-logged; and `stopped` refuses every tool but does not by itself stop model
-calls, which the ladder's latch does when the ladder is what set it.
+logged; and `stopped` refuses every declared tool *and* every model call (see
+[Stopped means stopped](#stopped-means-stopped)).
 
 Fleet: the plane's posture reaches a worker on its next heartbeat
 (`control_plane_poll_s`, default 5 s) and is dropped 60 s after the last
@@ -363,8 +363,9 @@ and lifting its own directive leaves the worker's standing.
 × decorated; `allows` as the only decider, asserted by parsing every module;
 `tighten`; manual versus automatic; the ladder's three rungs; class rules;
 `require_rules`; fail-open) and `tests/test_session_sync.py` (the plane's
-posture within one heartbeat, tighten-only, staleness). No Acme scorecard
-scenario asserts it yet.
+posture within one heartbeat, tighten-only, staleness), and the Acme scorecard's
+scenario 11 (`demo/fleet_verify.py`), where a fleet-wide Narrow halt states
+`restricted` on every worker.
 
 ---
 
@@ -590,8 +591,8 @@ teardown, when threads, logging handlers and the network may already be gone.
 
 **Asserted by:** `tests/test_streams_abandoned.py` (25 tests: sync and async
 abandonment mid-stream after `gc.collect()`, usage-present vs.
-chars-estimated tokens, in-flight slot release, circuit neutrality, no
-double report); `tests/test_streaming.py::test_an_abandoned_stream_is_recorded_as_one_partial_call`,
+chars-estimated tokens, in-flight slot release (`release_calls`), circuit neutrality (no
+success or failure reported for an abandoned stream), no double report); `tests/test_streaming.py::test_an_abandoned_stream_is_recorded_as_one_partial_call`,
 `::test_abandoned_anthropic_stream_is_recorded_as_one_partial_call`,
 `::test_abandoned_async_stream_is_recorded_as_one_partial_call`; also
 `tests/test_tool_requests.py`, `tests/test_unpriced.py` (abandonment
@@ -610,7 +611,7 @@ refused at the door before the request goes out regardless of `on_anomaly`
 
 **The bound.** `"refuse"` is unconditional *at the door* and ignores
 `on_anomaly` on purpose — the customer stated it, so it is not negotiable per
-anomaly — and alerts once per model per Engine, never once per call. It is
+anomaly — and every refusal reaches the observers (`tests/test_unpriced.py::test_before_records_every_refusal`). It is
 bounded by what the door can know: a `record_call()` report, and a model
 name only known after the response comes back, cannot be stopped after the
 fact — both are recorded instead, priced like `"estimate"` when a fallback
@@ -709,10 +710,11 @@ left with — are asserted by `tests/test_alert_lifecycle.py`.
 nothing from the control plane, the dashboard, the demo fleet, the marketing
 site, or this project's own internal planning documents ever reaches it.
 
-**The bound.** The mirror is this SDK's own directory, published by a
-`git subtree split` that carries exactly the committed content of that
-directory — anything outside it is excluded by construction, not by care
-taken while writing a commit. Before the split, the release script lints
+**The bound.** The mirror is this SDK's own directory, published by one
+release commit per version, built by `scripts/publish_sdk.sh` from exactly the
+committed content of that directory — anything outside it is excluded by
+construction, not by care taken while writing a commit. Before publishing, the
+release script lints
 every file in the directory and refuses to publish if any of them still
 contains a reference to the private half of this project: the control
 plane's source or its Python package name, the marketing site, this

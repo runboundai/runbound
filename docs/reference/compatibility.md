@@ -9,12 +9,10 @@
   (every surface present on the client is guarded, and `wrap()` logs which)
 - `.messages.create` → the Anthropic path
 
-OpenAI and Anthropic are supported and tested against the real SDKs.
-OpenAI-compatible servers are supported through that same shape-matched
-`wrap()` and proven live on Ollama; other compatible providers — vLLM, Groq,
-OpenRouter, Azure OpenAI, LM Studio — share that code path but are not
-individually tested yet. Native adapters for Gemini, Bedrock, Mistral and
-Cohere are not built; use `record_call()` / `@runbound.llm` there. See the
+The supported providers are OpenAI and Anthropic, tested against the real SDKs.
+A server that speaks the OpenAI API works through that same shape-matched
+`wrap()` (proven live on Ollama). No other provider's own SDK is wrapped; record
+its calls with `record_call()` / `@runbound.llm`. See the
 [compatibility matrix](#compatibility-matrix) below for exactly what is
 proven versus expected-by-shape. Sync and async clients, streamed or not, all
 go through that one call — see [Async and streaming](../guides/streams.md#async-and-streaming).
@@ -32,21 +30,18 @@ against `openai` 1.66.5 and latest, and `anthropic` 1.0.0 and latest — eight
 combinations, with "latest" deliberately unpinned so a release nobody has
 seen yet breaks the job rather than a customer's agent. `openai` 1.66.5 is a
 genuine floor: 1.65.0 has no Responses API at all, and 1.66.0–1.66.3 return
-`input_tokens_details` as a plain dict. **The `anthropic` 1.0.0 pin is not
-a floor** — it is an artefact of testing both providers in one interpreter.
-Modern `openai` pulls in `httpx2`, and pre-1.0 `anthropic` type-rejects an
-`httpx2` client; on its own, `anthropic` 0.125.0 passes the same suite. If
-you run only Anthropic, older versions are fine.
+`input_tokens_details` as a plain dict. The `anthropic` 1.0.0 pin is an
+artefact of testing both providers in one interpreter: modern `openai` pulls
+in `httpx2`, and pre-1.0 `anthropic` type-rejects an `httpx2` client. It is
+not a statement that older `anthropic` versions fail: they are not a cell of
+the CI matrix, so they are untested by CI (a one-off hand check on 0.125.0 as
+the only SDK installed is noted in `.github/workflows/ci.yml`).
 
 | Provider | sync | async | stream | tool calls | usage | live-tested |
 |---|---|---|---|---|---|---|
 | OpenAI | yes [^sdk] | yes [^sdk] | yes [^stream] | yes [^sdk] | yes [^sdk] | yes [^live] |
 | Anthropic | yes [^sdk] | yes [^conformance] | yes [^stream] | yes [^sdk] | yes [^sdk] | yes [^live] |
-| Azure OpenAI | | | | | | |
 | Ollama / vLLM / OpenAI-compatible | yes [^ollama] | | yes [^ollama] | yes [^ollama] | yes [^ollama] | yes [^ollama] |
-| Gemini | | | | | | |
-| Bedrock | | | | | | |
-| Mistral / Cohere | | | | | | |
 | LangChain | yes [^lc] | | | yes [^lc] | yes [^lc] | |
 
 [^sdk]: Sync/tool-calls/usage cells for OpenAI and Anthropic, and the async
@@ -96,17 +91,13 @@ you run only Anthropic, older versions are fine.
     stream is in flight), a decorated and an undecorated tool loop, and real
     token usage — `examples/live/ollama_verify.py` (13 scenarios; not part of
     `pytest` — run manually against a local Ollama server). Ollama is reached
-    through the OpenAI-compatible surface, not a distinct SDK, so this row
-    stands in for vLLM / Groq / Together / OpenRouter / LM Studio too, by
-    shape, but only Ollama has actually been run live.
+    through the OpenAI-compatible surface, not a distinct SDK, and it is the
+    only OpenAI-compatible server that has actually been run live.
 [^lc]: The LangChain callback handler, with `langchain_core` faked out (no
     real network call) — `tests/test_langchain.py`.
 
-Azure OpenAI, Gemini, Bedrock, and Mistral/Cohere have no test naming them
-anywhere in this repo; Azure is expected to work through the OpenAI shape
-(same client class, different `base_url`) but that expectation is untested
-here. Gemini, Bedrock, Mistral and Cohere use their own SDK shapes and are not
-wrapped at all today — see [Paths that are not guarded
+OpenAI and Anthropic are the supported providers. A provider with its own SDK
+shape is not wrapped at all today — see [Paths that are not guarded
 today](../concepts/what-it-sees.md#paths-that-are-not-guarded-today).
 
 **Priced model families** (USD per 1M tokens, list prices that drift — override

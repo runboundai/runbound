@@ -1,4 +1,4 @@
-# Getting started (under 5 minutes)
+# Getting started
 
 [← Docs](README.md)
 
@@ -18,8 +18,9 @@ python -m venv .venv
 .venv/bin/pip install -e .
 ```
 
-There are no runtime dependencies — stdlib only. LangChain support is the one
-extra: `pip install "runbound[langchain]"`.
+There are no runtime dependencies — stdlib only. There are two optional extras:
+`pip install "runbound[langchain]"` for LangChain and
+`pip install "runbound[otel]"` for OpenTelemetry export.
 
 **2. Run the demo.** The whole core loop — a runaway, detected, narrowed to a
 safer posture, a dangerous action refused, the run stopped — against a fake
@@ -167,9 +168,10 @@ with runbound.session("user:7"):
 For the same story told from `events()`, see [A runaway, start to
 finish](guides/a-runaway.md).
 
-**4. Handle the refusal.** Every stop — a budget, a posture, a policy, a
-provider outage — raises a subclass of one typed exception,
-`runbound.ExecutionRefused`; catch that one name. (`SafeModeViolation` and
+**4. Handle the refusal.** A stop raises a subclass of one typed exception,
+`runbound.ExecutionRefused`; catch that one name. Posture and policy refusals
+raise always; a budget or a provider outage raises under
+`on_anomaly="raise"` and only warns in your logs by default. (`SafeModeViolation` and
 `PolicyViolation` are `ExecutionRefused`; `GuardrailTripped` is the same class
 under its older name.) It is never a fake success and never silently swallowed:
 

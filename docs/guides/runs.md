@@ -114,7 +114,8 @@ refusal for the specific number that bound it.
 - **Key and tags reach the anomaly.** A spike anomaly carries them in
   `anomaly.details["key"]` / `["tags"]`, so your own handler and your own
   logs have them. What leaves the process is different: the key travels to
-  the control plane as a **hash**, never in the clear, and the plane is what
+  the control plane as a **hash** (in the clear only if you set
+  `send_session_keys=True`), and the plane is what
   turns an anomaly into a Slack message or a page. This SDK has sent no
   alert of its own.
 - Blocks nest, and the enclosing session is restored on exit. Outside any

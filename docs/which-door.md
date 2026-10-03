@@ -3,7 +3,7 @@
 [← Docs](README.md)
 
 Runbound reaches your agent three ways. They enforce the same budgets, the same
-postures and the same refusals, and one console shows all three. Pick by where
+postures and the same refusals, and all three report to the same plane. Pick by where
 your agent's decisions are made, not by taste.
 
 | Your workload | The door | You change |
@@ -31,4 +31,4 @@ action API](guides/attach-action-api.md).
 
 You can combine them: a Python agent on the SDK, a second service in another
 language on the gateway, and its webhook tools on the action API all report to
-the same plane and appear in the same console.
+the same plane.

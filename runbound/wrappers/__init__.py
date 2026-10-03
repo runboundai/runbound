@@ -687,8 +687,15 @@ def _call_report(
     tokens_cache_write_in: int = 0,
     *,
     provider: str | None = None,
+    tokens_cache_write_1h_in: int = 0,
+    price_multiplier: float = 1.0,
 ) -> None:
     """Hand one call's usage to ``report``, tolerating an older ``report``.
+
+    ``tokens_cache_write_1h_in`` (the one-hour part of ``tokens_cache_write_in``) and
+    ``price_multiplier`` (a request's ``inference_geo`` / ``speed``) are passed as keywords, and only
+    when they are not their defaults, so a ``report`` written before they existed is called exactly as
+    it always was; one that does not accept them gets the older shapes below, without them.
 
     With ``provider`` (the endpoint label the call went to), the newest shape
     is tried first: the 7 positional arguments plus ``provider=`` as a
@@ -702,6 +709,29 @@ def _call_report(
     as "did not accept this shape" — one from inside ``report`` propagates,
     so a broken callback is never invoked twice.
     """
+    extras = {}
+    if tokens_cache_write_1h_in:
+        extras["tokens_cache_write_1h_in"] = tokens_cache_write_1h_in
+    if price_multiplier != 1.0:
+        extras["price_multiplier"] = price_multiplier
+    if extras:
+        try:
+            report(
+                model,
+                tokens_in,
+                tokens_out,
+                duration_s,
+                tokens_reasoning,
+                tokens_cached_in,
+                tokens_cache_write_in,
+                provider=provider,
+                **extras,
+            )
+            return
+        except TypeError as exc:
+            if exc.__traceback__ is not None and exc.__traceback__.tb_next is not None:
+                raise
+            _LOG.debug("runbound: report() predates the 1-hour cache write / price multiplier; trying without")
     if provider:
         try:
             report(
@@ -806,7 +836,8 @@ class _StreamUsage:
     tokens_out: int = 0
     tokens_reasoning: int = 0
     tokens_cached_in: int = 0  # subset of tokens_in served from cache (read)
-    tokens_cache_write_in: int = 0  # subset of tokens_in that wrote a cache entry
+    tokens_cache_write_in: int = 0  # subset of tokens_in that wrote a cache entry (both lifetimes)
+    tokens_cache_write_1h_in: int = 0  # the one-hour part of tokens_cache_write_in
 
 
 #: Reads one chunk into the running :class:`_StreamUsage`. Provider-supplied.
@@ -844,6 +875,7 @@ class _UsageParseTracker:
             "tokens_reasoning",
             "tokens_cached_in",
             "tokens_cache_write_in",
+            "tokens_cache_write_1h_in",
         }
     )
 
@@ -1149,6 +1181,7 @@ def _guard_stream(
             chunk_text=chunk_text,
             request_chars=request_chars,
             hold=hold,
+            price_multiplier=pricing.request_multiplier(_request_model(request_kwargs), request_kwargs),
         )
     except Exception:
         _LOG.warning("runbound could not guard a streamed response; continuing", exc_info=True)
@@ -1188,7 +1221,9 @@ class _StreamGuard:
         chunk_text: ChunkText | None = None,
         request_chars: int = 0,
         hold: Any = None,
+        price_multiplier: float = 1.0,
     ) -> None:
+        self._price_multiplier = price_multiplier
         self._stream = stream
         self._chunk_usage = chunk_usage
         self._chunk_requests = chunk_requests
@@ -1350,6 +1385,8 @@ class _StreamGuard:
                     self._usage.tokens_cached_in,
                     self._usage.tokens_cache_write_in,
                     provider=self._provider,
+                    tokens_cache_write_1h_in=self._usage.tokens_cache_write_1h_in,
+                    price_multiplier=self._price_multiplier,
                 )
                 if not self._ledger.failed:
                     call_success(self._hooks, self._provider, _time_to_first_chunk(self._ledger))

@@ -69,7 +69,7 @@ Read it top to bottom:
 | Line | What happened | The record in `events()` |
 |---|---|---|
 | `detected` | The third identical call: a line in your log, nothing stopped. | `anomaly`, detector `loop`, `details["rung"] == "log"` |
-| `paged` | The sixth: critical, pages your alert routes, still stops nothing. | `anomaly`, `loop`, rung `alert` |
+| `paged` | The sixth: critical, pages your alert routes (a connected plane with a route configured), still stops nothing. | `anomaly`, `loop`, rung `alert` |
 | `posture: restricted` | The ninth hands the loop to the spike ladder, which narrows the session. | `posture`, `source == "ladder"` |
 | `limited` | The loop's own record of that step. | `anomaly`, `loop`, rung `contain`, `level` 2 |
 | `refused` | Each further refund is refused before its body runs. | `anomaly`, detector `safe_mode`, reacted `blocked` |

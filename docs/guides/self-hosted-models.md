@@ -18,8 +18,8 @@ runbound.init(max_total_tokens=500_000, max_inflight_calls=8, on_anomaly="raise"
 client = runbound.wrap(openai.OpenAI(base_url="http://gpu-box:8000/v1", api_key="x"))
 ```
 
-That exact setup is what `examples/live/ollama_verify.py` runs against a real
-local model, run by hand — thirteen scenarios, real tokens, real durations,
+A setup of that shape (a token cap, an in-flight cap) is what
+`examples/live/ollama_verify.py` runs against a real local model, run by hand — thirteen scenarios, real tokens, real durations,
 `$0.00`.
 
 **The knobs that protect capacity.** Dollars are the wrong meter here; these
@@ -75,8 +75,8 @@ runbound.record_call(None, 0, 0, provider="llama.cpp@local", error=exc)  # it fa
 The decorator times the call, applies the circuit and the in-flight cap
 **before** your body runs, records the tokens your callback reads, and on an
 exception records the failure and re-raises it untouched. Sync and `async def`.
-Budgets, loops, spikes, storms and circuits then treat local inference exactly
-as they treat a hosted call.
+Budgets, storms and circuits then treat local inference as they treat a
+hosted call.
 
 **One circuit per endpoint.** The provider label is
 `"{shape}@{host}"` — `"openai@gpu-box:8000"` — so your own box failing opens
@@ -94,8 +94,7 @@ slot and is counted as one partial call the moment Python collects it (see
 [Async and streaming](streams.md#async-and-streaming)); it does not hold the slot until
 the process exits. The estimator is an
 approximation, not a tokenizer: treat estimated dollars as an order of
-magnitude, not a bill. And native, non-OpenAI-shaped SDKs — TGI's own client,
-Bedrock, Vertex — are not wrapped yet; use `record_call` / `@runbound.llm`
-around them today.
+magnitude, not a bill. And any SDK that is not OpenAI's or Anthropic's is not wrapped; use
+`record_call` / `@runbound.llm` around it.
 
 ---

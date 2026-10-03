@@ -47,12 +47,31 @@ because the fallback price here is the *honest* one (the plain input rate is
 still less than the true 125%, but far closer to it than treating a write as
 a 90%-discounted read would be, and it is what "unknown" must mean absent a
 published number).
+
+**One-hour cache writes.** Anthropic bills a cache write that asked for the
+one-hour lifetime at 2x the input rate, not the five-minute 1.25x. The usage
+object splits the two (``cache_creation.ephemeral_5m_input_tokens`` /
+``ephemeral_1h_input_tokens``). ``tokens_cache_write_in`` stays the total of
+both; ``tokens_cache_write_1h_in`` is the one-hour part of it, priced at the
+fifth column of a row (``PRICES[model][4]``), else at the row's five-minute
+write rate. A price tuple of two to five numbers is accepted everywhere.
+
+**What a request can change about its price.** Two published multipliers
+depend on the request, not the model: ``inference_geo="us"`` (1.1x on every
+category, from Claude 4.6 on) and ``speed="fast"`` (2x, on Claude Opus 5.5,
+Opus 5 and Opus 4.8). They are applied only when the request itself carries
+the field (:func:`request_multiplier`); a plan, an account setting or a header
+the SDK cannot see is a documented limit (docs/concepts/what-it-sees.md), and
+the estimate is then the base rate. The batch API's 50% discount is a separate
+endpoint the SDK does not wrap, and server tools (web search per 1,000
+requests, code execution per container-hour) are not priced here.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import math
 from typing import Any
 
 _log = logging.getLogger("runbound")
@@ -80,7 +99,11 @@ _FAMILY_SUFFIXES = ("-pro", "-audio", "-realtime", "-search", "-transcribe", "-t
 
 #: The date this table (including cached-input rates) was last checked
 #: against published list prices. See `as_of`.
-PRICES_AS_OF = "2026-09-12"
+PRICES_AS_OF = "2026-10-03"
+
+#: Where the Anthropic rows below were read, on `PRICES_AS_OF`.
+ANTHROPIC_PRICES_SOURCE = "https://platform.claude.com/docs/en/about-claude/pricing"
+ANTHROPIC_MODELS_SOURCE = "https://platform.claude.com/docs/en/models/overview"
 
 #: model name -> (usd_per_1M_input_tokens, usd_per_1M_output_tokens), or with
 #: a published cached-input *read* rate appended (..., usd_per_1M_cached_input),
@@ -104,7 +127,11 @@ PRICES_AS_OF = "2026-09-12"
 #: discount, and the closest honest number for a missing premium, but never a
 #: guessed rate either way.
 PRICES: dict[
-    str, tuple[float, float] | tuple[float, float, float] | tuple[float, float, float, float]
+    str,
+    tuple[float, float]
+    | tuple[float, float, float]
+    | tuple[float, float, float, float]
+    | tuple[float, float, float, float, float],
 ] = {
     # --- OpenAI ---
     "gpt-4o": (2.50, 10.00, 1.25),
@@ -120,19 +147,36 @@ PRICES: dict[
     "o3": (2.00, 8.00, 1.00),
     "o3-mini": (1.10, 4.40, 0.55),
     "o4-mini": (1.10, 4.40, 0.55),
-    # --- Anthropic --- (in, out, cache-read rate at 10% of in, cache-write
-    # rate at 125% of in)
-    "claude-opus-4-5": (5.00, 25.00, 0.50, 6.25),
-    "claude-sonnet-4-5": (3.00, 15.00, 0.30, 3.75),
-    "claude-haiku-4-5": (1.00, 5.00, 0.10, 1.25),
-    "claude-opus-4-1": (15.00, 75.00, 1.50, 18.75),
-    "claude-opus-4": (15.00, 75.00, 1.50, 18.75),
-    "claude-sonnet-4": (3.00, 15.00, 0.30, 3.75),
-    "claude-3-7-sonnet": (3.00, 15.00, 0.30, 3.75),
-    "claude-3-5-sonnet": (3.00, 15.00, 0.30, 3.75),
-    "claude-3-5-haiku": (0.80, 4.00, 0.08, 1.00),
-    "claude-3-opus": (15.00, 75.00, 1.50, 18.75),
-    "claude-3-haiku": (0.25, 1.25, 0.025, 0.3125),
+    # --- Anthropic --- (in, out, cache read, cache write 5 minutes, cache write 1 hour).
+    # A 5-minute write is 1.25x the input rate and a 1-hour write 2x, on every model; a read is
+    # 0.1x except Opus 5.5 (0.05x) and Fable 5.1 / Mythos 5.1 (0.025x). Read on PRICES_AS_OF from
+    # ANTHROPIC_PRICES_SOURCE; model ids from ANTHROPIC_MODELS_SOURCE (the page spells out
+    # claude-fable-5-1, claude-opus-5-5, claude-sonnet-5-5 and claude-haiku-4-5; the other ids follow
+    # its dateless-from-4.6 rule and are not each spelled out there).
+    "claude-fable-5-1": (10.00, 50.00, 0.25, 12.50, 20.00),
+    "claude-fable-5": (10.00, 50.00, 1.00, 12.50, 20.00),
+    "claude-mythos-5-1": (10.00, 50.00, 0.25, 12.50, 20.00),  # invitation-only
+    "claude-mythos-5": (10.00, 50.00, 1.00, 12.50, 20.00),  # invitation-only
+    "claude-opus-5-5": (4.00, 20.00, 0.20, 5.00, 8.00),
+    "claude-opus-5": (5.00, 25.00, 0.50, 6.25, 10.00),
+    "claude-opus-4-8": (5.00, 25.00, 0.50, 6.25, 10.00),
+    "claude-opus-4-7": (5.00, 25.00, 0.50, 6.25, 10.00),
+    "claude-opus-4-6": (5.00, 25.00, 0.50, 6.25, 10.00),
+    "claude-opus-4-5": (5.00, 25.00, 0.50, 6.25, 10.00),
+    "claude-opus-4-1": (15.00, 75.00, 1.50, 18.75, 30.00),  # retired from the API
+    "claude-opus-4": (15.00, 75.00, 1.50, 18.75, 30.00),  # retired from the API
+    "claude-sonnet-5-5": (2.00, 10.00, 0.20, 2.50, 4.00),
+    "claude-sonnet-5": (2.00, 10.00, 0.20, 2.50, 4.00),  # the introductory $2 / $10, now permanent
+    "claude-sonnet-4-6": (3.00, 15.00, 0.30, 3.75, 6.00),
+    "claude-sonnet-4-5": (3.00, 15.00, 0.30, 3.75, 6.00),
+    "claude-sonnet-4": (3.00, 15.00, 0.30, 3.75, 6.00),
+    "claude-haiku-4-5": (1.00, 5.00, 0.10, 1.25, 2.00),
+    # Older rows, unchanged and not re-verified on PRICES_AS_OF (their 1-hour column follows the 2x rule).
+    "claude-3-7-sonnet": (3.00, 15.00, 0.30, 3.75, 6.00),
+    "claude-3-5-sonnet": (3.00, 15.00, 0.30, 3.75, 6.00),
+    "claude-3-5-haiku": (0.80, 4.00, 0.08, 1.00, 1.60),
+    "claude-3-opus": (15.00, 75.00, 1.50, 18.75, 30.00),
+    "claude-3-haiku": (0.25, 1.25, 0.025, 0.3125, 0.50),
 }
 
 
@@ -146,7 +190,10 @@ def as_of() -> str:
 
 
 _Price = (
-    tuple[float, float] | tuple[float, float, float] | tuple[float, float, float, float]
+    tuple[float, float]
+    | tuple[float, float, float]
+    | tuple[float, float, float, float]
+    | tuple[float, float, float, float, float]
 )
 
 
@@ -236,6 +283,8 @@ def estimate_cost(
     tokens_cached_in: int = 0,
     tokens_cache_write_in: int = 0,
     warn_unpriced: bool = False,
+    tokens_cache_write_1h_in: int = 0,
+    multiplier: float = 1.0,
 ) -> float:
     """Estimate USD cost of one call.
 
@@ -279,7 +328,8 @@ def estimate_cost(
                 _warn_unpriced(model)
             return 0.0
         return _cost_from_pair(
-            price, tokens_in, tokens_out, tokens_cached_in, tokens_cache_write_in
+            price, tokens_in, tokens_out, tokens_cached_in, tokens_cache_write_in,
+            tokens_cache_write_1h_in, multiplier,
         )
     except Exception:  # fail-open: pricing must never break the host call
         _log.debug("estimate_cost failed for model %r", model, exc_info=True)
@@ -292,6 +342,8 @@ def _cost_from_pair(
     tokens_out: int,
     tokens_cached_in: int = 0,
     tokens_cache_write_in: int = 0,
+    tokens_cache_write_1h_in: int = 0,
+    multiplier: float = 1.0,
 ) -> float:
     """``(tokens_in, tokens_out)`` priced at a price tuple, cache reads and
     writes split out.
@@ -308,21 +360,40 @@ def _cost_from_pair(
     negative. Each is priced at its own column when present, else at the
     same rate as the rest of ``tokens_in`` — the "no invented rate" rule,
     for a discount and a premium alike.
+
+    ``tokens_cache_write_1h_in`` is the one-hour part of ``tokens_cache_write_in``
+    (clamped to it), priced at the fifth column when the tuple has one, else at
+    the five-minute write rate. ``multiplier`` scales the whole cost (a request's
+    ``inference_geo`` / ``speed``, see :func:`request_multiplier`); anything that is
+    not a positive finite number counts as 1.0.
     """
     price_in, price_out = pair[0], pair[1]
     tokens_in = max(tokens_in, 0)
     write = min(max(tokens_cache_write_in, 0), tokens_in)
+    write_1h = min(max(tokens_cache_write_1h_in, 0), write)
+    write_5m = write - write_1h
     cached = min(max(tokens_cached_in, 0), tokens_in - write)
     regular = tokens_in - cached - write
     price_cached_in = pair[2] if len(pair) > 2 else price_in
     price_write_in = pair[3] if len(pair) > 3 else price_in
+    price_write_1h_in = pair[4] if len(pair) > 4 else price_write_in
     cost_in = (
         (regular / 1e6) * price_in
         + (cached / 1e6) * price_cached_in
-        + (write / 1e6) * price_write_in
+        + (write_5m / 1e6) * price_write_in
+        + (write_1h / 1e6) * price_write_1h_in
     )
     cost_out = (max(tokens_out, 0) / 1e6) * price_out
-    return float(cost_in + cost_out)
+    return float((cost_in + cost_out) * _factor(multiplier))
+
+
+def _factor(value: Any) -> float:
+    """``value`` when it is a positive finite number, else 1.0 (a multiplier is never a reason to fail)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return 1.0
+    return number if number > 0.0 and number != float("inf") else 1.0
 
 
 def _warn_refuse_recorded(model: str, estimated: bool) -> None:
@@ -358,6 +429,8 @@ def price_call(
     tokens_cache_write_in: int = 0,
     on_unpriced_model: str = "zero",
     unpriced_price_per_1m_usd: tuple[float, float] | None = None,
+    tokens_cache_write_1h_in: int = 0,
+    multiplier: float = 1.0,
 ) -> tuple[float, bool]:
     """Price one call under ``on_unpriced_model``, as ``(cost_usd, estimated)``.
 
@@ -390,7 +463,8 @@ def price_call(
         if price is not None:
             return (
                 _cost_from_pair(
-                    price, tokens_in, tokens_out, tokens_cached_in, tokens_cache_write_in
+                    price, tokens_in, tokens_out, tokens_cached_in, tokens_cache_write_in,
+                    tokens_cache_write_1h_in, multiplier,
                 ),
                 False,
             )
@@ -427,6 +501,73 @@ def price_call(
         return 0.0, False
 
 
+# --- what only the model and the request know ---------------------------------
+
+#: Claude 4.7 and later count about 30% more tokens for the same text, so the characters-over-four
+#: input estimate runs low for them. Prefixes, matched like a price row (a segment boundary follows).
+_NEW_TOKENIZER = (
+    "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
+    "claude-fable-5", "claude-mythos-5",
+)
+#: `inference_geo="us"` multiplies every category by 1.1 on Claude 4.6 and later.
+_US_ONLY = (
+    "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6",
+    "claude-sonnet-5", "claude-fable-5", "claude-mythos-5",
+)
+#: `speed="fast"` multiplies by 2 on these, and stacks with the US-only 1.1.
+_FAST_MODE = ("claude-opus-4-8", "claude-opus-5")
+
+TOKENIZER_FACTOR = 1.3
+US_ONLY_MULTIPLIER = 1.1
+FAST_MODE_MULTIPLIER = 2.0
+
+
+def _is_one_of(model: Any, prefixes: tuple[str, ...]) -> bool:
+    if not isinstance(model, str) or not model:
+        return False
+    for key in prefixes:
+        if model == key:
+            return True
+        if model.startswith(key):
+            rest = model[len(key):]
+            if rest[0] in _BOUNDARY_CHARS or rest[0].isdigit():
+                return True
+    return False
+
+
+def token_estimate_factor(model: str | None) -> float:
+    """1.3 for the models whose tokenizer counts about 30% more tokens than characters-over-four
+    suggests (Claude 4.7 and later), else 1.0. Admission scales its input-token estimate by it."""
+    return TOKENIZER_FACTOR if _is_one_of(model, _NEW_TOKENIZER) else 1.0
+
+
+def request_multiplier(model: str | None, request_kwargs: Any) -> float:
+    """The price multiplier a REQUEST carries, else 1.0: 1.1 for ``inference_geo="us"``, 2.0 for
+    ``speed="fast"``, 2.2 for both, each only on the models the provider publishes it for.
+
+    Read from the request's own fields (top level, or ``extra_body``). Nothing the SDK cannot see
+    counts: an organisation-wide residency setting, a plan or a beta header alone is not a signal, and
+    the estimate is then the base rate (docs/concepts/what-it-sees.md). Never raises."""
+    try:
+        if not isinstance(request_kwargs, dict):
+            return 1.0
+        extra = request_kwargs.get("extra_body")
+        sources = (request_kwargs, extra if isinstance(extra, dict) else {})
+        def field(name: str) -> Any:
+            for source in sources:
+                if source.get(name) is not None:
+                    return source[name]
+            return None
+        multiplier = 1.0
+        if field("inference_geo") == "us" and _is_one_of(model, _US_ONLY):
+            multiplier *= US_ONLY_MULTIPLIER
+        if field("speed") == "fast" and _is_one_of(model, _FAST_MODE):
+            multiplier *= FAST_MODE_MULTIPLIER
+        return round(multiplier, 10)
+    except Exception:
+        return 1.0
+
+
 # --- what a request will cost before it goes ---------------------------------
 #
 # The worst case of one call, before it is made: the input at the plain input
@@ -449,23 +590,36 @@ def estimated_tokens(chars: int) -> int:
         return 0
 
 
-def admission_worst_case(price: tuple, output_tokens: int, input_chars: int) -> float:
+def _scaled(tokens: int, factor: Any) -> int:
+    """``tokens`` times ``factor``, rounded up (an estimate never rounds down)."""
+    return math.ceil(round(tokens * _factor(factor), 6))
+
+
+def admission_worst_case(
+    price: tuple, output_tokens: int, input_chars: int, token_factor: float = 1.0, multiplier: float = 1.0
+) -> float:
     """The dollar worst case of one call: input estimate plus output.
 
     ``input_chars`` is the request's input in characters (:func:`request_chars`),
     priced at ``price[0]``, the plain input rate: admission cannot know before
     the call how much of its input a cache will serve, so it assumes none (a
     3- or 4-tuple's cache columns are not used here). ``output_tokens`` is what
-    the call may produce, priced at ``price[1]``. This is the one formula: the
+    the call may produce, priced at ``price[1]``. ``token_factor`` scales the input
+    estimate for a tokenizer that counts more tokens than characters over four
+    (:func:`token_estimate_factor`), and ``multiplier`` is the request's own price
+    multiplier (:func:`request_multiplier`). This is the one formula: the
     engine's budget admission and anything that estimates the same way (a
     gateway, say) compose it from :func:`price_for`, the request's own output
     cap, and this.
     """
-    input_tokens = estimated_tokens(input_chars)
-    return (input_tokens / 1_000_000.0) * price[0] + (max(int(output_tokens), 0) / 1_000_000.0) * price[1]
+    input_tokens = _scaled(estimated_tokens(input_chars), token_factor)
+    return float(
+        ((input_tokens / 1_000_000.0) * price[0] + (max(int(output_tokens), 0) / 1_000_000.0) * price[1])
+        * _factor(multiplier)
+    )
 
 
-def admission_worst_case_tokens(output_tokens: int, input_chars: int) -> int:
+def admission_worst_case_tokens(output_tokens: int, input_chars: int, token_factor: float = 1.0) -> int:
     """The token worst case of one call: input estimate plus output.
 
     The tokens counterpart of :func:`admission_worst_case`, and the same two
@@ -473,7 +627,7 @@ def admission_worst_case_tokens(output_tokens: int, input_chars: int) -> int:
     four, rounded up) and the output is what the call may produce. No price
     enters into it, so a model with no price has a token worst case all the same.
     """
-    return estimated_tokens(input_chars) + max(int(output_tokens), 0)
+    return _scaled(estimated_tokens(input_chars), token_factor) + max(int(output_tokens), 0)
 
 
 def _get(obj: Any, name: str) -> Any:

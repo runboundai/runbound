@@ -231,6 +231,8 @@ def _report_call(
         read_cached(response),
         read_cache_write(response),
         provider=provider,
+        tokens_cache_write_1h_in=read_cache_write_1h(response),
+        price_multiplier=pricing.request_multiplier(model, request_kwargs),
     )
 
 
@@ -360,6 +362,21 @@ def read_cache_write(response: Any) -> int:
     return _tokens(_field(response, "usage"), _CACHE_WRITE_FIELDS)
 
 
+def read_cache_write_1h(response: Any) -> int:
+    """The one-hour part of the cache-*write* tokens, or 0.
+
+    ``usage.cache_creation.ephemeral_1h_input_tokens``: a write that asked for the one-hour
+    lifetime, billed at 2x the input rate instead of the five-minute 1.25x. It is a subset of
+    :func:`read_cache_write` (clamped to it), which stays the total of both lifetimes. A response
+    without the split reads as all five-minute, the cheaper rate and the only one it can prove."""
+    return min(_one_hour(_field(response, "usage")), read_cache_write(response))
+
+
+def _one_hour(usage: Any) -> int:
+    """``cache_creation.ephemeral_1h_input_tokens`` off a usage object, else 0."""
+    return _tokens(_field(usage, "cache_creation"), ("ephemeral_1h_input_tokens",))
+
+
 def read_tool_requests(response: Any) -> list[tuple[str, str]]:
     """Tool calls a messages response asked for, in the order it asked.
 
@@ -427,6 +444,9 @@ def _chunk_usage(chunk: Any, usage: _StreamUsage) -> None:
         )
         usage.tokens_cached_in = max(usage.tokens_cached_in, cache_read)
         usage.tokens_cache_write_in = max(usage.tokens_cache_write_in, cache_write)
+        usage.tokens_cache_write_1h_in = max(
+            usage.tokens_cache_write_1h_in, min(_one_hour(message_usage), cache_write)
+        )
         usage.tokens_out = max(usage.tokens_out, _tokens(message_usage, _OUTPUT_FIELDS))
         usage.tokens_reasoning = max(usage.tokens_reasoning, _reasoning(message_usage))
     elif kind == "message_delta":

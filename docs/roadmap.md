@@ -17,7 +17,10 @@ Still open:
   and not once per worker
 - Fleet-wide **fan-out counters and in-flight caps**, so a concurrency cap is
   the cluster's rather than each worker's
-- Native wrappers for non-OpenAI-shaped SDKs (TGI, Bedrock, Vertex)
+
+- A live **multi-worker race test** that asserts the fleet bounds `INVARIANTS.md`
+  states as intended (shared-budget overspend, the upper bound, latch
+  propagation, circuit adoption, policy staleness) — v1.1
 
 Explicitly out of scope: hallucination scoring, answer-quality judgement,
 prompt-injection blocking, and anything that needs an LLM to decide whether to

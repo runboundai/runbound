@@ -2,7 +2,7 @@
 
 [← Docs](../README.md)
 
-The rest of runbound's public API — every call besides `init()`.
+The rest of runbound's public API, call by call (`runbound.otel` is on the [OpenTelemetry guide](../guides/opentelemetry.md)).
 
 | Call | Does |
 |---|---|
@@ -11,6 +11,11 @@ The rest of runbound's public API — every call besides `init()`.
 | `runbound.tool` / `runbound.tool(name="...", polling=True, idempotent=True, retryable=True)` | Records every call to a function. Usable bare or with an explicit name. `polling=True` marks a tool that is *supposed* to run with the same arguments over and over — polling a job, checking a status — so its calls never feed the loop window (equivalent to listing its name in `loop_ignore_tools`). They still count toward `tool_calls()` and any `max_calls` in your action policy: mark polling, do not tune around a real loop. `idempotent=True` and `retryable=True` are reported in the tool report and the control surface; `retryable=True` also grants the `"retry"` loop shape a grace — its failures only count once they reach twice `loop_threshold`. |
 | `runbound.session(key, tags=None)` | Context manager: accounts everything inside it to `key`'s own session. Yields the `SessionState`, or `None` before `init()`. See [Runs keyed by any id](../guides/runs.md#runs-keyed-by-any-id). |
 | `runbound.reset()` | Starts a fresh session with the same config: counters to zero, every keyed session forgotten, detectors re-armed. No-op before `init()`. |
+| `runbound.budget(key=None)` | What a session's dollar budget looks like right now: spent (this process plus the fleet), remaining, reserved, the soft line. `None` before `init()` or with no budget. |
+| `runbound.posture()` | The posture in force right now, by name — the session's, the process's and the plane's tightened together; `"full"` before `init()`. |
+| `runbound.safe_mode()` | `True` when `posture()` is anything but `"full"`; `False` before `init()`. |
+| `runbound.tools()` | The tool report this worker would send the plane: one entry per `@runbound.tool`, and one per tool name a model asked for that no decorator declared. |
+| `runbound.is_retryable(exc)` | Whether `exc` is a runbound refusal that says a retry may succeed (its `retryable`); `False` for anything else, an exception runbound never raised included. See [Handling refusals](../guides/handling-refusals.md). |
 | `runbound.current_session()` | The `SessionState` work is being accounted to — the enclosing `session()` block's, else the default one — or `None` before `init()`. |
 | `runbound.is_tripped(key=None)` | The `Anomaly` that latched a session (`key=None` = the active one), else `None`. Never creates a session. |
 | `runbound.session_status(key)` | Where a keyed session stands on [the spike ladder](../guides/spike-detection.md#many-callers-behind-one-service-the-abuse-ladder): a dict of `level` (0 quiet, 1 watching, 2 limited, 3 closed — a blocked key reads `level: 0`, since the session behind it is fresh; see `strikes`/`tripped_by` below), `strikes`, `allowance_left`, `cooldown_remaining_s`, `tripped_by` and `generation`. A blocked key is identified by `strikes == spike_max_strikes` with a permanent latch (`tripped_by == "spike"`, `cooldown_remaining_s == 0.0`), not by `level`. `None` before `init()` and for an unknown, cleared or evicted key. Never creates a session. |

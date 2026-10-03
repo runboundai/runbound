@@ -1,13 +1,14 @@
 # runbound
 
-**Runbound is an execution control plane for autonomous AI: it decides what
+**Runbound is a runtime control plane for autonomous AI: it decides what
 an agent may consume, how far it may run, and what it may do, and enforces
 those boundaries across the fleet.** The open-source SDK is the runtime for
-that — free forever, no account required.
+that — free, local, no account required.
 
 Add one initialization line. No agent rewrites, decorators, or policy code
 required. runbound counts, times, hashes and prices what an agent does; it
-never reads a prompt or a reply (and never stores, logs or sends one on),
+never stores, logs or sends a prompt or a reply (the only thing it takes from
+the text is a length),
 puts no gateway in your hot path, and never speaks to your users — when it refuses something, it hands control straight
 back to your own code.
 
@@ -23,8 +24,9 @@ See the whole core loop in thirty seconds — no clone, no key, no network:
 python -m runbound.demo
 ```
 
-There are no runtime dependencies — stdlib only. LangChain support is the one
-extra: `pip install "runbound[langchain]"`.
+There are no runtime dependencies — stdlib only. There are two optional extras:
+`pip install "runbound[langchain]"` for LangChain and
+`pip install "runbound[otel]"` for OpenTelemetry export.
 
 ## Quick start
 
@@ -63,7 +65,7 @@ before its body runs:
 def issue_refund(user: str, amount: float): ...
 ```
 
-The five-minute version — wiring every limit, checking what's actually
+The short version — wiring every limit, checking what's actually
 guarded, and handling a refusal — is in
 [Getting started](docs/getting-started.md), which also shows the graded loop
 and [a runaway, start to finish](docs/guides/a-runaway.md).
@@ -94,7 +96,8 @@ priced with no network call and no account:
 These are what you can switch on, not what one line sets: `init(budget_usd=5.0)`
 sets the dollar budget; token, step, event, per-call and run limits are off until
 you state them. Error-storm, loop and spike detection are on by default and notify;
-a loop is only contained with `on_spike="limit"`.
+a loop is contained only if you choose a reaction for it
+(`on_loop="break"`, `"throttle"` or `"escalate"`, or `on_spike="limit"`).
 
 Two honest limits, in the same breath: this level only sees what a wrapped
 client or `@runbound.tool` reports it, so an action's own body is only
@@ -131,7 +134,8 @@ one of a provider's own exceptions. See
 Every decision above is made from counts, hashes, timings and prices — never
 from reading what an agent said or what a model answered:
 
-- Prompts and model replies are never read, stored, or sent.
+- Prompts and model replies are never stored or sent; the only thing taken from
+  them is a length (`estimate_tokens`, the admission estimate).
 - Tool arguments are sha256-hashed before storage, salted per process; raw
   arguments never leave your process.
 - A session key reaches a connected plane as a hash, never in the clear. That
@@ -145,7 +149,7 @@ does not do, and what to use instead.
 
 ## Open-source runtime. Cloud control plane.
 
-Everything above is free forever, in the open-source SDK, configurable in
+Everything above is free, local, in the open-source SDK, configurable in
 code, with no account. A connected control plane adds what one process
 cannot give itself: coordination across every worker in your fleet, state
 that survives a restart, central policy and posture, and durable evidence.
@@ -154,8 +158,8 @@ See [Free SDK, connected plane](docs/concepts/free-and-connected.md).
 ## Documentation
 
 The manual lives in [`docs/`](docs/README.md), and that repository manual is
-canonical: [runbound.co/docs](https://runbound.co/docs) renders it at build time,
-with the snippets the tests execute.
+canonical. [runbound.co/docs](https://runbound.co/docs) renders six of its pages
+whole and the rest from fragments of it.
 
 - **[Getting started](docs/getting-started.md)** — install, the core loop, and
   checking what is actually guarded.
@@ -192,4 +196,4 @@ issue. Security issues go to email, not to an issue — see
 
 MIT — see [LICENSE](LICENSE). Release history is in
 [CHANGELOG.md](CHANGELOG.md). The promises above, stated as bounds with the
-tests that assert them, are in [INVARIANTS.md](INVARIANTS.md).
+tests that assert them (and the gaps it names as not yet asserted), are in [INVARIANTS.md](INVARIANTS.md).

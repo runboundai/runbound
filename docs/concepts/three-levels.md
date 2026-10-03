@@ -13,15 +13,17 @@ limits, step and wall-clock limits, the spike ladder that learns what a session
 normally looks like and reacts when it changes, error-storm detection with a
 circuit per provider, and refusal profiles that carry your own status and
 sentence. It also reads the tool calls the model *asks for* out of each answer,
-so a loop of identical tool requests is caught before your code dispatches it.
+so a loop of identical tool requests is detected before your code dispatches
+it (it is contained only if you chose a loop reaction such as
+`on_loop="break"`; by default it is logged and paged).
 All of that is what the free SDK does on its own, with no network call and no
 account: every anomaly reaches your process the way you asked for it in
 `on_anomaly` — a raised `ExecutionRefused` your own handler catches (see
 [Handling refusals](../guides/handling-refusals.md)), your callback, or a
 WARNING line in your logs — and `on_trip` decides whether the session stays
-stopped afterwards. Forever, offline. Being *told* about it without reading
+stopped afterwards. Offline, with no account. Being *told* about it without reading
 your own logs or writing your own handler — Slack, PagerDuty, a signed webhook
-— is a paid feature: it starts with a token from your runbound dashboard (see
+— is done by the control plane: it starts with a token from your runbound dashboard (see
 [Fleet mode](../guides/fleet-mode.md#fleet-mode--one-truth-across-all-your-workers-control-plane)).
 Nothing is decorated, no policy is written.
 
@@ -76,6 +78,6 @@ provider that fails and takes your retries with it. Level 3 protects against
 the failures that are about actions. Nothing here protects against a *bad
 answer*: hallucinations, prompt injection and output quality are out of scope
 by design. "The agent said something wrong" is a different product. "The agent
-would not stop" is this one. Free forever, on every level: see
+would not stop" is this one. Free, local, on every level: see
 [Free SDK, connected plane](free-and-connected.md) for exactly where the
 open-source line sits.

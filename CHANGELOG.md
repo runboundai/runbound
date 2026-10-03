@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.1] - 2026-10-04
+
+### Fixed
+
+- **Claude pricing.** The Claude 5 family (Fable 5.1 and 5, Mythos 5.1 and 5, Opus 5.5 and 5, Sonnet 5.5 and 5) now has price rows: until now each was unpriced, so a money budget counted it as $0.00 or, under `on_unpriced_model="refuse"`, refused it. Opus 4.6, 4.7 and 4.8 were matched to the retired Opus 4 row ($15 / $75) and over-charged three times; they are $5 / $25. A one-hour cache write was priced as a five-minute one (1.25x instead of 2x), an under-charge: the wrapper now reads `cache_creation.ephemeral_1h_input_tokens` and prices it at the new fifth column of a price row. Every row carries its read date (`PRICES_AS_OF`, now 2026-10-03) and source URL, and a test pins the table to the published list.
+- **Admission for newer Claude tokenizers.** Claude 4.7 and later count about 30% more tokens than the characters-over-four input estimate; budget admission scales its input estimate by 1.3 for them (`runbound.pricing.token_estimate_factor`).
+
+### Added
+
+- **Price multipliers a request carries.** `inference_geo="us"` (1.1x, Claude 4.6 and later) and `speed="fast"` (2x on Opus 5.5, Opus 5 and Opus 4.8) are applied to the cost, and to the admission estimate, only when the request itself includes the field (`runbound.pricing.request_multiplier`). What the SDK cannot see (an account-level setting, the Batch API, server tools) stays a documented limit in "What the SDK actually sees".
+- `custom_prices` accepts a fifth number, the one-hour cache-write rate.
+- **A stated limit of this release.** The `inference_geo` and `speed` request fields are priced as Anthropic documents
+  them on 2026-10-03; their spellings and any beta header they may need are not exercised against the live API in this
+  release.
+
 ## [0.11.0] - 2026-10-03
 
 ### Added

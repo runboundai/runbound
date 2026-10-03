@@ -3,7 +3,7 @@
 [← Docs](../README.md)
 
 This is not a headline "abuse score" — runbound never scores a session, and
-never inspects what it said. It is a behavioral watch: does this session's
+never reads what it said: the detector sees durations and token counts only. It is a behavioral watch: does this session's
 model calls still look like themselves? The spike detector below is the
 free, local, on-by-default version of that question, and
 [the abuse ladder](#many-callers-behind-one-service-the-abuse-ladder)
@@ -21,7 +21,7 @@ Every other detector needs a number from you; this one learns one instead —
 zero-config: `runbound.init()` with no arguments already watches every
 model call (`spike_detection` defaults `True`). A connected plane's own
 Controls can only tighten what you configured here (a stricter mode, a
-shorter cooldown, a lower confirmation count — never the reverse), or state
+longer cooldown, a lower confirmation count — never the reverse), or state
 one from scratch where you leave a knob at its default. Everything below
 describes what runs locally, with no account at all; see
 [Free SDK, connected plane](../concepts/free-and-connected.md) for what a
@@ -144,6 +144,8 @@ under the default `on_unpriced_model="zero"` it reads `$0.00` for a model
 runbound has no price for — on Ollama or a local vLLM, cap the tokens
 instead, or set `on_unpriced_model="estimate"` / `"refuse"` (see the
 [configuration reference](../reference/configuration.md#configuration-reference)).
+
+### Baselines that survive a restart
 
 Honest about the limits: **without a control plane, baselines live in this
 process and reset when it restarts** — a fresh worker re-learns each session
@@ -276,9 +278,10 @@ Three honest boundaries:
   `on_anomaly="warn"`** — a warn-mode session climbs to level 3, logs the
   closure, and keeps going. Use `on_trip="latch"` (the default) with
   `"raise"` or `"callback"` if you want the ladder to actually hold a door
-  shut — `init()` can no longer reject the combination for you at startup,
-  since the plane can turn `spike.mode: "limit"` on for a worker at any
-  later heartbeat, well after `on_trip` was already set.
+  shut. `init()` rejects `on_spike="limit"` with an `on_trip` other than
+  `"latch"`, but it cannot reject `limit` with `on_anomaly="warn"`, since the
+  plane can turn `spike.mode: "limit"` on for a worker at any later heartbeat,
+  well after `on_anomaly` was already set.
 - **Without a control plane, strikes, cooldowns and the rung live in this
   process** like every other counter here: two workers count separately, and
   a restart forgets them. Connected to a plane, strikes, the level and the

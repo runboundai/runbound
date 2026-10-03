@@ -6,34 +6,24 @@
 Every failure inside detection, pricing, hashing, wrapping, or alerting is
 caught, logged to the `"runbound"` logger, and swallowed — your call proceeds
 as if runbound were not there. A detector that raises is skipped; a client
-runbound cannot patch runs unguarded; a broken observer is logged past. The only
-exception that escapes on purpose is `GuardrailTripped`, and only if you chose
-`on_anomaly="raise"`.
+runbound cannot patch runs unguarded; a broken observer is logged past. The exceptions
+that escape on purpose are refusals (`ExecutionRefused` and its subclasses,
+`GuardrailTripped` among them) — under `on_anomaly="raise"`, and always for a
+rule you stated as unconditional (a posture, a policy rule, a fan-out limit,
+`on_unpriced_model="refuse"`) — and the argument errors of the API itself
+(`wrap()` of an unrecognised client raises `ValueError`; `assert_guarded()`
+raises `RuntimeError`).
 
 The one deliberate exception to fail-open is `init()` itself: bad configuration
 raises immediately, at startup, where you will see it.
 
-**Overhead is measured, and the method is the promise — not the number.** On
-one machine (Apple M2, 8 cores, macOS 26.0, CPython 3.13.14, `openai` 3.13.0
-over an `httpx.MockTransport` with no network in the way), over six runs of
-`examples/stress/bench.py`, a guarded LLM call cost **34–35 µs more than the
-same call unguarded, at p50**; a `@runbound.tool` call **6.7–6.9 µs**; and
-with **32 threads sharing one keyed session** — one `SessionState`, one
-lock — **36–42 µs at p50 and 110–190 µs at p99**. Sharing the lock barely
-moves the median and shows up in the tail, which is where a queue for a lock
-should show up. On a single thread the p99 shift came out *below zero*: at the tail the
-guard is smaller than the transport's own jitter, so there is nothing there to
-measure.
-
-Your CPU, your Python and your provider SDK are not those, so treat that as an
-order of magnitude and not a service level. What we will stand behind is how it
-was arrived at: `examples/stress/bench.py` times 1000 guarded calls
-interleaved with 1000 unguarded ones, then 1000 decorated tool calls against
-the same function undecorated, then 32 threads on one keyed session, and prints
-the shift between the two samples at each quantile. It needs no network and no
-API key — run it on your own hardware and quote your own number. For scale: a
-real provider call is tens to hundreds of milliseconds, so 34 µs is under a
-tenth of a percent of the call it is guarding.
+**Overhead is something you measure, not something we quote.** There is no
+number here on purpose: your CPU, your Python and your provider SDK are not ours.
+What we stand behind is the method: `examples/stress/bench.py` times 1000 guarded
+calls interleaved with 1000 unguarded ones, then 1000 decorated tool calls
+against the same function undecorated, then 32 threads on one keyed session,
+and prints the shift between the two samples at each quantile. It needs no
+network and no API key — run it on your own hardware and quote your own number.
 
 ## What is guaranteed
 
@@ -53,15 +43,18 @@ read the link for the precise numbers.
 - **Failure behaviour.** Fail-open, stated above: a bug in runbound is
   logged and swallowed, never a reason your agent goes down.
 - **Fleet consistency bounds.** Once you connect a control plane, a latch,
-  a circuit, or a halt set on one worker reaches every other worker within a
-  stated, bounded window — never "eventually," and never silently never.
+  a circuit, or a halt set on one worker reaches every other worker by a stated
+  mechanism and window (the poll interval, the entry cache); the pages linked
+  below say which parts of each bound a test asserts and which are not yet
+  asserted.
   [Latch](../../INVARIANTS.md#latch),
   [Circuit](../../INVARIANTS.md#circuit),
   [Halt](../../INVARIANTS.md#halt-release-hold),
   [Plane-loss](../../INVARIANTS.md#plane-loss-guard_locally-refuse).
 - **Policy precedence.** Policy delivered by a control plane can only make
-  an already-enforced rule stricter; a worker that has not caught up yet
-  never enforces something looser than what it already knew.
+  an already-enforced rule stricter (the merge is tighten-only,
+  `tests/test_controls_merge.py`); what a worker that has not caught up yet
+  enforces, and the test gap there, is stated at the page below.
   [Policy-monotonic](../../INVARIANTS.md#policy-monotonic).
 - **Posture behaviour.** A posture is the only thing that decides whether a
   declared tool may run, and `stopped` means no provider call begins, by
@@ -126,8 +119,8 @@ Honest limitations today:
   usage is counted as something rather than as free traffic. Real usage is
   always preferred, and estimated dollars are an order of magnitude, not a
   bill.
-- **Only OpenAI- and Anthropic-shaped clients are wrapped.** Native SDKs with
-  their own shapes — TGI's client, Bedrock, Vertex — and in-process inference
+- **Only OpenAI- and Anthropic-shaped clients are wrapped.** Any other
+  provider's SDK, and in-process inference,
   are recorded through `runbound.record_call()` / `@runbound.llm` instead.
 - **A model-requested loop trips *after* the response.** The wrapper reads the
   tool calls off a response that has already returned and been paid for; the
@@ -143,8 +136,10 @@ Honest limitations today:
   miss — one key's answer is reused for `control_plane_cache_s` (5 s), and
   after 3 failures in a row the link stops calling at all. Nothing else on the
   request path talks to the plane.
-- **A latch reaches the rest of the fleet within a bounded window, not
-  before.** A worker mid-turn finishes that turn. The exact bound is in
+- **A latch reaches the rest of the fleet late, not at once.** Another worker
+  learns of it at its next session entry that misses the cache, up to
+  `control_plane_cache_s` later, and a worker mid-turn finishes that turn. The
+  statement, and what is not yet asserted, is in
   [Latch](../../INVARIANTS.md#latch).
 - **Budgets compare accumulated floats; don't predict the turn by division.**
   Six $0.02 turns accumulate to `0.12000000000000001`, not `0.12`, so a

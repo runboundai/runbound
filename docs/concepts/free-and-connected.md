@@ -7,28 +7,23 @@
 Runbound's SDK is yours. The fleet intelligence is ours. This page states
 the line and what falls on each side of it.
 
-## Five principles
+## Three principles
 
-1. **Every local deterministic safety or control feature is free forever.**
+1. **Every local deterministic safety or control feature is free.**
    If it can be decided correctly from local state, it is in the
    open-source SDK, configurable in code, with no account, no token, no
    cloud dependency and no telemetry sent to us by default.
 2. **No feature is made artificially worse in the SDK to create a
-   paywall.** No "detected but will not stop", no trial timers, no plan
-   checks.
+   paywall.** No "detected but will not stop", no trial timers, and no
+   call is ever refused for plan reasons.
 3. **The paid product sells coordination, authoritative state, central
    control, evidence and operations**, not the ability to perform a local
    `if`. You can enforce a budget locally for free; you pay when that
    boundary has to stay true across your fleet and be managed centrally.
-4. **A free cloud tier exists as the activation path**, limited by scale
-   and history, never by crippled semantics.
-5. **Pricing follows protected infrastructure and coordination scale**
-   (protected agents, synced workers, history), not individual safety
-   events.
 
-**Architecture rules that follow:** plan gating happens on the plane, never
-in the SDK — `grep -rn "plan" runbound-sdk/runbound` finds no branch on a
-plan name. Entitlements and Controls are separate objects: entitlements say
+**Architecture rules that follow:** plan gating happens on the plane. The SDK
+never refuses a call for a plan; it only follows what the plane says your plan
+includes, by closing the telemetry lanes it does not. Entitlements and Controls are separate objects: entitlements say
 what your org's plan includes (fleet policy, simulation, retention,
 agents, workers); Controls say what a run may do, and the control engine
 never reads an entitlement. Local and central configuration merge
@@ -42,7 +37,7 @@ with no account and nothing sent anywhere.
 ## Every control is free and local
 
 Every `init()` keyword in the
-[configuration reference](../reference/configuration.md) is free, forever,
+[configuration reference](../reference/configuration.md) is free and local,
 including six that a connected plane can additionally coordinate across
 your fleet: circuit rate mode and posture-narrowing, loop shapes beyond
 "repeat", the budget soft line, `max_actions_per_run`, class-rule
@@ -54,7 +49,7 @@ of each is a *tightening*, never a requirement.
 |---|---|---|
 | Dollar and token budgets, reservation, per-call ceilings | yes | fleet-shared counters, fleet reservation, windows that survive restarts |
 | Steps, events, run time | yes | fleet configuration |
-| Concurrency, fan-out, actions per run, blast radius | yes, per process | fleet blast radius |
+| Concurrency, fan-out, actions per run | yes, per process | none yet (see *Planned, not built*) |
 | Loop and cycle shapes, retry and error storms | yes | cross-worker storm signals |
 | Spike detection, the ladder | yes | the key's ladder rung kept across workers and restarts |
 | Provider circuit, count and rate modes | yes | shared circuit state |

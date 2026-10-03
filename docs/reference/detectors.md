@@ -159,10 +159,10 @@ thing here that could leak call arguments into a human-readable string.
 does the same thing once as it does twice, and `retryable=True` states that
 the tool is expected to be retried by the caller's own code. Both are
 reported in the tool report (`coverage()`) and the control surface for a
-human or the plane to read; neither is enforced by anything yet, and
-`retryable=True` does not change the `loop_threshold` the `retry` shape
-gates on — a retryable tool's failures still need exactly as many as any
-other tool's.
+human or the plane to read; `idempotent=True` is not enforced by anything yet, and
+`retryable=True` is enforced only as a grace on the `retry` loop shape: a
+retryable tool's failures need twice `loop_threshold` to trip it
+(`tests/test_loop_shapes.py::test_retryable_tool_trips_at_double_the_threshold`).
 
 ## Admission: a budget that is not crossed (`budget_admission`)
 

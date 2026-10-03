@@ -8,7 +8,8 @@ oversight. It is the one constraint everything else in this SDK is built on:
 
 > **Every core runtime decision is made from non-content signals** — counts,
 > hashes, timings, prices, and the capability classes a tool declares. No
-> prompt, reply, or tool result is ever read to decide anything. See
+> prompt, reply, or tool result is ever read to decide anything; the only
+> thing taken from the text is its length. See
 > [Content independence](../../INVARIANTS.md#content-independence).
 
 Below is what that constraint rules out, on purpose, and what each exclusion
@@ -20,8 +21,9 @@ runbound never reads what an agent said or what a model answered, and never
 stores, logs or sends it on. A detector sees counts, timings and prices; it has
 no field to put message text in even if it wanted one — see
 [What the SDK actually sees](what-it-sees.md). The one thing that touches the
-text is a character count: the gateway and the action door count the body's
-characters in transit (to estimate tokens and size) and keep none of it.
+text is a character count: the SDK's own door (when it estimates tokens), the
+gateway and the action door count the body's characters in transit (to
+estimate tokens and size) and keep none of it.
 
 **Costs you:** runbound will not catch a hallucination, a bad or unsafe
 answer, or an attempt to manipulate the model through its input. "The agent
@@ -30,9 +32,10 @@ said something wrong" is not a question this SDK answers.
 **Buys you:** a control that cannot be argued with. A budget, a step count or
 a declared capability class means the same thing in every language, in every
 prompt format, and under every attempt to phrase around it — there is no
-wording that makes a dollar not a dollar. It also means the control adds no
-latency, no cost and no failure mode of its own: there is nothing to read, so
-there is nothing to get wrong reading it.
+wording that makes a dollar not a dollar. It also means the control has no
+reading step to get wrong: there is nothing to read. (Connected to a control
+plane, a session entry waits at most `control_plane_timeout_s` for its answer,
+and fails open.)
 
 **Use instead:** a content-safety or output-evaluation tool, run alongside
 runbound, for the "was this answer any good" question — a different question
@@ -51,7 +54,8 @@ a bad response for you.
 silently rewritten answer is a bug report waiting to happen — the log says
 one thing, the response the caller received says another. Every response
 either came from the provider untouched or was refused before it went out;
-there is no third case to debug.
+the one case that is both is a budget that the call itself crossed, which
+refuses after the provider ran and says so (`provider_called=True`).
 
 **Use instead:** your own application code, deciding on its own terms what to
 do with a response it doesn't like.

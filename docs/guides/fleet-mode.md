@@ -23,8 +23,10 @@ Detection itself does not move: the detectors still run in your process, on
 your thread, with no model calls, exactly as they do now. The plane only tells
 each worker what the *other* workers already know.
 
-Those five are the whole list, and the list is honest: the `max_calls`
-tally and the fan-out / in-flight counters are still per worker —
+Those five are what the two moments carry. Spike baselines, the abuse
+ladder's rung and the fleet kill switch are shared too (each has its own
+section). The `max_calls` tally and the fan-out / in-flight counters are still
+per worker —
 see [the limitations](../reference/guarantees.md#guarantees-and-limitations).
 
 ```python
@@ -114,8 +116,9 @@ runbound.plane_status()
   second), so a worker can be stale for up to the cache window plus that
   batch latency. Worst-case overspend for one key is the sum over workers of
   (the spend of that worker's one in-flight block, plus anything it admitted
-  while stale) — the full statement and the tests that assert it live in
-  [INVARIANTS.md](../../INVARIANTS.md#budget). Keep blocks short (one request per
+  while stale) — the full statement lives in
+  [INVARIANTS.md](../../INVARIANTS.md#budget), which also says what is not yet
+  asserted by a multi-worker race test. Keep blocks short (one request per
   block) and lower `control_plane_cache_s` to tighten the bound, at the cost
   of more entry requests. The worker that crosses the line trips
   on the same turn a single worker with those numbers would; the anomaly
@@ -180,16 +183,18 @@ runbound.plane_status()
 ## What we send — hashes and counts, never content
 
 Fleet mode is the first thing in runbound that opens a socket we own, so here
-is all of it. Every outbound record is built from one module,
-`runbound/plane_types.py`, which is what makes this table checkable by reading
-a single file.
+is all of it: seven endpoints, and five lanes on the events batch
+(`tests/test_docs_fleet_wire.py` checks both counts against the client).
+The wire dataclasses are in `runbound/plane_types.py`; the heartbeat, the enter
+body and the batch envelope are assembled in `runbound/shared.py` and
+`runbound/export.py`.
 
 | Endpoint | When | Fields |
 |---|---|---|
 | `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `controls_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`), `active` (open `session()` blocks), `coverage` (the counts `runbound.coverage()` shows), `can_stop`, `halt_ack`, `tools_hash`, and `tools` — the tool report — only when that hash changed; when present, `controls_refused` (Controls the worker would not apply), `envelope` and `entries_local_share` |
 | `POST /v1/enter` | a `session()` block opens, on a cache miss | `key_hash`, `tags`, `service`, `worker_id`, `budget_usd`, `local_spend_usd`, `local_total_tokens`, and the raw `key` only when `send_session_keys` is on |
 | `POST /v1/trip` | a critical trip latches a session, and every block refused at the door because a key is latched | `key_hash`, the anomaly (`ts_wall`, `key_hash`, `detector`, `severity`, `message`, scrubbed `details`, `reacted`, `anomaly_id`), `latch_ttl_s`, `strikes`, `generation`, `refused_at_door`, `anomaly_id`, and a `worker_id` the SDK leaves empty |
-| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`ts_wall`, `kind`, `key_hash`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`, `priced`, `partial`, `tokens_estimated`, `provider`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`, and this key's held baseline and ladder rung: `baseline_duration_s`, `baseline_output_tokens`, `baseline_samples`, `rung_level`, `rung_allowance`, `rung_allowance_start`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
+| `POST /v1/events` | batched in the background; the `exits`, `circuits` and `changes` lanes always (runtime changes only while `export_events` is on), the `events` and `anomalies` lanes while `export_events` is on | `batch_id`, `service`, `worker_id`, `sent_at`, `dropped`, and five lanes — `events` (`ts_wall`, `kind`, `key_hash`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`, `priced`, `partial`, `tokens_estimated`, `provider`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`, and this key's held baseline and ladder rung: `baseline_duration_s`, `baseline_output_tokens`, `baseline_samples`, `rung_level`, `rung_allowance`, `rung_allowance_start`), `circuits` (`label`, `state`, `failures`, `cooldown_s`), `changes` (`ts_wall`, `kind` — `posture_change` or `runtime_change` — `key_hash`, `scope`, `from`, `to`, `source`, `reason`, `level`, `what`) |
 | `GET /v1/policy?service=…` | the heartbeat announced a new policy version | nothing but the service name |
 | `GET /v1/controls?service=…` | the heartbeat announced a new Controls version | nothing but the service name |
 | `POST /v1/clear` | `runbound.clear(key)` | `key_hash` |
@@ -267,8 +272,8 @@ What is **never** on that wire, because there is no field for it to travel in:
   `message` and `details` — and an exit's `trigger_message` — now travel
   exactly as it was written, and the plane stores the raw key next to its
   hash. From there the plane's own alert adapters (Slack, PagerDuty, a
-  webhook) do what you told them to: read the raw key into your own
-  `link_template` wherever you wrote `{key}`, and pass a detector's
+  webhook) do what you told them to: read the raw key into your
+  service's link template (a dashboard field) wherever you wrote `{key}`, and pass a detector's
   unredacted `message`/`details` straight through like everything else in an
   alert. That is your choice about your own Slack, your own PagerDuty and
   your own endpoint — the hash is what ships unless you make it otherwise.
@@ -289,10 +294,11 @@ dashboard, rendered by the plane when it builds a delivery, not by the SDK.
 
 Telemetry is lossy on purpose: each lane is a bounded queue, the oldest record
 is dropped when it is full, and `dropped` rides along on every batch as a
-cumulative counter, so a plane that is down for an hour costs a fixed amount of
-memory rather than an OOM. At interpreter exit the queue is drained once.
+cumulative counter, so a plane that is down costs a fixed amount of
+memory (the queues are bounded, `tests/test_export.py`) rather than an OOM. At interpreter exit the queue is drained once.
 `export_events=False` turns the telemetry lanes off — no events and no
-anomalies leave the process. **The fleet state still flows**: the exit deltas,
+anomalies leave the process, and runtime changes (a new model or provider)
+are silenced; posture changes still ride the `changes` lane. **The fleet state still flows**: the exit deltas,
 the circuit transitions and the trips travel on the same batches, because they
 are how this worker's spend reaches the fleet's total, not telemetry about it.
 A shared budget works the same with telemetry off.
@@ -447,15 +453,15 @@ never shows up as a gap in your usage later.
 Nothing about any of this changes what you are protected by. Every
 detector, latch, cap and policy you configured keeps running on this
 worker's own numbers, exactly as it does with no plane at all — a local
-decision is never a *wrong* decision, only one this one worker made on its
-own rather than with the rest of the fleet's knowledge folded in.
+decision is one this worker made on its own numbers, rather than with the
+rest of the fleet's knowledge folded in.
 
 The control plane is Runbound AI's hosted product, currently in early access
 (see [pricing](https://runbound.co/pricing)); a self-hosted deployment
 of the plane is available as an Enterprise option, licensed separately
 rather than built from this repository. The SDK half above is the free,
 MIT-licensed part of fleet mode, and it works against any server that
-speaks those six endpoints — a real property, not a sales pitch: nothing in
+speaks those seven endpoints — a real property, not a sales pitch: nothing in
 the SDK cares whether the plane behind them is ours.
 
 ## How far one plane goes
@@ -467,17 +473,15 @@ a self-hosted plane on one 8-core machine serves that combined load with
 grow with usage in ways worth planning for rather than being surprised
 by — Redis holds roughly 1 KB per live session key, and Postgres roughly
 1 KB per session close — and a plane under a much larger burst than its
-steady traffic can, like any database-backed service, need a restart to
-recover its full throughput rather than just time. None of this touches
+steady traffic can, like any database-backed service, take a while to
+drain it (a recorded 5,000-worker reconnect burst recovered with no restart). None of this touches
 what a worker sees with no plane at all, or what a plane loss falls back
 to (`on_plane_loss`, above): those stay local and instant regardless of
 the plane's own load.
 
-A human can run and watch the fleet too, wherever the plane is deployed: it
-serves an admin dashboard at `/` — fleet overview, sessions, the
-refused-actions ledger, policies, kill switch and more, on every plan. A
-self-hosted deployment boots from `/setup` using a bootstrap key printed on
-first run; the hosted product adds `/signup` once it is live. See
+A human can run and watch the fleet through the dashboard — fleet overview,
+sessions, the refused-actions ledger, policies, kill switch and more — a
+separate service that talks to the plane; the plane itself has no pages. See
 [the control plane docs](https://runbound.co/docs/control-plane) for
 roles, CSRF, and the rest of the admin API the dashboard is built on.
 

@@ -2716,6 +2716,8 @@ def _record_llm_call(
     partial: bool = False,
     tokens_estimated: bool = False,
     provider: str | None = None,
+    tokens_cache_write_1h_in: int = 0,
+    price_multiplier: float = 1.0,
 ) -> None:
     """Price a model call and emit its ``llm_call`` event.
 
@@ -2741,7 +2743,10 @@ def _record_llm_call(
     prices at the model's published cached-*read* rate when there is one, and
     ``tokens_cache_write_in`` at its published cache-*write* rate — a premium,
     never the read discount — each falling back to the plain input rate when
-    unpublished (never a guessed rate either way).
+    unpublished (never a guessed rate either way). ``tokens_cache_write_1h_in`` is the
+    one-hour part of ``tokens_cache_write_in`` (priced at the fifth column), and
+    ``price_multiplier`` the request's own multiplier (``inference_geo="us"``,
+    ``speed="fast"``; see :func:`runbound.pricing.request_multiplier`) that scales the whole cost.
 
     ``partial`` and ``tokens_estimated`` are for a call that never actually
     finished — an abandoned stream reported by :meth:`_Hooks.abandoned` — and
@@ -2774,6 +2779,8 @@ def _record_llm_call(
         tokens_cache_write_in=tokens_cache_write_in,
         on_unpriced_model=engine.config.on_unpriced_model,
         unpriced_price_per_1m_usd=engine.config.unpriced_price_per_1m_usd,
+        tokens_cache_write_1h_in=tokens_cache_write_1h_in,
+        multiplier=price_multiplier,
     )
     _observe(
         kind="llm_call",

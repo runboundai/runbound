@@ -636,4 +636,4 @@ def test_custom_prices_keep_plain_prefix_rules():
 def test_the_price_table_is_dated():
     """A stale table is a wrong bill: the file says when it was last true."""
     source = open(pricing.__file__, encoding="utf-8").read()
-    assert "2026-09" in source
+    assert pricing.PRICES_AS_OF in source and pricing.PRICES_AS_OF.startswith("2026-")

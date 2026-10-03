@@ -111,7 +111,8 @@ How a run gets narrowed:
 
 - `session.enter_safe_mode(reason, posture="read_only")` for that session;
 - `runbound.enter_safe_mode(reason, posture="restricted")` for the process;
-- the abuse ladder (`on_spike` mode `"limit"`, control-plane delivered): its
+- the abuse ladder (`on_spike="limit"`, a local `init()` keyword that a control
+  plane can also turn on): its
   limited rung sets `restricted`, and its closed rung `stopped`;
 - the control plane, per service: every worker tightens on its next heartbeat.
 
@@ -230,8 +231,8 @@ already over.
 **Roll it out with `dry_run`.** Nobody's first draft of a policy is right, and a
 wrong rule in `block` mode breaks a working agent. Ship with
 `on_violation="dry_run"` for a week: every violation is logged
-(`[runbound] Policy dry-run: would block tool 'send_email' ...`) and alerted,
-and every tool still runs. Read what it would have refused, fix the rules that
+(`[runbound] Policy dry-run: would block tool 'send_email' ...`) and alerted (a
+repeat of the same violation pages once), and every tool still runs. Read what it would have refused, fix the rules that
 were wrong, then change one word to `"block"`.
 
 Four honest notes:

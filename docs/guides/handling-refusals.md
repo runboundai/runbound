@@ -123,11 +123,12 @@ def call_with_retry(fn, *args, max_attempts=3, **kwargs):
 
 A retry loop written this way makes exactly one attempt on a budget
 refusal — `is_retryable` says no, and the loop stops immediately. A loop
-that skips the predicate entirely and retries on bare `Exception` is *still*
-bounded: runbound's own loop detector, watching only the repeated identical
-call, latches the session within `loop_threshold` attempts, turning every
-attempt after that into an instant, free refusal instead of an unbounded
-stream of real ones — the careless case is degraded, never unbounded.
+that skips the predicate entirely and retries on bare `Exception` is bounded only
+if you chose a loop reaction: with `on_loop="break"` and `on_anomaly="raise"`,
+runbound's loop detector, watching only the repeated identical call, latches the
+session within `loop_threshold` attempts, turning every attempt after that into an
+instant, free refusal (`tests/test_refusal_contract.py`). At the defaults
+(`on_loop=None`, `on_anomaly="warn"`) the loop is detected and logged, not stopped.
 
 ## FastAPI
 

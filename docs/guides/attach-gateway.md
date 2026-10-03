@@ -30,7 +30,9 @@ export ANTHROPIC_BASE_URL=$RUNBOUND_URL/g/$APP_TOKEN/anthropic
 ```
 
 The doors are `/g/<token>/openai/v1/chat/completions`,
-`/g/<token>/openai/v1/responses` and `/g/<token>/anthropic/v1/messages`. Your
+`/g/<token>/openai/v1/responses` and `/g/<token>/anthropic/v1/messages`, plus
+`/g/<token>/anthropic/v1/messages/count_tokens`, which is counted toward nothing
+(below). Your
 provider key goes in the request as it always did; the gateway forwards it and
 never reads it, and returns the provider's answer, status and headers unchanged.
 Send one request:
@@ -42,6 +44,23 @@ curl -s $RUNBOUND_URL/g/$APP_TOKEN/openai/v1/chat/completions \
   -H "X-Runbound-Caller: alice" \
   -d '{"model": "gpt-4o", "messages": [{"role": "user", "content": "hello"}]}'
 ```
+
+## The doors
+
+| Path under `/g/<token>` | Admitted, held, billed and filed? |
+|---|---|
+| `/openai/v1/chat/completions` | yes |
+| `/openai/v1/responses` | yes |
+| `/anthropic/v1/messages` | yes |
+| `/anthropic/v1/messages/count_tokens` | **counted toward nothing** |
+
+`count_tokens` is the Anthropic SDK's call for counting a request's tokens
+without running it, so an Anthropic client pointed at the gateway does not get a
+404 on it. It is relayed to the application's Anthropic upstream and answered as
+the provider answers. The token is resolved, the upstream is checked against the
+egress list and an open Anthropic circuit answers 503, with the same 401, 404 and
+502 answers as the other doors; but nothing is admitted, held, billed or filed,
+no budget or halt applies to it, and the body is relayed without being read.
 
 ## Who is calling
 
@@ -175,12 +194,13 @@ never cancels it, and a budget spent or a halt set in the middle of it does not 
 A refusal is one `error` event on the socket, which stays open:
 
 ```json
-{"type":"error","error":{"type":"runbound_refusal","code":"budget_exceeded","message":"app usd budget: spent $0.0080, held $0.0064, limit $0.0085","event_id":"evt_2","verdict":"deny","boundary":"money","level":"fleet"}}
+{"type":"error","event_id":"evt_rb_0f3a9c1d7e2b4a68","error":{"type":"runbound_refusal","code":"budget_exceeded","message":"app usd budget: spent $0.0080, held $0.0064, limit $0.0085","event_id":"evt_2","verdict":"deny","boundary":"money","level":"fleet"}}
 ```
 
-`event_id` is the one on your `response.create`, so you know which request it answers (the
-gateway gives the event one if your create carried none); a refused create is never sent to
-the provider. If the provider had started the response
+The `error` carries the `event_id` of your `response.create` when the create had one, so you
+know which request it answers (a create with no id gets no correlation); the event's own
+top-level `event_id` is always the gateway's, beginning `evt_rb_`. A refused create is never
+sent to the provider. If the provider had started the response
 itself, the gateway cancels it upstream and drops its events before any reached you, then
 sends the same event. Each response is priced when it ends, from the usage the provider
 reports (text, audio and image tokens at their own rates), and filed as one call.
@@ -224,16 +244,19 @@ gateway keeps its own loggers quiet and a test checks that no key reaches its lo
 store, but a library's DEBUG output is outside that. A reverse proxy in front of it must
 not log the `Sec-Websocket-Protocol` header either, which is where a browser's key
 travels: tell it to drop that header from its access log and its error log, and spell
-the name exactly so, because some proxies (Caddy among them) match header names only in
-this canonical form, and `Sec-WebSocket-Protocol` would not match there and would leave
-the key in the log.
+the name as `Sec-Websocket-Protocol`, the way the gateway's own Caddyfile does, and check
+that your proxy's matching really drops it (a log filter that misses the header leaves the
+key in the log).
 
 ## What it cannot see
 
 It sees model calls that come through the base URL, with their model, tokens and
-cost, and nothing else: never a prompt or a reply, which are forwarded and not
-stored, logged or sent on (the gateway counts the body's characters in transit to
-estimate tokens, and that is all it does with the text). It cannot see a tool your agent runs inside your app, a call that does not
+cost: never a prompt or a reply, which are forwarded and not stored, logged or sent
+on. What it reads of a request is the model, the `stream` flag and the caller's
+identity fields (`user`, `safety_identifier`, `metadata.user_id`), and it counts the
+body's characters in transit to estimate tokens. For a caller whose posture is narrowed
+it also reads the *names* of the tools a reply asks for (never their arguments), and
+holds a streamed reply whole until it has judged them. It cannot see a tool your agent runs inside your app, a call that does not
 use the base URL, or anything the provider does not report. To govern tools, use
 the SDK's `@runbound.tool` or the [action API](attach-action-api.md).
 

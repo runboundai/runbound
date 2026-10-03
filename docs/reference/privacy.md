@@ -32,12 +32,12 @@ never reveals: prompts, replies, tool arguments themselves, or error text.
   a key reaches a connected plane as a hash, tags as written.** Detectors name the key untouched in
   their own local `message` and `details`, so a key session with an id you
   are willing to see in your own logs, not with an email address. The plane —
-  hosted or self-hosted, the only destination the SDK sends to any more — gets
+  hosted or self-hosted, the only destination the SDK itself sends to — gets
   `sha256(key)` and nothing else, unless you opt in with
   `send_session_keys=True`. By default the plane's own alert adapters (Slack,
   PagerDuty, a webhook) read only that hash back off the ledger too. Opt in
-  and the raw key can reach a delivery — through your own `link_template`'s
-  `{key}`, or a detector's own `message`/`details`, unredacted — because it
+  and the raw key can reach a delivery — through the `{key}` in your service's
+  link template (a per-service dashboard field), or a detector's own `message`/`details`, unredacted — because it
   is now sitting in the ledger for the plane to pass along exactly as told.
 - **No network calls except the ones you configure.** No telemetry, no
   phone-home, no hosted backend you did not point us at. With no `token` and

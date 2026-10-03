@@ -52,8 +52,8 @@ sensors saw*: an unguarded path is not counted at all, which is what
 | Circuit state | **Exact in this process** | Failures counted inside `circuit_window_seconds` on the monotonic clock, per provider endpoint, with a cooldown that lets exactly one probe through. A fleet circuit is adopted on the next heartbeat, so it is shared rather than simultaneous. |
 | Policy evaluation | **Exact** | `evaluate()` is a pure function of the policy, the call and the tally, applied in the fixed rule order (`deny`, `allow`, `max_calls`, `constraint`, `approval`) with no clock, no I/O and no model. Your own predicate is the one part runbound cannot speak for: one that raises refuses the call (fail-closed). |
 | Token counts when the endpoint reports none (`estimate_tokens=True`) | **Estimated** | `ceil(chars / 4)` over the text runbound can read — a stand-in so a server that reports no usage is counted as something rather than as free traffic, never a tokenizer. You are told once per process in a WARNING; on the event itself only a partial (abandoned-stream) call carries `tokens_estimated`. |
-| The dollar cost of a call | **Estimated** | Tokens × a static list-price table (`runbound.pricing.PRICES_AS_OF` dates it) or your `custom_prices`. Negotiated rates, batch discounts and any price published since that date are not modelled, and an unpriced model reads `$0.00` under the default `on_unpriced_model="zero"`. `budget_usd` is an exact comparison against a running total whose dollars are an estimate of your bill. |
-| The reservation (`budget_admission="capped"`, the default) | **An exact bound on output, an estimate on input** | A request that states its output cap is refused before it goes out when the cap at the output rate plus request characters / 4 at the input rate would cross `budget_usd` — always at the plain input rate, since nothing knows before a call how much of it will be a cache hit. The output side cannot be exceeded; the input side is estimated. A request with no stated cap is not reserved and is stopped after it returns. `budget_admission=True` also estimates a missing cap with `admission_output_tokens` (1024), which is a guess. It never latches. |
+| The dollar cost of a call | **Estimated** | Tokens × a static list-price table (`runbound.pricing.PRICES_AS_OF` dates it) or your `custom_prices`. Negotiated rates, batch discounts and any price published since that date are not modelled, and an unpriced model reads `$0.00` under the default `on_unpriced_model="zero"`. For Anthropic, a one-hour cache write is priced at 2x the input rate (the usage object's `cache_creation.ephemeral_1h_input_tokens`; a five-minute write is 1.25x), and the two multipliers a request can carry are applied only when the request itself says so: `inference_geo="us"` (1.1x, Claude 4.6 and later) and `speed="fast"` (2x on Opus 5.5, Opus 5 and Opus 4.8, stacking with the first). **Not modelled; the estimate is the base rate:** a US-only or fast-mode price that comes from an account or organisation setting rather than the request, the Batch API's 50% discount (a separate endpoint the SDK does not wrap), web search (per 1,000 requests) and code execution (per container-hour). `budget_usd` is an exact comparison against a running total whose dollars are an estimate of your bill. |
+| The reservation (`budget_admission="capped"`, the default) | **An exact bound on output, an estimate on input** | A request that states its output cap is refused before it goes out when the cap at the output rate plus request characters / 4 at the input rate would cross `budget_usd` — always at the plain input rate, since nothing knows before a call how much of it will be a cache hit. The output side cannot be exceeded; the input side is estimated, and for the models whose tokenizer counts about 30% more tokens (Claude 4.7 and later) the estimate is scaled by 1.3 (`runbound.pricing.token_estimate_factor`). A request with no stated cap is not reserved and is stopped after it returns. `budget_admission=True` also estimates a missing cap with `admission_output_tokens` (1024), which is a guess. It never latches. |
 | What a spike *means* | **Estimated** | The arithmetic is exact — this call is over `spike_factor` × this session's median and over the absolute floor — but the reading of it is not. A spike is a behaviour-change signal, not proof of abuse. |
 | Fleet totals inside the sync window | **Bounded, not exact** | `fleet_spend_offset_usd`, `fleet_tokens_offset` and fleet strikes are what the plane knew when this block opened, reused for `control_plane_cache_s` (5 s) while other workers' deltas arrive in roughly one-second batches. The worst that window can cost is stated as a bound in [INVARIANTS.md](../../INVARIANTS.md#budget), not hand-waved as "eventually". |
 | An abandoned stream's record | **Partial, and estimated unless a chunk carried usage** | Its `tokens_out` is the provider's own count when any chunk carried usage (even a truthful zero) and `ceil(chars / 4)` of what streamed otherwise — `tokens_estimated` says which. Its `tokens_in` is the provider's count only when a chunk carried one: OpenAI sends usage on the final chunk alone, which an abandoned stream never reaches, so there it is `0` unless `estimate_tokens=True` estimated it from the request. Its duration covers up to the last chunk observed, not up to collection, and it is recorded when Python collects the stream, which is not necessarily promptly and never at interpreter exit. |
@@ -65,14 +65,15 @@ narrow case of `estimate_tokens=True`, which counts characters when the server
 reported no usage. Tool arguments are hashed with sha256 and the digest is what
 is kept; an [action policy](../guides/policy.md#action-policy--rules-for-what-your-agent-may-do)
 hands your own callbacks the real arguments for the duration of that call and
-stores none of them. Failures are recorded as the exception's class name.
+stores none of them. A failure is recorded as the exception's class name and
+its message, cut to 500 characters, in the local event; only the class name
+leaves the process.
 Details are in [Privacy](../reference/privacy.md#privacy).
 
 ## Paths that are not guarded today
 
 - Raw HTTP to a provider — `requests`, `httpx`, or your own transport.
-- The Google Gemini / Vertex SDK, Bedrock via `boto3`, and the Mistral and
-  Cohere SDKs.
+- The SDK of any provider other than OpenAI and Anthropic.
 - Any framework that reaches the provider through its own transport rather than
   through an OpenAI- or Anthropic-shaped client. (LangChain is covered by
   [its own handler](../guides/langchain.md#langchain--langgraph).)
@@ -104,7 +105,9 @@ guess wrong:
   is usually what you want in a test, but worth knowing rather than assuming).
 - **Unusual init order** — a client built *before* `runbound.init()` runs
   (module-level construction, an import-time singleton) was built before the
-  patch existed, so `auto_wrap` never touches it, ever.
+  patch existed. `auto_wrap` patches the provider's classes, not each object, so
+  such a client is still guarded; only a provider SDK imported *after*
+  `init()` is missed.
 
 `wrap()` on the actual client object sidesteps all four — there is no
 guessing about which class or which import path, only the object in front of

@@ -45,10 +45,10 @@ def test_table_covers_required_models(model):
 def test_table_entries_are_positive_input_output_pairs(model):
     # An entry is (in, out), (in, out, cached_in), or — for a provider
     # that also publishes a cache-write premium — (in, out, cached_in,
-    # cache_write_in). Was a strict 2-tuple before this table grew extra
+    # cache_write_in[, cache_write_1h_in]). Was a strict 2-tuple before this table grew extra
     # columns.
     entry = PRICES[model]
-    assert isinstance(entry, tuple) and len(entry) in (2, 3, 4)
+    assert isinstance(entry, tuple) and len(entry) in (2, 3, 4, 5)
     price_in, price_out = entry[0], entry[1]
     assert price_in > 0 and price_out > 0
     assert price_out >= price_in  # output is never cheaper than input
@@ -74,8 +74,13 @@ def test_table_cache_write_rate_is_a_real_premium_when_present(model):
 
 @pytest.mark.parametrize("model", [m for m in PRICES if len(PRICES[m]) > 3])
 def test_cache_write_rate_is_125_percent_of_input(model):
-    price_in, _price_out, _price_cached_in, price_write_in = PRICES[model]
+    price_in, _price_out, _price_cached_in, price_write_in = PRICES[model][:4]
     assert price_write_in == pytest.approx(price_in * 1.25)
+
+
+@pytest.mark.parametrize("model", [m for m in PRICES if len(PRICES[m]) > 4])
+def test_one_hour_cache_write_rate_is_2x_input(model):
+    assert PRICES[model][4] == pytest.approx(PRICES[model][0] * 2.0)
 
 
 def test_table_prices_are_in_a_sane_per_million_range():
@@ -322,7 +327,7 @@ def test_a_cached_heavy_call_costs_the_documented_mix():
 
 def test_anthropic_cached_heavy_call_costs_the_documented_mix():
     """Same shape, Anthropic's 10%-of-input cached read rate."""
-    price_in, price_out, price_cached_in, _price_write_in = PRICES["claude-sonnet-4-5"]
+    price_in, price_out, price_cached_in, _price_write_in, _price_write_1h_in = PRICES["claude-sonnet-4-5"]
     assert price_cached_in == pytest.approx(price_in * 0.10)
     expected = (200 / 1e6) * price_in + (1000 / 1e6) * price_cached_in + (50 / 1e6) * price_out
     cost = estimate_cost("claude-sonnet-4-5", 1200, 50, tokens_cached_in=1000)
@@ -336,7 +341,7 @@ def test_a_call_mixing_a_cache_read_and_a_cache_write_prices_both_rates():
     write at 3.75 (125%). 200 fresh + 1000 cache-read + 300 cache-write
     input tokens, 80 output.
     """
-    price_in, price_out, price_cached_in, price_write_in = PRICES["claude-sonnet-4-5"]
+    price_in, price_out, price_cached_in, price_write_in, _price_write_1h_in = PRICES["claude-sonnet-4-5"]
     assert (price_cached_in, price_write_in) == pytest.approx((0.30, 3.75))
     expected = (
         (200 / 1e6) * price_in
@@ -397,7 +402,7 @@ def test_cache_write_and_cache_read_never_overlap_when_they_overclaim_tokens_in(
     cost = estimate_cost(
         "claude-sonnet-4-5", 100, 0, tokens_cached_in=90, tokens_cache_write_in=90
     )
-    price_in, _price_out, price_cached_in, price_write_in = PRICES["claude-sonnet-4-5"]
+    price_in, _price_out, price_cached_in, price_write_in, _price_write_1h_in = PRICES["claude-sonnet-4-5"]
     # write claims 90 (clamped to tokens_in=100); read absorbs the remaining
     # 10, not its full requested 90; regular is 0.
     expected = (10 / 1e6) * price_cached_in + (90 / 1e6) * price_write_in

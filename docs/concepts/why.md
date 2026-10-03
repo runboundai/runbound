@@ -2,16 +2,14 @@
 
 [← Docs](../README.md)
 
-One agent burned **$2,847 in four hours** on a refactoring loop while every
-monitoring dashboard stayed green. A four-agent loop ran for **11 days and cost
-$47,000**; a budget alert fired on day 9, two days too late. In both cases the
-telemetry worked. Nobody was watching it at 3am, and nothing in the stack had
-the authority to pull the plug. The same failure arrives at higher volume when
-one service serves many callers: a chatbot free-rider works out that your
-support assistant will answer anything and spends your API key on their
-homework, or a provider update flips the model into thinking mode and a
-two-second answer becomes a seventy-second one across every run you serve.
-Nothing errors. Nothing pages.
+An agent can repeat one refactoring step while every monitoring dashboard
+stays green, and a loop of several agents can run until a budget alert
+finally arrives. In both cases the telemetry worked. Nobody was watching it at 3am, and nothing
+in the stack had the authority to pull the plug. The same failure arrives at higher
+volume when one service serves many callers: a chatbot free-rider works out that your
+support assistant will answer anything and spends your API key on their homework, or a
+provider update flips the model into thinking mode and a two-second answer becomes a
+seventy-second one across every run you serve. Nothing errors. Nothing pages.
 
 runbound is the layer with the authority to pull the plug, and the proof
 that it did. It raises on the agent's own thread, in the middle of the loop,

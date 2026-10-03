@@ -151,6 +151,18 @@ def test_a_chat_completion_is_counted_without_any_wrap_call():
     assert transport.calls == 1
 
 
+def test_a_client_built_before_init_is_guarded_too():
+    """The class patch reaches a client that already existed when ``init()`` ran."""
+    transport = json_transport(chat_completion())
+    client = openai_at("http://mock.local/v1", transport)  # built first, never wrapped
+    runbound.init()
+
+    chat(client)
+
+    tokens, _cost, events = totals()
+    assert (tokens, events) == (150, 1)
+
+
 def test_the_responses_api_is_auto_instrumented_too():
     runbound.init()
     client = openai_at("http://mock.local/v1", json_transport(responses_body()))

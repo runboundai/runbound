@@ -195,18 +195,12 @@ is gated by plan and enforced with a 403, not a suggestion — see
 [the control plane docs](https://runbound.co/docs/control-plane) for
 the endpoints, the adapter list, and the webhook body your receiver gets.
 
-The plane's webhook adapter matches what used to be sent from here in
-everything that signs and verifies a delivery: same `version`, same
-envelope, same `X-Runbound-Timestamp` / `X-Runbound-Signature` headers,
-same signing string. Two fields in the body did change: `session.id` used to
-be this process's own session id and is now the sha256 key hash — the plane
-has no notion of a per-process id, since any worker can serve the same
-session — and `session.key` (what `send_session_keys=True` used to add
-straight to the body) does not exist here at all; a raw key now reaches you,
-if you opt in, only through your own `link_template`. If your receiver keyed
-on `session.id` as an opaque per-process value or read `session.key`, update
-it; the signature check itself is unchanged — verify a delivery the same way
-you always did:
+The plane's webhook adapter signs every delivery with an
+`X-Runbound-Timestamp` / `X-Runbound-Signature` pair over one signing string.
+In the body, `session.id` is the sha256 key hash — the plane has no notion of
+a per-process id, since any worker can serve the same session — and there is
+no `session.key` field; a raw key reaches you, if you opt in, only through the `{key}` in your service's link template (a per-service
+dashboard field). Verify a delivery like this:
 
 ```python
 from runbound import verify_webhook_signature
@@ -337,7 +331,7 @@ except GuardrailTripped as exc:
 **Fleet mode:** set a profile once, on the plane, through the admin API
 (`PUT /v1/admin/refusals` org-wide, `PUT /v1/admin/services/{service}/refusals`
 per service — see [the control plane docs](https://runbound.co/docs/control-plane))
-and the change reaches every worker within `control_plane_poll_s`, no
+and the change reaches a worker at its next poll (`control_plane_poll_s` apart), no
 redeploy. The last profile a worker saw survives a plane outage, exactly
 like a policy rollout. `coverage()["refusals"]` reports which tier is
 currently answering — `"plane"`, `"local"`, or `"default"`.

@@ -116,7 +116,7 @@ def test_price_call_prices_a_cache_write_at_its_own_premium(unwarned):
     cost, estimated = price_call(
         "claude-sonnet-4-5", 1500, 80, tokens_cached_in=1000, tokens_cache_write_in=300
     )
-    price_in, price_out, price_cached_in, price_write_in = price_for("claude-sonnet-4-5")
+    price_in, price_out, price_cached_in, price_write_in = price_for("claude-sonnet-4-5")[:4]
     expected = (
         (200 / 1e6) * price_in
         + (1000 / 1e6) * price_cached_in
