@@ -38,9 +38,9 @@ out which one you're in. See
 
 **Level 2: identity limits.** One line per unit of work. Wrap each run in
 `runbound.session(key)` — the key is any id you already have: a run id, a job,
-a tenant, a customer — and every control above becomes per key instead of per
-process: this run's budget, this run's ladder, this run stopped, every other
-caller untouched. A run budget and a key's own budget are checked side by
+a tenant, a customer — and every budget and posture above becomes per key
+instead of per process: this run's budget, this run's ladder, this run stopped,
+every other caller untouched. Circuits and caps stay per process. A run budget and a key's own budget are checked side by
 side, and whichever is tighter wins — see
 [Runs keyed by any id](../guides/runs.md#key-and-run-are-two-different-things).
 With the control plane the key's budget and latch hold across every worker

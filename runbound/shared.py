@@ -1355,10 +1355,16 @@ class RemoteState:
                 entries_window=counts,
                 entries_local_share=local_share,
                 reason=reason,
+                applied_policy_version=self._applied_policy_version(),
             )
         except Exception:
             _LOG.warning("runbound: could not read the plane status", exc_info=True)
             return PlaneStatus(mode="degraded")
+
+    def _applied_policy_version(self) -> int | None:
+        """The policy version a fetch has installed, ``None`` while none has."""
+        with self._lock:
+            return self._policy_version or None
 
     def _window_reason(self, causes: dict) -> str:
         """The reason string for a link degraded by the entry window.

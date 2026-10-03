@@ -108,7 +108,7 @@ refusal for the specific number that bound it.
   fresh — on the same cumulative counters. Re-admits, does not reset: a
   session still over budget re-trips immediately, with the same detector,
   which is the wall the setting promises. It is **not** a windowed budget
-  that zeroes on a schedule — that is a different, unbuilt feature — and
+  that zeroes on a schedule — that is `budget_window`, a different setting — and
   nothing expires unless you set this. `runbound.clear(key)` is the one call
   that actually zeroes the counters.
 - **Key and tags reach the anomaly.** A spike anomaly carries them in

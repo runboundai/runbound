@@ -483,7 +483,8 @@ fix — budget, tokens, steps, time, posture, policy, halt, blast radius,
 approval, loop, error storm, spike — `True`, with a `retry_after` where one
 is known, for `circuit` and `concurrency`, and `True` with no known
 `retry_after` for `plane`); `provider_called`; and `scope` (which level
-decided, and a salted hash of the session's key, never the key itself).
+decided, and an UNSALTED sha256 hash of the session's key, so one caller matches
+across workers; never the key itself).
 `runbound.is_retryable(exc)` is the predicate a retry loop should use in
 place of guessing from the exception's message or type.
 
@@ -662,7 +663,7 @@ nothing left for a fork to un-gate.
 
 **The bound.** Every detector, every reaction, the latch, refusals, tool
 policy, the circuit breaker and the in-flight cap work with no token, no
-network and no account, forever. `on_anomaly` decides how the anomaly reaches
+network and no account: free and local. `on_anomaly` decides how the anomaly reaches
 the customer's *own* process, and the three settings are alternatives, never
 a set: `"raise"` hands the caller a `GuardrailTripped`, `"callback"` hands the
 anomaly to the customer's own function, and only `"warn"` logs it

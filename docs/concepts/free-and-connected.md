@@ -55,12 +55,12 @@ of each is a *tightening*, never a requirement.
 | Dollar and token budgets, reservation, per-call ceilings | yes | fleet-shared counters, fleet reservation, windows that survive restarts |
 | Steps, events, run time | yes | fleet configuration |
 | Concurrency, fan-out, actions per run, blast radius | yes, per process | fleet blast radius |
-| Loop and cycle shapes, retry and error storms | yes | cross-worker history |
-| Spike detection, the ladder | yes | baselines across restarts, peer baselines |
+| Loop and cycle shapes, retry and error storms | yes | cross-worker storm signals |
+| Spike detection, the ladder | yes | the key's ladder rung kept across workers and restarts |
 | Provider circuit, count and rate modes | yes | shared circuit state |
 | Tool rules, capability classes, class rules, constraints | yes | org and agent policy, versioning, rollout |
 | Postures and safe mode | **yes, locally configured** | fleet-wide posture, Narrow, automatic rollout, incident history |
-| Approvals | local callback and same-process approve | remote approvals, the queue, the audit line |
+| Approvals | local callback and same-process approve | the refusal ledger and its audit export |
 | MCP client enforcement | yes | central governance of MCP tools |
 | Dry run / shadow | yes, locally | centralized simulation and policy impact preview |
 | Decisions, local events, local audit trail | yes | durable centralized records, timelines, export |
@@ -68,7 +68,7 @@ of each is a *tightening*, never a requirement.
 | Hierarchy (process, agent, key, run, tag scopes) | yes, inside one process | org, service and agent scopes across workers |
 | Refusal profiles, pricing, custom prices | yes | fleet-managed |
 | Kill switch | local manual stop | fleet Stop and Narrow with convergence |
-| Remote latch, alerts routing, dashboard, roles, API keys, retention, SSO, RBAC, SLA | none | all |
+| Remote latch, alerts routing, dashboard, API keys, retention | none | all |
 
 ## The mechanism
 
@@ -87,5 +87,11 @@ The SDK itself never refuses anything for plan reasons: entitlements are a
 separate object, carrying only coordination and scale facts (protected
 agents, synced workers, history), never a control name — the control
 engine reads no entitlement at all.
+
+## Planned, not built
+
+Named on the [roadmap](../roadmap.md) and **not built**: a fleet-shared
+`max_calls` tally, fleet-wide fan-out counters and in-flight caps, and native
+wrappers for non-OpenAI-shaped SDKs. Nothing above depends on them.
 
 ---

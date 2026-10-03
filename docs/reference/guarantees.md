@@ -103,11 +103,13 @@ Honest limitations today:
   replicas mean N times the numbers you wrote.
   [Fleet mode](../guides/fleet-mode.md#fleet-mode--one-truth-across-all-your-workers-control-plane)
   shares the budget, the latch, the strike count, the org policy and the
-  provider circuits; the three bullets below are what it does **not** fix.
-- **Spike baselines are in-process and reset on restart.** A redeployed worker
-  re-learns each session over its first `spike_warmup_calls` calls, and two
-  workers serving the same user learn separately. Baselines are not among the
-  things fleet mode shares.
+  provider circuits; the bullets below are what it does **not** fully fix.
+- **Without a control plane, spike baselines are in-process and reset on
+  restart.** A redeployed worker re-learns each session over its first
+  `spike_warmup_calls` calls, and two workers serving the same user learn
+  separately. Connected to a plane, a key's held baseline and ladder rung are
+  kept there and handed back to any worker on the next entry, and a key with
+  no baseline yet is judged against the service-wide median.
 - **Fan-out counters and the in-flight cap stay per worker, plane or no
   plane.** `max_active_sessions`, `max_session_depth`, `max_child_sessions` and
   `max_inflight_calls` are enforced against this process's own counts, so

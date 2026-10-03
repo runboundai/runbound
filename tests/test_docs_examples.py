@@ -70,6 +70,7 @@ REQUIRED_IDS = (
     "llm-decorator",
     "circuit-open",
     "langchain-handler",
+    "otel-export",
     "fleet-init",
     "plane-unreachable",
     "self-hosted-init",
@@ -163,7 +164,13 @@ def _requires(path: Path) -> tuple[str, ...]:
 def _missing_packages(requires: tuple[str, ...]) -> tuple[str, ...]:
     import importlib.util
 
-    return tuple(name for name in requires if importlib.util.find_spec(name) is None)
+    def absent(name: str) -> bool:
+        try:  # a dotted name raises, rather than answering None, when its parent package is missing
+            return importlib.util.find_spec(name) is None
+        except ModuleNotFoundError:
+            return True
+
+    return tuple(name for name in requires if absent(name))
 
 
 # --- discovery: every file, and the id contract ------------------------------

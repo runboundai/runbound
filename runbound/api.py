@@ -226,7 +226,7 @@ def init(**kwargs: Any) -> None:
     ``on_budget_soft``, ``max_actions_per_run``, the eight circuit-rate
     knobs, the three loop-shape knobs, and the eleven spike/ladder knobs
     (``spike_detection``, ``on_spike`` and the nine tuning knobs under it)
-    — is a real ``init()`` keyword again, free forever, with no account and
+    — is a real ``init()`` keyword again, free and local, with no account and
     no plane required. A control plane, when connected, can only tighten
     what the code already configured (or configure one from nothing) —
     never loosen it; see :mod:`runbound.controls_merge`.
@@ -2762,6 +2762,7 @@ def _record_llm_call(
     with _LOCK:
         engine = _ENGINE
     if engine is None:
+        _tell_sinks_of_call(model, provider, None, "ok", None)
         return
     _note_runtime(model, provider)
     cost, estimated = price_call(
@@ -2788,6 +2789,15 @@ def _record_llm_call(
         tokens_estimated=tokens_estimated,
         provider=provider,
     )
+    _tell_sinks_of_call(model, provider, cost, "ok", "estimated" if estimated else None)
+
+
+def _tell_sinks_of_call(model: "str | None", provider: "str | None", cost: object, outcome: str, priced: "str | None") -> None:
+    """Hand a guarded call to the sinks (the OpenTelemetry counters). Fail-open: it never costs the call."""
+    try:
+        local_events.record_call(model, provider, float(cost) if isinstance(cost, (int, float)) else None, outcome, priced)
+    except Exception:
+        _LOG.warning("runbound could not tell the sinks about a call; continuing", exc_info=True)
 
 
 def _note_runtime(model: str | None, provider: str | None) -> None:
@@ -3029,6 +3039,7 @@ class _Hooks:
         """
         _coverage.guarded_call()
         _coverage.provider_seen(provider)
+        _tell_sinks_of_call(model, provider, None, "error", None)
         try:
             engine, state = _active()
             if engine is None or state is None:
@@ -3945,7 +3956,7 @@ def safe_mode() -> bool:
 def envelope(key: str | None = None) -> dict | None:
     """The execution envelope for ``key``'s session, or this one.
 
-    Local execution safety is free forever, and the envelope is the
+    Local execution safety is free and local, and the envelope is the
     single picture of it. The same object also rides the heartbeat so the
     plane can show it without a call of its own.
 

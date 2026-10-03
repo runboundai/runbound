@@ -73,6 +73,9 @@ _DECISIONS = _Ring()
 _LOCK = threading.Lock()
 _ON_EVENT: "Callable[[dict], None] | None" = None
 _SINKS: "list[Callable[[dict], None]]" = []
+#: Listeners for :func:`record_call` only. Kept apart from ``_SINKS`` so the records every sink hears stay what they have
+#: always been (anomalies, refusals, posture and runtime changes, Decisions); a call is far more frequent than any of them.
+_CALL_SINKS: "list[Callable[[dict], None]]" = []
 #: The last value seen per runtime ``what`` ("model", "provider",
 #: "policy_version", ...), for :func:`note_runtime_value`.
 _LAST_VALUES: dict = {}
@@ -108,6 +111,20 @@ def remove_sink(sink: "Callable[[dict], None]") -> None:
             _SINKS.remove(sink)
 
 
+def add_call_sink(sink: "Callable[[dict], None]") -> None:
+    """Tell ``sink`` about every guarded model call from now on (see :func:`record_call`). Registering twice registers once."""
+    with _LOCK:
+        if sink not in _CALL_SINKS:
+            _CALL_SINKS.append(sink)
+
+
+def remove_call_sink(sink: "Callable[[dict], None]") -> None:
+    """Stop telling ``sink`` about calls. Removing one that is not registered is a no-op."""
+    with _LOCK:
+        if sink in _CALL_SINKS:
+            _CALL_SINKS.remove(sink)
+
+
 def clear_for_tests() -> None:
     """Wipe both rings, the callback, the sinks and every last runtime
     value. Test isolation only."""
@@ -116,14 +133,20 @@ def clear_for_tests() -> None:
     configure(None)
     with _LOCK:
         _SINKS.clear()
+        _CALL_SINKS.clear()
         _LAST_VALUES.clear()
 
 
-def _dispatch(record: dict) -> None:
+def _dispatch(record: dict, key: "str | None" = None) -> None:
     """Fail-open: a raising ``on_event`` callback or sink never reaches the
     caller whose action produced this record, and never stops the next sink
     from hearing it — the same golden rule every other observer in this SDK
-    is held to."""
+    is held to.
+
+    ``key`` is the raw session key a record is about, when the record itself
+    carries none (an anomaly): it goes to the sinks only, as ``"key"``, so a
+    sink that leaves the process can redact it — never into a ring or to
+    ``on_event``."""
     with _LOCK:
         callback = _ON_EVENT
         sinks = list(_SINKS)
@@ -132,14 +155,17 @@ def _dispatch(record: dict) -> None:
             callback(dict(record))
         except Exception:
             _LOG.warning("runbound: on_event callback raised; ignoring", exc_info=True)
+    sink_record = record if key is None or "key" in record else {**record, "key": key}
     for sink in sinks:
         try:
-            sink(dict(record))
+            sink(dict(sink_record))
         except Exception:
             _LOG.warning("runbound: an event sink raised; ignoring", exc_info=True)
 
 
-def record_anomaly(session_id: "str | None", anomaly: Any, reacted: "str | None") -> None:
+def record_anomaly(
+    session_id: "str | None", anomaly: Any, reacted: "str | None", key: "str | None" = None
+) -> None:
     """Append one delivered :class:`~runbound.events.Anomaly` as an
     ``"anomaly"`` event, and also as a ``"refusal"`` event when it actually
     stopped *this* call — ``reacted`` is ``"raise"`` (a wall trip) or
@@ -162,18 +188,18 @@ def record_anomaly(session_id: "str | None", anomaly: Any, reacted: "str | None"
         "reacted": reacted,
     }
     _EVENTS.append(record)
-    _dispatch(record)
+    _dispatch(record, key)
     if reacted in ("raise", "door"):
         refusal = dict(record)
         refusal["kind"] = "refusal"
         _EVENTS.append(refusal)
-        _dispatch(refusal)
+        _dispatch(refusal, key)
     decision = details.get("decision")
     if isinstance(decision, dict):
         stamped = dict(decision)
         stamped.setdefault("at", record["at"])
         _DECISIONS.append(stamped)
-        _dispatch({"kind": "decision", **stamped})
+        _dispatch({"kind": "decision", **stamped}, key)
 
 
 def record_posture(
@@ -211,6 +237,36 @@ def record_posture(
         record["key"] = key
     _EVENTS.append(record)
     _dispatch(record)
+
+
+def record_call(model: "str | None", provider: "str | None", cost_usd: "float | None", outcome: str,
+                priced: "str | None" = None) -> None:
+    """Tell the call sinks (:func:`add_call_sink`) about one guarded model call, and nothing else.
+
+    A ``"call"`` record goes to call sinks only: not to the rings or ``on_event`` (they hold what happened *to* a call, not the
+    calls: :func:`runbound.events` is unchanged) and not to :func:`add_sink` sinks. It returns at once when none is registered. ``outcome`` is ``"ok"`` or
+    ``"error"``; ``cost_usd`` is the SDK's own estimate for a call it priced (``None`` when it did not, or for a failed call),
+    ``priced`` is ``"estimated"`` when that figure came from a fallback price. A model name and an endpoint label, numbers and
+    names: never a prompt, a reply or an argument.
+    """
+    if not _CALL_SINKS:
+        return
+    with _LOCK:
+        sinks = list(_CALL_SINKS)
+    record = {
+        "kind": "call",
+        "at": time.time(),
+        "model": model,
+        "provider": provider,
+        "cost_usd": cost_usd,
+        "outcome": outcome,
+        "priced": priced,
+    }
+    for sink in sinks:
+        try:
+            sink(dict(record))
+        except Exception:
+            _LOG.warning("runbound: a call sink raised; ignoring", exc_info=True)
 
 
 def record_runtime_change(what: str, previous: object, current: object) -> None:

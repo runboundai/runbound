@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-03
+
+### Added
+
+- **`plane_status().applied_policy_version`**: the org policy version this worker has actually fetched and installed
+  (`None` until one has been, and without a plane). Not the version the last heartbeat announced, so a policy write
+  can be checked as having reached this worker. Read-only; nothing new on the wire.
+- **`runbound[otel]`: OpenTelemetry export.** `from runbound import otel; otel.enable()` sends anomalies, refusals,
+  posture changes and runtime changes as log records (a Decision's fields as `runbound.decision.*` attributes) and
+  five counters (`runbound.refusals`, `runbound.anomalies`, `runbound.posture_changes`, `runbound.guarded_calls`,
+  `runbound.estimated_usd`; the last two tick once per guarded model call). A session key leaves only
+  as its hash. It does nothing, and returns `False`, when the packages are absent. The local event sinks now also
+  receive the raw session key of an anomaly or refusal (never `events()` or `on_event`), so a sink that leaves the
+  process can redact it.
+
 ## [0.10.0] - 2026-10-03
 
 ### Added
@@ -768,7 +783,7 @@ happens.
 
 Restated here rather than as a Removed-then-Added pair, since nothing
 between was ever released: **open-source runtime, cloud control plane.**
-Every local, deterministic control is free forever, configurable in code,
+Every local, deterministic control is free and local, configurable in code,
 with no account. `postures`, `capabilities`, `budget_soft`,
 `on_budget_soft`, `max_actions_per_run`, the eight circuit-rate knobs
 (`circuit_mode`, `circuit_failure_rate`, `circuit_min_calls`,
@@ -1009,7 +1024,7 @@ Earlier versions were internal.
   `verify_webhook_signature` and the outbound-thread draining bookkeeping
   stay in `runbound/alerts.py` — the receiver's helper, and what
   `export.py` needs at interpreter exit — and `on_anomaly="callback"` stays
-  free forever, a hook into the customer's own process, not a delivery
+  free and local, a hook into the customer's own process, not a delivery
   channel. This changes nothing about detection: every detector, the
   latch, refusals, tool policy, the provider circuit and the in-flight cap
   are identical with and without a token, `on_anomaly`'s three reactions

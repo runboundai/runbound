@@ -1148,7 +1148,9 @@ class Engine:
         except Exception:
             retry_snapshot = None
         try:
-            local_events.record_anomaly(getattr(session, "session_id", None), anomaly, "raise")
+            local_events.record_anomaly(
+                getattr(session, "session_id", None), anomaly, "raise", getattr(session, "key", None)
+            )
         except Exception:
             _LOG.warning(
                 "runbound could not record a local event for a circuit refusal",
@@ -2826,7 +2828,7 @@ class Engine:
         """Hand one verdict, and what it cost, to every observer. Never raises."""
         try:
             session_id = getattr(session, "session_id", None)
-            local_events.record_anomaly(session_id, anomaly, reacted)
+            local_events.record_anomaly(session_id, anomaly, reacted, getattr(session, "key", None))
         except Exception:
             _LOG.warning("runbound could not record a local event", exc_info=True)
         for observer in self.observers:

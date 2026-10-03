@@ -63,6 +63,8 @@ snippets that tests execute, so a page here and its published twin cannot differ
   anything else behind an OpenAI-shaped endpoint.
 - [LangChain / LangGraph](guides/langchain.md) — the callback handler, and
   what it does and does not see.
+- [OpenTelemetry](guides/opentelemetry.md) — refusals, anomalies and posture
+  changes as OpenTelemetry log records and three counters.
 - [Async and streaming](guides/streams.md) — async clients, streamed calls
   and abandoned streams.
 

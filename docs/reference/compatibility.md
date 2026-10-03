@@ -68,7 +68,7 @@ you run only Anthropic, older versions are fine.
     through the wrapper in the same private conformance kit (recorded against
     the real SDK; not part of this repository) — recorded, not live.
 [^live]: Live, over the network, against the real hosted Anthropic API on
-    `claude-haiku-4-5`, 2026-09-14: nineteen scenarios, every one a PASS with
+    `claude-haiku-4-5`, 2026-09-21 (runbound 0.4.0): twenty-two scenarios, every one a PASS with
     the numbers it observed — cost accounting against the response's own
     usage object, sync and async, streamed and abandoned mid-stream,
     model-requested and decorated tool loops, policy deny, a budget trip and
@@ -76,14 +76,17 @@ you run only Anthropic, older versions are fine.
     and still served, the in-flight cap against a second concurrent stream,
     an invalid model name that does *not* count against the provider's
     circuit, extended thinking read and priced, a cache hit priced at the
-    cached rate, `record_call` parity, and a latch healing on its TTL. The
-    run cost $0.031. And against the real hosted OpenAI API on `gpt-4o-mini`
-    (`o4-mini` for reasoning), 2026-09-14: the same nineteen plus a
-    twentieth — a stream sent without `stream_options={"include_usage":
-    True}` records zero tokens and warns exactly once — every one a PASS,
-    with reasoning tokens read as a subset of the output and priced once, and
-    a cache hit read as a slice of the prompt and priced at the cached rate.
-    That run cost $0.013 and called `chat.completions.create` only: the
+    cached rate, `record_call` parity, a latch healing on its TTL, a
+    reservation's lifecycle, a stopped session making no provider call, and
+    action counters. The run made 42 API calls and cost $0.038 by runbound's
+    own accounting. And against the real hosted OpenAI API on `gpt-4o-mini`
+    (`o4-mini` for reasoning), 2026-09-21 (runbound 0.4.0): twenty-three
+    scenarios, every one a PASS, among them a stream sent without
+    `stream_options={"include_usage": True}`, which records zero tokens and
+    warns exactly once, reasoning tokens read as a subset of the output and
+    priced once, and a cache hit read as a slice of the prompt and priced at
+    the cached rate. That run made 46 API calls, cost $0.006 by runbound's own
+    accounting, and called `chat.completions.create` only: the
     Responses API is proven by recorded responses replayed through the
     wrapper, not live. Like the recorded fixtures above, both runs live in a
     private conformance kit in the development monorepo and are not part of
@@ -104,7 +107,7 @@ anywhere in this repo; Azure is expected to work through the OpenAI shape
 (same client class, different `base_url`) but that expectation is untested
 here. Gemini, Bedrock, Mistral and Cohere use their own SDK shapes and are not
 wrapped at all today — see [Paths that are not guarded
-today](#paths-that-are-not-guarded-today).
+today](../concepts/what-it-sees.md#paths-that-are-not-guarded-today).
 
 **Priced model families** (USD per 1M tokens, list prices that drift — override
 with `custom_prices` when you need exact numbers):
@@ -141,10 +144,11 @@ its own cache fields (`prompt_tokens_details.cached_tokens` /
 `input_tokens_details.cached_tokens` for OpenAI, `cache_read_input_tokens`
 for Anthropic) and prices the discount automatically, streamed or not. Whether
 the provider caches at all is its decision, not runbound's: measured on
-`gpt-4o-mini` on 2026-09-14, chat completions served a repeated
-8,000-character system prompt from cache with no option set, while the
-Responses API reported `cached_tokens: 0` until the request set
-`prompt_cache_key`. A
+`gpt-4o-mini` in the live run of 2026-09-21, chat completions served a
+repeated 8,000-character system prompt from cache with no option set (1,408
+of 1,434 prompt tokens), while the Responses API reported `cached_tokens: 0`
+until the request set `prompt_cache_key` (an earlier measurement,
+2026-09-14, not repeated in that run). A
 model with no published cached rate (`gpt-4-turbo`, `gpt-3.5-turbo` — both
 predate prompt caching) prices every token at the full input rate instead of
 guessing a discount that was never published.

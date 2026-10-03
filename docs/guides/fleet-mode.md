@@ -23,8 +23,8 @@ Detection itself does not move: the detectors still run in your process, on
 your thread, with no model calls, exactly as they do now. The plane only tells
 each worker what the *other* workers already know.
 
-Those five are the whole list, and the list is honest: spike baselines, the
-`max_calls` tally and the fan-out / in-flight counters are still per worker —
+Those five are the whole list, and the list is honest: the `max_calls`
+tally and the fan-out / in-flight counters are still per worker —
 see [the limitations](../reference/guarantees.md#guarantees-and-limitations).
 
 ```python
@@ -170,8 +170,9 @@ runbound.plane_status()
   not 600 — and once the plane has persisted it, it never moves again,
   whatever joins the fleet or goes stale afterwards. **Measured, twelve
   simulated workers against a real plane (`poll_s=1`, so the bound is
-  3s): converged in 1.60s, unchanged on a second read taken a full poll
-  interval later.** A worker that goes fully quiet after the halt is not counted;
+  3s), in the scorecard run of 2026-10-02: the plane's own figure was
+  1.79s (the harness's stopwatch read 1.86s), and it read the same 1.5s
+  later.** A worker that goes fully quiet after the halt is not counted;
   a halt lifted before every worker acked stays unconverged forever, on
   purpose — an operator does not need a number for a switch that was
   already turned back off.
@@ -185,11 +186,12 @@ a single file.
 
 | Endpoint | When | Fields |
 |---|---|---|
-| `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`), `active` (open `session()` blocks), `coverage` (the counts `runbound.coverage()` shows), `tools_hash`, and `tools` — the tool report — only when that hash changed |
-| `POST /v1/enter` | a `session()` block opens, on a cache miss | `key_hash`, `tags`, `service`, `worker_id`, `budget_usd`, `local_spend_usd`, `local_total_tokens` |
+| `POST /v1/hello` | every `control_plane_poll_s` | `service`, `worker_id`, `sdk_version`, `policy_version_seen`, `controls_version_seen`, `circuits` (`{label: "open"\|"half_open"\|"closed"}`), `active` (open `session()` blocks), `coverage` (the counts `runbound.coverage()` shows), `can_stop`, `halt_ack`, `tools_hash`, and `tools` — the tool report — only when that hash changed; when present, `controls_refused` (Controls the worker would not apply), `envelope` and `entries_local_share` |
+| `POST /v1/enter` | a `session()` block opens, on a cache miss | `key_hash`, `tags`, `service`, `worker_id`, `budget_usd`, `local_spend_usd`, `local_total_tokens`, and the raw `key` only when `send_session_keys` is on |
 | `POST /v1/trip` | a critical trip latches a session, and every block refused at the door because a key is latched | `key_hash`, the anomaly (`ts_wall`, `key_hash`, `detector`, `severity`, `message`, scrubbed `details`, `reacted`, `anomaly_id`), `latch_ttl_s`, `strikes`, `generation`, `refused_at_door`, `anomaly_id`, and a `worker_id` the SDK leaves empty |
-| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`ts_wall`, `kind`, `key_hash`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`, `priced`, `partial`, `tokens_estimated`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
+| `POST /v1/events` | batched in the background; the `exits` and `circuits` lanes always, the `events` and `anomalies` lanes while `export_events` is on | `service`, `worker_id`, `sent_at`, `dropped`, and four lanes — `events` (`ts_wall`, `kind`, `key_hash`, `step`, `tokens_in` / `tokens_out` / `tokens_reasoning`, `cost_usd`, `model`, `tool_name`, `args_hash`, `duration_s`, `error_class`, `priced`, `partial`, `tokens_estimated`, `provider`), `anomalies`, `exits` (`key_hash`, `seq`, `spend_delta_usd`, `tokens_delta`, `steps_delta`, `tool_calls`, `events_delta`, `errors_delta`, `tokens_cached_delta`, `last_detector`, `trigger_message`, `trigger_age_s`, and this key's held baseline and ladder rung: `baseline_duration_s`, `baseline_output_tokens`, `baseline_samples`, `rung_level`, `rung_allowance`, `rung_allowance_start`), `circuits` (`label`, `state`, `failures`, `cooldown_s`) |
 | `GET /v1/policy?service=…` | the heartbeat announced a new policy version | nothing but the service name |
+| `GET /v1/controls?service=…` | the heartbeat announced a new Controls version | nothing but the service name |
 | `POST /v1/clear` | `runbound.clear(key)` | `key_hash` |
 
 The **tool report** is the one record built from your code rather than from
@@ -304,7 +306,7 @@ runbound.plane_status()
 #             entries_window={'plane': 41, 'cache': 55, 'local': 4,
 #                              'local_causes': {'timeout': 3, 'plane_loss': 0,
 #                                               'plane_unavailable': 0, 'error': 1}},
-#             entries_local_share=0.04, reason=None)
+#             entries_local_share=0.04, reason=None, applied_policy_version=4)
 
 runbound.fleet_status("user:42")
 # {'fleet_spend_usd': 4.9, 'fleet_tokens': 900000, 'strikes': 1, 'generation': 3,

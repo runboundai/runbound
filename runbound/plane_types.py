@@ -551,6 +551,13 @@ class PlaneStatus:
     ``"plane errors"`` (the window's majority cause is neither — a
     connection refused, a malformed reply, and so on), or ``None`` while
     nothing is wrong.
+
+    ``applied_policy_version`` is the org policy version this worker has
+    actually fetched and installed — what its decisions are made against —
+    and ``None`` until one has been (and always without a plane). It is not
+    the version the last heartbeat announced: an announced version whose
+    fetch failed, or has not happened yet, is not applied. Read-only, and
+    nothing about it travels on the wire.
     """
 
     mode: str = "local"
@@ -562,6 +569,7 @@ class PlaneStatus:
     entries_window: dict = field(default_factory=dict)
     entries_local_share: float = 0.0
     reason: str | None = None
+    applied_policy_version: int | None = None
 
 
 #: Longest a ``batch_id`` may be — a plane column width, mirroring

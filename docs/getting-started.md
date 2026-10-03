@@ -40,10 +40,14 @@ import runbound
 runbound.init(budget_usd=5.0, on_anomaly="raise")   # everything below is now guarded
 ```
 
-That one line already gives you dollar and token budgets, per-call caps, step
-and event limits, run timeouts, error-storm detection with a circuit per
-provider, loop detection from the tool calls a model itself asks for, and
-spike detection — all local, all free, no network call. See [Three levels of
+That one line sets a $5.00 dollar budget, and `on_anomaly="raise"` makes a
+refusal raise. Four things are on by default and need nothing more:
+error-storm detection (10 failures), a circuit per provider that notifies but
+does not block (`on_provider_failure="open"` makes it block), loop detection
+from the tool calls a model itself asks for (a log line, then an alert;
+**containment needs `on_spike="limit"`**), and spike detection (`on_spike="notify"`).
+Token limits, step and event limits, per-call caps and run timeouts are off
+until you set them. All of it is local, free, no network call. See [Three levels of
 protection](concepts/three-levels.md) for the honest limits on what one line
 alone can and cannot see.
 

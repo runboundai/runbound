@@ -22,6 +22,7 @@ if not EXAMPLES.is_dir():  # pragma: no cover
 PAGES = {
     "docs/guides/a-runaway.md": ["runaway-arc"],
     "docs/guides/what-changed.md": ["runtime-change"],
+    "docs/guides/opentelemetry.md": ["otel-export"],
 }
 #: pages that also carry hand-written fragments: only these ids must appear verbatim.
 MUST_CONTAIN = {"docs/getting-started.md": ["graded-loop", "verify-events"]}

@@ -16,9 +16,12 @@ costs you and buys you in return.
 
 ## No prompt or reply inspection
 
-runbound never reads what an agent said or what a model answered. A detector
-sees counts, timings and prices; it has no field to put message text in even
-if it wanted one — see [What the SDK actually sees](what-it-sees.md).
+runbound never reads what an agent said or what a model answered, and never
+stores, logs or sends it on. A detector sees counts, timings and prices; it has
+no field to put message text in even if it wanted one — see
+[What the SDK actually sees](what-it-sees.md). The one thing that touches the
+text is a character count: the gateway and the action door count the body's
+characters in transit (to estimate tokens and size) and keep none of it.
 
 **Costs you:** runbound will not catch a hallucination, a bad or unsafe
 answer, or an attempt to manipulate the model through its input. "The agent

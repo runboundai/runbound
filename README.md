@@ -7,8 +7,8 @@ that — free forever, no account required.
 
 Add one initialization line. No agent rewrites, decorators, or policy code
 required. runbound counts, times, hashes and prices what an agent does; it
-never reads a prompt or a reply, puts no gateway in your hot path, and never
-speaks to your users — when it refuses something, it hands control straight
+never reads a prompt or a reply (and never stores, logs or sends one on),
+puts no gateway in your hot path, and never speaks to your users — when it refuses something, it hands control straight
 back to your own code.
 
 ## Install
@@ -91,6 +91,11 @@ priced with no network call and no account:
 - local safe mode
 - local enforcement
 
+These are what you can switch on, not what one line sets: `init(budget_usd=5.0)`
+sets the dollar budget; token, step, event, per-call and run limits are off until
+you state them. Error-storm, loop and spike detection are on by default and notify;
+a loop is only contained with `on_spike="limit"`.
+
 Two honest limits, in the same breath: this level only sees what a wrapped
 client or `@runbound.tool` reports it, so an action's own body is only
 governed once that tool carries `@runbound.tool`, and a raw or unsupported
@@ -99,8 +104,9 @@ out which one you're in.
 
 **Level 2: identity limits.** One line per unit of work,
 `runbound.session(key)` — the key is any id you already have: a run, a job,
-a tenant, a customer. Every limit above becomes per key instead of per
-process, so one caller's run stops without touching anyone else's.
+a tenant, a customer. Every budget and posture above becomes per key instead of per
+process, so one caller's run stops without touching anyone else's. Circuits and
+caps (fan-out, in-flight, active sessions) stay per process.
 
 **Level 3: capability limits.** Decorate the tools that are irreversible or
 reach the outside world with `@runbound.tool`, state a rule (deny, a call
@@ -114,7 +120,10 @@ ending the run.
 There is no fake success. A refusal is a typed `ExecutionRefused` — never a
 swallowed error, never an answer made up to look normal — carrying `reason`,
 `retryable` and `provider_called`, so your own code decides what happens
-next: retry, queue, fall back, or tell the caller. See
+next: retry, queue, fall back, or tell the caller. Catch that one name:
+every refusal is an `ExecutionRefused` (`GuardrailTripped` is the same class,
+and `SafeModeViolation` and `PolicyViolation` are subclasses), and it is never
+one of a provider's own exceptions. See
 [Handling refusals](docs/guides/handling-refusals.md).
 
 ## Content-independent enforcement
@@ -144,8 +153,9 @@ See [Free SDK, connected plane](docs/concepts/free-and-connected.md).
 
 ## Documentation
 
-The manual lives in [`docs/`](docs/README.md); it is also published, with
-executed snippets, at [runbound.co/docs](https://runbound.co/docs).
+The manual lives in [`docs/`](docs/README.md), and that repository manual is
+canonical: [runbound.co/docs](https://runbound.co/docs) renders it at build time,
+with the snippets the tests execute.
 
 - **[Getting started](docs/getting-started.md)** — install, the core loop, and
   checking what is actually guarded.
