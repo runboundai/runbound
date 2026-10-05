@@ -54,8 +54,8 @@ the session `key`. Two properties are deliberate, and both are in
 it is enforced **regardless of `on_anomaly`** — like a per-call cap, this is a
 number you stated, not something inferred — and it **latches nothing**, because
 the thing that went wrong is the shape of the run, not this key. The next
-block for the same key is judged on its own shape. Every refusal is recorded;
-the plane's alert dedup, not the SDK, makes a repeat page once
+block for the same key is judged on its own shape. Every refusal is recorded,
+the first 100 per rule and key and then one summary with the count; the plane's alert dedup, not the SDK, makes a repeat page once
 (`tests/test_fanout.py::test_every_refusal_is_its_own_record_however_often_it_is_retried`).
 
 Lineage is recorded where a session is *born*: a key first entered under one

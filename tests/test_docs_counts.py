@@ -36,3 +36,19 @@ def test_the_opentelemetry_counters_are_five_wherever_the_docs_count_them():
     assert "Five **counters**" in guide
     for name in counters:
         assert name in guide
+
+
+def test_the_readme_says_how_many_manual_pages_the_site_renders_whole():
+    """The README says the site renders six manual pages whole; the site's own list of them (``manual-sources.ts``, which
+    exists in the development monorepo only) has exactly that many, and each is a real file of this manual."""
+    import pytest
+
+    sources = _ROOT.parent / "website" / "scripts" / "manual-sources.ts"
+    if not sources.exists():
+        pytest.skip("the site is not part of this checkout (the public repository)")
+    listed = re.findall(r'source:\s*"(docs/[^"]+\.md)"', sources.read_text())
+    assert len(listed) == 6, "README.md says six; update it with manual-sources.ts"
+    for path in listed:
+        assert _ROOT.joinpath(path).is_file(), path
+    readme = _read("README.md")
+    assert "renders whole the six" in readme and "manual-sources.ts" in readme

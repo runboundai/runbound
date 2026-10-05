@@ -276,6 +276,9 @@ class Engine:
         )
         self._circuit_rate_active: dict | None = None
         self._alerted: set[tuple] = set()
+        # An outage pages once, and the page is forgotten when the circuit closes, so the NEXT outage of the same
+        # provider pages again (a long-lived worker would otherwise never report a second one).
+        self.circuit.on_close = self._forget_circuit_alert
         # Per (session id, detector, rule, tool): [refusals seen, refusals
         # suppressed since the last summary, reacted]. See REFUSAL_RECORD_CAP.
         self._refusal_counts: "OrderedDict[tuple, list]" = OrderedDict()
@@ -1600,6 +1603,10 @@ class Engine:
                 provider,
                 exc_info=True,
             )
+
+    def _forget_circuit_alert(self, provider: str) -> None:
+        """``provider``'s circuit closed: the outage that paged is over, so its page is forgotten. Called by the breaker, under its lock."""
+        self._alerted.discard((CIRCUIT_DETECTOR, provider))
 
     def _is_slow_call(self, duration_s: float) -> bool:
         """Does ``duration_s`` cross ``circuit_slow_call_seconds``?

@@ -87,8 +87,9 @@ A tool action's door is the same shape, minus the money hold: posture, a
 capability class rule, then (`config.envelope` only) `max_actions_per_run`.
 
 `admit` judges a call from numbers already known — every door stage is a pure
-comparison (`runbound/admission.py`); the one estimate in it is the input side
-of the money hold, which is the request's characters divided by four — and every
+comparison (`runbound/admission.py`); the estimates in it are the input side
+of the money and token holds: the request's characters divided by four, times
+1.3 for Claude 4.7 and later — and every
 refusal raised **at the door** carries a `Decision` (`exc.decision`, also
 `anomaly.details["decision"]`): the verdict, which boundary of the execution
 envelope was hit, which detector's name it reuses, and the numbers behind it.

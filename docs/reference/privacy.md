@@ -32,7 +32,8 @@ never reveals: prompts, replies, tool arguments themselves, or error text.
   a key reaches a connected plane as a hash, tags as written.** Detectors name the key untouched in
   their own local `message` and `details`, so a key session with an id you
   are willing to see in your own logs, not with an email address. The plane —
-  hosted or self-hosted, the only destination the SDK itself sends to — gets
+  hosted or self-hosted, the only destination the SDK opens a socket to; the
+  OpenTelemetry export hands records to your in-process pipeline — gets
   `sha256(key)` and nothing else, unless you opt in with
   `send_session_keys=True`. By default the plane's own alert adapters (Slack,
   PagerDuty, a webhook) read only that hash back off the ledger too. Opt in

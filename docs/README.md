@@ -4,7 +4,7 @@
 
 The SDK's manual. This repository manual is canonical: the site at
 [runbound.co/docs](https://runbound.co/docs) renders six of its pages whole and
-the rest from fragments of it. The snippets on a few pages are executed by tests
+some reference sections from fragments of it; the other pages are written separately. The snippets on a few pages are executed by tests
 (`tests/test_docs_pages_show_executed_snippets.py`).
 
 ## Getting started

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.11.2] - 2026-10-05
+
+### Fixed
+
+- **A second outage of the same provider is reported again.** A worker paged a provider's circuit once for the life of the process
+  (`Engine._alerted`, keyed on the provider label and never cleared), so in a long-lived worker the first outage was reported and every
+  later one, hours or days afterwards, was silent. The memory is now forgotten when the circuit closes (a successful probe, or the
+  fleet closing it), so one outage pages once however many retries run into it, and the next outage pages again.
+
 ## [0.11.1] - 2026-10-04
 
 ### Fixed

@@ -158,8 +158,8 @@ See [Free SDK, connected plane](docs/concepts/free-and-connected.md).
 ## Documentation
 
 The manual lives in [`docs/`](docs/README.md), and that repository manual is
-canonical. [runbound.co/docs](https://runbound.co/docs) renders six of its pages
-whole and the rest from fragments of it.
+canonical. [runbound.co/docs](https://runbound.co/docs) renders whole the six pages that the site's
+`manual-sources.ts` lists and some reference sections from fragments of it; the other pages are written separately.
 
 - **[Getting started](docs/getting-started.md)** — install, the core loop, and
   checking what is actually guarded.

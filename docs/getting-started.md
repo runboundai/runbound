@@ -170,8 +170,10 @@ finish](guides/a-runaway.md).
 
 **4. Handle the refusal.** A stop raises a subclass of one typed exception,
 `runbound.ExecutionRefused`; catch that one name. Posture and policy refusals
-raise always; a budget or a provider outage raises under
-`on_anomaly="raise"` and only warns in your logs by default. (`SafeModeViolation` and
+raise always; a budget a finished call crossed, or a provider outage, raises
+under `on_anomaly="raise"` and only warns by default (a request whose stated
+output cap would cross the budget is refused at the door whatever `on_anomaly`
+says; an open circuit blocks only under `on_provider_failure="open"`). (`SafeModeViolation` and
 `PolicyViolation` are `ExecutionRefused`; `GuardrailTripped` is the same class
 under its older name.) It is never a fake success and never silently swallowed:
 

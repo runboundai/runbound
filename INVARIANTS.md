@@ -284,6 +284,11 @@ plane's own test suite (adapters, alert routing, the ledger, the live store,
 refusals, and the SDK-facing router); Acme scorecard scenario 4 ("one fleet
 circuit, one alert").
 
+**One page per outage.** A provider's circuit pages once however many retries run into the
+outage, and the page is forgotten when the circuit closes (a successful probe, or the fleet
+closing it), so the next outage pages again: open, close, open is two pages, and a retry storm
+on one open circuit is one (`tests/test_circuit_repage.py`).
+
 ---
 
 ## Policy-monotonic

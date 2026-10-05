@@ -252,8 +252,9 @@ key in the log).
 
 It sees model calls that come through the base URL, with their model, tokens and
 cost: never a prompt or a reply, which are forwarded and not stored, logged or sent
-on. What it reads of a request is the model, the `stream` flag and the caller's
-identity fields (`user`, `safety_identifier`, `metadata.user_id`), and it counts the
+on. What it reads of a request is the model, the `stream` flag, the output cap it states
+(`max_tokens` or `max_output_tokens`) and the caller's identity fields (`user`,
+`safety_identifier`, `metadata.user_id`), and it counts the
 body's characters in transit to estimate tokens. For a caller whose posture is narrowed
 it also reads the *names* of the tools a reply asks for (never their arguments), and
 holds a streamed reply whole until it has judged them. It cannot see a tool your agent runs inside your app, a call that does not

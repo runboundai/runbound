@@ -181,7 +181,7 @@ signature check (below) and the bookkeeping that lets outbound telemetry
 threads drain at process exit — nothing here builds an alert body or opens a
 socket to Slack, PagerDuty or anyone else any more. The division of labour:
 *the SDK detects, stops, refuses and reports; the plane routes and delivers.*
-`on_anomaly="callback"` is the free, forever answer for anyone who wants to
+`on_anomaly="callback"` is the free, local answer for anyone who wants to
 notify themselves without a token or a plane at all — it hands the anomaly to
 your own function, in your own process.
 
@@ -195,8 +195,9 @@ is gated by plan and enforced with a 403, not a suggestion — see
 [the control plane docs](https://runbound.co/docs/control-plane) for
 the endpoints, the adapter list, and the webhook body your receiver gets.
 
-The plane's webhook adapter signs every delivery with an
-`X-Runbound-Timestamp` / `X-Runbound-Signature` pair over one signing string.
+The plane's webhook adapter signs each delivery from a route that has a secret with an
+`X-Runbound-Timestamp` / `X-Runbound-Signature` pair over one signing string (without one,
+only the timestamp header is sent).
 In the body, `session.id` is the sha256 key hash — the plane has no notion of
 a per-process id, since any worker can serve the same session — and there is
 no `session.key` field; a raw key reaches you, if you opt in, only through the `{key}` in your service's link template (a per-service

@@ -12,7 +12,7 @@ that setting actually lives now (an [alert route](reactions.md#alerting) or a pe
 field on your runbound dashboard), not a bare `TypeError: unexpected
 keyword`.
 
-**Every field below is free, local and yours forever — no account, no token,
+**Every field below is free and local — no account, no token,
 no cloud dependency.** A control plane, when you connect one, can only
 *tighten* the fields marked **yes** in the fourth column, or add a value from
 scratch where you left one unconfigured, never loosen what you already set;

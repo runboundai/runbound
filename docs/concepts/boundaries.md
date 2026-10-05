@@ -54,8 +54,10 @@ a bad response for you.
 silently rewritten answer is a bug report waiting to happen — the log says
 one thing, the response the caller received says another. Every response
 either came from the provider untouched or was refused before it went out;
-the one case that is both is a budget that the call itself crossed, which
-refuses after the provider ran and says so (`provider_called=True`).
+the cases that are both are the post-call walls (a budget the call itself
+crossed, and under `on_anomaly="raise"` a loop, spike, error-storm, steps or
+timeout trip), which refuse after the provider ran and say so
+(`provider_called=True`).
 
 **Use instead:** your own application code, deciding on its own terms what to
 do with a response it doesn't like.

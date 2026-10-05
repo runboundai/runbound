@@ -478,6 +478,15 @@ def test_junk_tokens_cached_in_never_raises():
         assert isinstance(cost, float)
 
 
+def test_the_compatibility_page_prints_the_table_date():
+    from pathlib import Path
+
+    from runbound.pricing import PRICES_AS_OF
+
+    page = (Path(__file__).resolve().parent.parent / "docs" / "reference" / "compatibility.md").read_text()
+    assert f'`"{PRICES_AS_OF}"` today' in page
+
+
 def test_as_of_returns_the_table_date():
     from runbound.pricing import PRICES_AS_OF, as_of
 

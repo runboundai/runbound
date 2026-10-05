@@ -2,9 +2,11 @@
 ``client.responses.create``.
 
 Detection is by shape, never by ``isinstance``: the ``openai`` package is not
-imported here (or anywhere in runbound), so any OpenAI-compatible client —
-Azure OpenAI, Ollama, vLLM, Groq, Together, OpenRouter, LM Studio, a test fake
-— is guarded by the same code path.
+imported here (or anywhere in runbound), so any OpenAI-compatible client — a
+self-hosted server such as Ollama or vLLM, a test fake — is guarded by the same
+code path. OpenAI and Anthropic are the providers runbound supports and tests;
+other OpenAI-shaped endpoints share this code path and are not individually
+tested.
 
 A client may expose either call surface or both, and every one it exposes gets
 patched: guarding chat completions while the Responses API flows past uncounted

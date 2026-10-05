@@ -324,6 +324,8 @@ class CircuitBreaker:
         self._now = now
         self._lock = threading.Lock()
         self._keys: dict[str, _Key] = {}
+        #: Told the key of every breaker that closes (see :meth:`_close`); the engine sets it.
+        self.on_close: Callable[[str], None] | None = None
 
     def record_failure(self, key: str) -> bool:
         """Count one failure for ``key``. True only if *this* one opened it.
@@ -375,11 +377,11 @@ class CircuitBreaker:
             if self.mode != "rate":
                 if entry is None:
                     return False
-                self._close(entry)
+                self._close(entry, key)
                 return False
             entry = entry if entry is not None else self._keys.setdefault(key, _Key())
             if entry.opened_at is not None:
-                self._close(entry)
+                self._close(entry, key)
                 return False
             return self._record_rate_call(entry, now, failed=False, slow=bool(slow))
 
@@ -464,7 +466,7 @@ class CircuitBreaker:
         with self._lock:
             entry = self._keys.get(key)
             if entry is not None:
-                self._close(entry)
+                self._close(entry, key)
 
     def allow(self, key: str) -> bool:
         """May a call to ``key`` go out right now?
@@ -587,14 +589,24 @@ class CircuitBreaker:
         if entry.until is not None and entry.until <= now + self.cooldown_seconds:
             entry.until = None
 
-    def _close(self, entry: _Key) -> None:
-        """Close one key's breaker and forget its failures. Caller holds the lock."""
+    def _close(self, entry: _Key, key: str | None = None) -> None:
+        """Close one key's breaker and forget its failures. Caller holds the lock.
+
+        ``on_close(key)``, when set, is told the breaker closed: the engine uses it to forget that it
+        already paged this provider's outage, so the NEXT outage pages again. It runs under the lock and must
+        not call back into the breaker; a failing callback never fails the close.
+        """
         entry.failures.clear()
         entry.calls.clear()
         entry.opened_at = None
         entry.probes_taken = 0
         entry.prevented = 0
         entry.until = None
+        if key is not None and self.on_close is not None:
+            try:
+                self.on_close(key)
+            except Exception:  # pragma: no cover - a notification must never break the close
+                pass
 
     def _prune(self, entry: _Key, now: float) -> None:
         """Drop failures that have aged out of the window. Caller holds the lock."""

@@ -172,7 +172,8 @@ output cap — `max_tokens`, `max_completion_tokens` or `max_output_tokens` —
 cannot produce more output than that, so its worst case is known before it
 goes out: the cap at the model's output rate, plus the request's input at the
 input rate. The input is every field the provider bills as input, estimated at
-four characters a token: chat `messages` (and the tool calls in them), the
+four characters a token (scaled by 1.3 for Claude 4.7 and later; see
+[what it sees](../concepts/what-it-sees.md)): chat `messages` (and the tool calls in them), the
 Responses API's `instructions` and `input`, Anthropic's `system`, and the tool
 definitions. The formula is public as `runbound.pricing.admission_worst_case`. When that worst case would take `total_cost_usd +
 spend_offset_usd + reserved` past `budget_usd`, the call is refused right
@@ -204,7 +205,7 @@ runbound.init(budget_usd=5.0, on_anomaly="raise")   # "capped" is the default
 **Tokens ride the same reservation, but not the same reaction.** With a token limit in force
 (`max_total_tokens`, which a control plane can only tighten by stating `budget_tokens`, and
 `run_max_total_tokens`), the same stage also holds the call's worst case in tokens:
-`ceil(characters / 4)` of the request plus its output cap
+`ceil(characters / 4)` (times 1.3 for Claude 4.7 and later) of the request plus its output cap
 (`runbound.pricing.admission_worst_case_tokens`). It needs no price, so a model with none is
 reserved too. Both holds are taken together or not at all, and a call whose worst case is
 exactly what remains is admitted. A call that would cross the limit is **refused at the door
@@ -226,7 +227,8 @@ would have used less: with $0.10 left, a request capped at 15,000 output
 tokens on a $10-per-million model is refused although its answer might have
 cost a cent. That is the price of "cannot be crossed". Two limits are stated
 rather than hidden: the output side of the worst case is exact, and the input
-side is the same chars/4 estimate used everywhere else in runbound, so a prompt
+side is the same chars/4 estimate, scaled by 1.3 for Claude 4.7 and later (a request's own
+price multiplier scales the dollar figure), so a prompt
 much denser than four characters a token can still take the session past the
 line by the difference; and a call with no stated cap is not reserved at all.
 `budget_admission=False` restores 0.3.0.

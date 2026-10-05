@@ -114,7 +114,7 @@ Dated releases resolve by longest prefix, so `gpt-4o-mini-2024-07-18` prices as
 `gpt-4o-mini`, not `gpt-4o`.
 
 **These prices were last checked on `runbound.pricing.as_of()`** —
-`"2026-09-12"` today. A price that changed after that date is wrong until
+`"2026-10-03"` today. A price that changed after that date is wrong until
 this table is updated; `custom_prices` always wins over it, which is how you
 fix a stale number without waiting for a release.
 
@@ -123,7 +123,8 @@ fix a stale number without waiting for a release.
 A repeated system prompt, a long few-shot block, an agent's growing message
 history — anything the provider recognizes as a repeat of something it just
 saw — is billed as a **cache hit**, at a discount runbound now reads and
-prices correctly: OpenAI at 50% of its input rate, Anthropic at 10%. Before
+prices correctly: OpenAI at 50% of its input rate, Anthropic at 10% (5% on Opus 5.5, 2.5% on Fable 5.1
+and Mythos 5.1). Before
 this, runbound had no reader for either field and priced every cached token
 at the full input rate — an agent with a large cached system prompt was
 over-charged on nearly every call, so `budget_usd` stopped a session **at
@@ -145,7 +146,7 @@ predate prompt caching) prices every token at the full input rate instead of
 guessing a discount that was never published.
 
 Anthropic also bills a **cache write** (`cache_creation_input_tokens`) at a
-125% premium — writing a new cache entry costs more than an ordinary input
+125% premium for a five-minute write, 200% for a one-hour write — writing a new cache entry costs more than an ordinary input
 token, not less. runbound counts a cache write inside `tokens_in` (so
 `total_tokens` stays honest) *and* prices it at its own published rate
 (50%/10% for a read, 125% for a write are the two directions a cache-pricing
