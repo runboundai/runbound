@@ -1,10 +1,11 @@
-"""The configuration reference names every ``init()`` parameter exactly once, with its real default (SDK-1).
+"""The configuration reference names every ``init()`` parameter exactly once, with its real type and default.
 
-``runbound.init(**kwargs)`` builds a ``GuardrailConfig``, so its fields ARE the parameters. The reference groups them
+``runbound.init(**kwargs)`` builds a ``RunboundConfig``, so its fields ARE the parameters. The reference groups them
 by purpose; this test reads the page and checks, row by row, against the code: every parameter appears in exactly one
-row, no row names a parameter that does not exist, each Default is the field's own default, and each "the plane can
-tighten it" cell says what the engine's Controls merge does (see ``tests/_config_reference.py``). The check is a
-function so a dropped row and an invented one can be shown to fail it.
+row under a known heading, no row names a parameter that does not exist, each Type is the field's annotation, each
+Default is the field's own default, and each "Plane can tighten" cell says what the engine's merge of the plane's
+policy does (see ``tests/_config_reference.py``). The check is a function, so a dropped row, an invented one, a wrong
+default, a wrong type and a wrong plane cell can each be shown to fail it.
 """
 
 from __future__ import annotations
@@ -15,14 +16,19 @@ from pathlib import Path
 
 import pytest
 
-import runbound
-from runbound.config import GuardrailConfig
+from runbound.config import RunboundConfig
 
-from _config_reference import default_text, tightenable
+from _config_reference import default_text, tightenable, type_text
 
 DOC = Path(__file__).resolve().parent.parent / "docs" / "reference" / "configuration.md"
-SECTIONS = ["Budgets and limits", "Loops, spikes and failing providers", "Postures and tools", "The plane", "Privacy", "Other"]
-FIELDS = {f.name: f for f in dataclasses.fields(GuardrailConfig) if not f.name.startswith("_")}
+SECTIONS = ["The plane", "Rules and hooks", "Approvals", "Results", "Telemetry and privacy", "Local"]
+HEADER = "| Name | Type | Default | Plane can tighten | Meaning |"
+FIELDS = {f.name: f for f in dataclasses.fields(RunboundConfig) if not f.name.startswith("_")}
+
+
+def _cell(text: str) -> str:
+    """A table cell as plain text: backticks off, ``\\|`` back to ``|``."""
+    return text.strip().strip("`").replace("\\|", "|")
 
 
 def rows(text: str) -> list[tuple[str, list[str], list[str]]]:
@@ -45,65 +51,109 @@ def problems(text: str) -> list[str]:
     for section, names, cells in rows(text):
         if section not in SECTIONS:
             out.append(f"a row under an unknown heading {section!r}: {names}")
-        for name in names:
-            seen[name] = seen.get(name, 0) + 1
-            if name not in FIELDS:
-                out.append(f"{name} is not an init() parameter")
-        defaults = [d.strip().strip("`") for d in cells[2].split(" / ")]
-        if len(defaults) == len(names):
-            for name, shown in zip(names, defaults):
-                if name in FIELDS and shown.replace("_", "") != default_text(FIELDS[name]).replace("_", ""):
-                    out.append(f"{name}: default shown {shown!r}, the code says {default_text(FIELDS[name])!r}")
-        else:
-            out.append(f"{names}: {len(defaults)} defaults for {len(names)} names")
-        verdicts = {"yes" if n in tight else "no" for n in names if n in FIELDS}
-        if len(verdicts) != 1 or cells[3].strip() not in verdicts:
-            out.append(f"{names}: the plane column says {cells[3].strip()!r}, the engine says {sorted(verdicts)}")
+        if len(cells) != 5:
+            out.append(f"{names}: {len(cells)} cells, not 5")
+            continue
+        if len(names) != 1:
+            out.append(f"a row must name exactly one parameter, this one names {names}")
+            continue
+        (name,) = names
+        seen[name] = seen.get(name, 0) + 1
+        if name not in FIELDS:
+            out.append(f"{name} is not an init() parameter")
+            continue
+        field = FIELDS[name]
+        if _cell(cells[1]) != type_text(field):
+            out.append(f"{name}: type shown {_cell(cells[1])!r}, the code says {type_text(field)!r}")
+        if _cell(cells[2]).replace("_", "") != default_text(field).replace("_", ""):
+            out.append(f"{name}: default shown {_cell(cells[2])!r}, the code says {default_text(field)!r}")
+        verdict = "yes" if name in tight else "no"
+        if cells[3].strip() != verdict:
+            out.append(f"{name}: the plane column says {cells[3].strip()!r}, the engine says {verdict!r}")
+        if not cells[4].strip():
+            out.append(f"{name}: the Meaning cell is empty")
     for name in FIELDS:
         if seen.get(name, 0) != 1:
             out.append(f"{name} appears {seen.get(name, 0)} times, not once")
     headings = [line[3:].strip() for line in text.splitlines() if line.startswith("## ")]
     if headings != SECTIONS:
         out.append(f"the sections are {headings}, not {SECTIONS}")
+    if text.count(HEADER) != len(SECTIONS):
+        out.append(f"expected one {HEADER!r} table per section")
     return out
 
 
-def test_every_init_parameter_appears_exactly_once_with_its_real_default_and_plane_column():
+def _row(text: str, name: str) -> str:
+    return next(line for line in text.splitlines() if line.startswith(f"| `{name}`"))
+
+
+def test_every_init_parameter_appears_exactly_once_with_its_real_type_default_and_plane_column():
     assert problems(DOC.read_text()) == []
 
 
 def test_init_takes_exactly_the_fields_of_the_config_it_builds():
-    """``init(**kwargs)`` is ``GuardrailConfig(**kwargs)``: an unknown name is a TypeError, a known one is accepted."""
+    """``init(**kwargs)`` is ``RunboundConfig(**kwargs)``: an unknown name is a TypeError, a known one is accepted."""
     with pytest.raises(TypeError):
-        GuardrailConfig(definitely_not_a_parameter=1)
+        RunboundConfig(definitely_not_a_parameter=1)
     for name, field in FIELDS.items():
-        if field.default is not dataclasses.MISSING and name not in ("api_key",):
-            GuardrailConfig(**{name: field.default})  # accepted
-    assert len(FIELDS) == 90
+        if field.default is not dataclasses.MISSING:
+            RunboundConfig(**{name: field.default})  # accepted
+    assert len(FIELDS) == 25  # the 25 init() fields; _plane_mode is private
+
+
+def test_only_the_tool_policy_is_tightened_by_the_plane():
+    assert tightenable() == {"tool_policy"}
 
 
 def test_a_dropped_row_is_caught():
     text = DOC.read_text()
-    row = next(line for line in text.splitlines() if line.startswith("| `max_steps`"))
-    broken = text.replace(row + "\n", "")
-    assert any("max_steps appears 0 times" in p for p in problems(broken))
+    broken = text.replace(_row(text, "max_actions_per_run") + "\n", "")
+    assert any("max_actions_per_run appears 0 times" in p for p in problems(broken))
 
 
 def test_an_invented_row_is_caught():
     text = DOC.read_text()
-    broken = text.replace("## Privacy\n", "## Privacy\n\n| `no_such_parameter` | `bool` | `False` | no | invented |\n", 1)
+    invented = "| `no_such_parameter` | `bool` | `False` | no | invented |"
+    broken = text.replace(_row(text, "export_events"), _row(text, "export_events") + "\n" + invented, 1)
     assert any("no_such_parameter is not an init() parameter" in p for p in problems(broken))
 
 
-def test_a_wrong_default_and_a_wrong_plane_cell_are_caught():
+def test_a_wrong_default_is_caught():
     text = DOC.read_text()
-    wrong_default = re.sub(r"(\| `spike_confirm` \| [^|]+\| )`2`", r"\1`3`", text)
-    assert any("spike_confirm: default shown '3'" in p for p in problems(wrong_default))
-    wrong_plane = re.sub(r"(\| `budget_usd` \| .*?\| `None` \| )yes", r"\1no", text, count=1)
-    assert any("budget_usd" in p and "plane column" in p for p in problems(wrong_plane))
+    wrong = re.sub(r"(\| `max_sessions` \| [^|]+\| )`10000`", r"\1`5`", text)
+    assert wrong != text
+    assert any("max_sessions: default shown '5'" in p for p in problems(wrong))
+    wrong = re.sub(r"(\| `on_halt` \| [^|]+\| )`\"raise\"`", r'\1`"warn"`', text)
+    assert wrong != text
+    assert any("on_halt: default shown" in p for p in problems(wrong))
+
+
+def test_a_wrong_type_is_caught():
+    text = DOC.read_text()
+    wrong = text.replace("| `hook_timeout_s` | `float \\| None` |", "| `hook_timeout_s` | `float` |")
+    assert wrong != text
+    assert any("hook_timeout_s: type shown 'float'" in p for p in problems(wrong))
+
+
+def test_a_wrong_plane_cell_is_caught():
+    text = DOC.read_text()
+    wrong = re.sub(r"(\| `tool_policy` \| .*?\| `None` \| )yes", r"\1no", text, count=1)
+    assert wrong != text
+    assert any("tool_policy" in p and "plane column" in p for p in problems(wrong))
+    wrong = re.sub(r"(\| `capabilities` \| .*?\| `None` \| )no", r"\1yes", text, count=1)
+    assert wrong != text
+    assert any("capabilities" in p and "plane column" in p for p in problems(wrong))
 
 
 def test_a_duplicated_parameter_is_caught():
     text = DOC.read_text()
-    row = next(line for line in text.splitlines() if line.startswith("| `max_steps`"))
-    assert any("max_steps appears 2 times" in p for p in problems(text.replace(row, row + "\n" + row)))
+    row = _row(text, "max_actions_per_run")
+    assert any("max_actions_per_run appears 2 times" in p for p in problems(text.replace(row, row + "\n" + row)))
+
+
+def test_a_row_under_an_unknown_heading_is_caught():
+    text = DOC.read_text()
+    broken = text.replace("## Local\n", "## Miscellaneous\n", 1)
+    found = problems(broken)
+    assert any("unknown heading 'Miscellaneous'" in p for p in found)
+    assert any("the sections are" in p for p in found)

@@ -1,122 +1,96 @@
-"""runbound — deterministic, LLM-free runaway detection for AI agents.
+"""runbound — a policy boundary for the tools an AI agent can call.
 
 Three lines to guard an agent::
 
     import runbound
 
-    runbound.init(budget_usd=5.0, max_steps=50, on_anomaly="raise")
-    client = runbound.wrap(client)          # OpenAI- or Anthropic-shaped
+    runbound.init(tool_policy=runbound.ToolPolicy(...))
 
-    @runbound.tool                          # every tool call is recorded
+    @runbound.tool                          # every tool call is checked and recorded
     def search(query): ...
 
-Fail-open by design: runbound's own bugs are logged and swallowed, and the
-only exception it raises on purpose is :class:`GuardrailTripped`.
+The public API is listed in ``API.md``. Fail-open by default: runbound's own
+bugs are logged and swallowed, and the exceptions it raises on purpose are the
+ones in :mod:`runbound.exceptions`.
 """
 
-from .alerts import verify_webhook_signature
-from .api import (
-    active_sessions,
-    BudgetView,
+import sys as _sys
+
+if _sys.version_info < (3, 10):  # before any import that needs 3.10 syntax, so the failure names the cause
+    raise ImportError(
+        f"runbound needs Python 3.10 or newer; this is Python {_sys.version_info[0]}.{_sys.version_info[1]}. "
+        "Run the agent on Python 3.10+ (pip refuses the install on older ones for the same reason)."
+    )
+
+from .api import (  # noqa: E402
     assert_guarded,
-    budget,
-    circuit_state,
-    clear,
     coverage,
     current_session,
     decisions,
-    envelope,
-    enter_safe_mode,
     events,
-    exit_safe_mode,
-    fleet_status,
-    inflight_calls,
     init,
-    is_tripped,
-    key_hash,
-    llm,
     plane_status,
-    posture,
-    record_call,
     reset,
-    safe_mode,
     session,
-    session_status,
     tool,
     tool_calls,
+    tool_results,
     tools,
-    unpatch,
-    wrap,
 )
-from .config import GuardrailConfig
+from .approvals import current_request
+from .config import RunboundConfig, deprecated_alias as _deprecated_alias
 from .events import Anomaly, Decision, Event
 from .exceptions import (
-    CircuitOpen,
     ExecutionRefused,
     GuardrailTripped,
     PolicyViolation,
-    SafeModeViolation,
+    CapabilityRefused,
     is_retryable,
 )
 from .plane_types import PlaneStatus
-from .policy import ToolCall, ToolPolicy, Violation
-from .responses import Refusal
-from .state import PostureState, SessionState
+from .policy import ToolCall, ToolPolicy, ToolRules, Violation
+from .state import SessionState
 
-__version__ = "0.11.2"
+__version__ = "1.0.0a2"
 
 from ._check import check  # noqa: E402  (after __version__: the report prints it)
 
+
+def __getattr__(name: str):
+    """``GuardrailConfig`` is the deprecated former name of ``RunboundConfig`` (PEP 562; warns once)."""
+    return _deprecated_alias(name, __name__, stacklevel=3)
+
+
 __all__ = [
     "Anomaly",
-    "BudgetView",
-    "CircuitOpen",
     "Decision",
     "Event",
     "ExecutionRefused",
-    "GuardrailConfig",
     "GuardrailTripped",
     "PlaneStatus",
     "PolicyViolation",
-    "Refusal",
-    "PostureState",
-    "SafeModeViolation",
+    "RunboundConfig",
+    "CapabilityRefused",
     "SessionState",
     "ToolCall",
     "ToolPolicy",
+    "ToolRules",
     "Violation",
     "__version__",
-    "active_sessions",
     "assert_guarded",
-    "budget",
     "check",
-    "circuit_state",
-    "clear",
+    "current_request",
     "coverage",
     "current_session",
     "decisions",
-    "envelope",
-    "enter_safe_mode",
     "events",
-    "exit_safe_mode",
-    "fleet_status",
-    "inflight_calls",
     "init",
     "is_retryable",
-    "is_tripped",
-    "key_hash",
-    "llm",
     "plane_status",
-    "posture",
-    "record_call",
     "reset",
-    "safe_mode",
     "session",
-    "session_status",
     "tool",
     "tool_calls",
+    "tool_results",
     "tools",
-    "unpatch",
-    "verify_webhook_signature",
-    "wrap",
 ]

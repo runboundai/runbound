@@ -1,733 +1,252 @@
 # runbound — invariants
 
-What this document is: the promises that must hold for "runtime controls for
-autonomous AI agents" to be true, stated one sentence at a time, with the
-bound each promise actually carries and the test(s) or Acme scorecard
-scenario that assert it today. "Acme" (Acme Commerce) is the fictional
-business a multi-worker demo fleet runs against elsewhere in this project;
-where a scenario against it is cited below, it is a fleet-wide integration
-check, never a unit test in this repository. Where nothing asserts a
-promise yet, this file says so — "not yet asserted" is a finding, not
-something to quietly drop.
+The promises the SDK keeps today, one statement each, with the tests that assert them. Every
+`Asserted by:` reference names a real test; `tests/test_invariants_doc.py` fails if one does not
+exist. A promise no test covers yet is listed under [Not yet asserted](#not-yet-asserted), not
+dropped. The public API is in [API.md](API.md); what each rule does is in [docs/](docs/README.md).
 
-Plain-English reading of the terms used throughout — two bounds and the
-word this file never lets stand in for either:
-
-- **single-process exact** — the check is a plain comparison against a
-  number this process actually holds; there is no slack in it.
-- **fleet bound** — across more than one worker there is necessarily a
-  window (network round trips, a cache) where two workers can briefly
-  disagree; the bound states the worst that window can cost you, in
-  concrete units (a number of turns, a number of seconds), not "eventually."
-- **estimated** — a number runbound computed because nobody handed it a real
-  one: `chars/4` tokens when an endpoint reports no usage, dollars from a
-  static list-price table, the opt-in admission estimate. An estimate is
-  never called exact anywhere, and the full list of which numbers are which
-  is the [What is exact and what is
-  estimated](docs/concepts/what-it-sees.md) table.
+Terms: a **consequential** tool carries a `financial`, `destructive` or `privileged` class; an
+**unclassified** tool declares no class; **the chain** is `Engine.admit_call` plus the post chain.
 
 ---
 
-## Budget
+## The host application
 
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Budget").
-What follows is the bound behind that sentence, and the tests that assert
-it.
+1. **A decorated call raises only the tool's own exception or an `ExecutionRefused`** (or its
+   subclasses `PolicyViolation`, `CapabilityRefused`). A runbound bug outside the chain (session
+   lookup, event recording, an observer, the `on_event` callback, the plane client) is logged and
+   the call goes ahead. Bad configuration raises `ValueError` at `init()` or at decoration instead.
+   Asserted by: `tests/test_api.py::test_engine_failure_never_reaches_the_host`, `tests/test_policy_hook.py::test_a_broken_session_lookup_never_blocks_the_host`, `tests/test_engine_observers.py::test_an_observer_that_raises_never_reaches_the_host`, `tests/test_local_events.py::test_a_raising_on_event_callback_never_breaks_the_host_call`, `tests/test_session_sync.py::test_a_plane_that_explodes_never_reaches_the_host`, `tests/test_api.py::test_init_validates_config_loudly`
 
-**What is a turn.** A **turn** is one `runbound.session()` block on one
-worker, from entry to exit, whatever model and tool calls it contains. A
-worker learns the fleet's spend for a key only at block entry, and reuses
-that answer for `control_plane_cache_s` (default 5 s); other workers' spend
-reaches the plane through exit deltas posted in batches (about one second).
-So a worker can be stale for up to the cache window plus batch latency.
+2. **The tool's own exception is re-raised unchanged**, after a `tool_error` event and an `error`
+   `tool_result`; a cancelled async tool stays cancelled.
+   Asserted by: `tests/test_api.py::test_tool_error_is_emitted_and_the_original_exception_re_raised`, `tests/test_post_chain.py::test_a_tool_that_raises_records_an_error_result_and_reraises_its_own_exception`, `tests/test_async_tool.py::test_a_cancelled_async_tool_is_recorded_and_stays_cancelled`
 
-**The bound.** Single process: exact — `total_cost_usd > budget_usd` is a
-plain comparison against the running total this process holds, strictly
-greater than, so exactly at the limit does not trip; the detector trips on
-the very event that crosses the limit. With a stated output cap the budget is **not crossed by that call**:
-under the default `budget_admission="capped"` the cap priced at the model's
-output rate, plus the input estimate, is *held* against what is left before the
-call goes out — not compared once and forgotten, but reserved on the
-session's ledger (see [Upper bound](#upper-bound)) for the call's whole
-lifetime, minus whatever other in-flight calls already hold, and given back
-only when it closes out — and a call whose worst case would still cross is
-refused there, never latching.
-The output side of that bound is exact; the input side is chars/4, so a prompt
-much denser than four characters a token can take the session past the line by
-the difference. A call with **no** stated cap is checked after it returns: the
-wall **stops the session after the call that crossed it**, because usage exists
-only then, so that call is paid for and the next one is prevented.
-`budget_admission=False` makes every call the second kind (0.3.0); `True` also
-reserves an assumed cap for uncapped calls, which is an estimate. The soft line
-(`budget_soft`) is a warning under the wall and bounds nothing. The dollars on both sides of that line
-come from a static price table, so the comparison is exact and the total it
-compares is an estimate of the bill (see the README table named above).
-Fleet — Intended bound: for one key, worst-case overspend over `budget_usd` is the sum over
-workers of (the spend of that worker's one in-flight block + the spend of
-any blocks it admitted during its staleness window). Not yet asserted by a test (needs a live multi-worker race; v1.1).
+3. **Before `init()` a decorated tool is inert:** the body runs, nothing is recorded or enforced,
+   and an `async def` tool is still a coroutine function.
+   Asserted by: `tests/test_api.py::test_tool_works_and_records_nothing_before_init`, `tests/test_async_tool.py::test_async_tool_is_inert_before_init`, `tests/test_post_chain.py::test_the_chain_is_inert_before_init`, `tests/test_policy_hook.py::test_no_policy_is_enforced_before_init`, `tests/test_async_tool.py::test_decorated_async_function_is_still_a_coroutine_function`
 
-`budget_usd` is the **key**'s own limit — it accumulates over every run
-this key has ever made unless `budget_window` (`"hour"`/`"day"`/`"month"`,
-a calendar UTC boundary, or a float number of seconds, a rolling one) says
-otherwise, in which case every cumulative number on the key resets together
-the moment the window rolls over. `run_budget_usd` is a second, independent
-number: the **run**'s own budget, fresh on every `session()` entry. A call
-is checked against whichever of the two is tighter, and a refusal's
-`Decision.level` (`"run"` or `"key"`) says which one actually bound it — see
-[docs/guides/runs.md](docs/guides/runs.md#key-and-run-are-two-different-things).
+4. **The removed API stays removed:** every name dropped from the old SDK raises `AttributeError`,
+   its modules do not import, and `API.md` lists exactly `runbound.__all__`.
+   Asserted by: `tests/test_public_api.py::test_removed_name_is_gone`, `tests/test_public_api.py::test_removed_modules_do_not_import`, `tests/test_public_api.py::test_api_md_lists_exactly_the_exported_names`
 
-**How a customer tightens it.** State an output cap on every call, so the reservation applies to every call. Keep blocks short (one end-user request per
-block), and lower `control_plane_cache_s` at the cost of more entry requests.
-`tests/test_budget_soft_and_reservation.py` asserts the reservation refusing before any socket opens with spend unchanged, the no-cap path identical to `budget_admission=False`, and the soft line firing once without latching. The Acme scorecard asserts the two-worker, one-request-per-block case lands
-within one turn of the single-worker wall.
+## Refusal happens before the body
 
-**Asserted by:**
-- Single-process exactness: `tests/test_detectors.py::test_budget_silent_when_cost_exactly_at_limit`,
-  `::test_budget_fires_when_cost_strictly_exceeds_limit`.
-- Fleet offset folding into the local check:
-  `tests/test_detectors.py::test_budget_offsets_default_to_zero`,
-  `::test_budget_trips_on_local_spend_plus_the_fleet_offset`,
-  `::test_budget_silent_when_local_spend_plus_offset_is_exactly_at_the_limit`,
-  `::test_budget_offset_alone_can_trip_a_session_that_spent_nothing`;
-  `tests/test_session_sync.py::test_the_fleet_spend_offset_trips_mid_block`,
-  `::test_the_offset_never_double_counts_this_workers_own_spend`.
-- Intended bound: worst-case fleet overspend of `workers × one turn + cache window`. Not yet asserted by a test (needs a live multi-worker race; v1.1). The
-  pieces above prove the mechanism (offsets fold in correctly, the check is
-  exact once the offset lands), but no test drives an actual multi-worker
-  race and measures the overshoot against that general formula. The Acme
-  scorecard's scenario 1 ("budget across workers") does assert a number, but
-  only for its own two-worker configuration, not the general formula
-  (verified by the control plane's demo fleet): it computes the turn a
-  single worker would stop on (`want`) and passes only if the fleet's actual
-  stop turn falls in `want..want + 1` — i.e. at most one extra in-flight
-  turn across the two workers.
+5. **A refused call never runs its body**, sync or async.
+   Asserted by: `tests/test_api.py::test_a_refused_call_never_runs_the_tool_body`, `tests/test_async_tool.py::test_a_refused_async_call_never_runs_its_body`, `tests/test_hooks_validation.py::test_a_sync_tool_is_refused_before_its_body_runs`, `tests/test_hooks_validation.py::test_an_async_tool_is_refused_before_its_body_runs`, `tests/test_policy_hook.py::test_denied_tool_is_refused_before_its_body_runs`
 
----
+6. **Refusal precedence is fixed; the first refusal wins and nothing after it runs:** fleet halt,
+   plane loss, user pre (rewrite) hooks, argument validation, policy rules (`deny` > `allow` >
+   `max_calls` > `constraint`), row `blocked`, row session cap, capability class and action cap,
+   quota, the policy's approval callback, a person's approval, user gate hooks, then the body.
+   Asserted by: `tests/test_hooks_chain.py::test_the_order_is_rewrite_validate_policy_capability_approval_gate`, `tests/test_hooks_chain.py::test_gate_hooks_run_last_and_may_only_refuse`, `tests/test_hooks_chain.py::test_approval_runs_last_after_the_capability_check`, `tests/test_behaviour_golden.py::test_policy_rules_are_judged_before_the_capability_class`, `tests/test_policy_rows.py::test_blocked_is_judged_before_the_session_cap_before_quota_and_a_refused_call_takes_no_unit`, `tests/test_policy_core.py::test_deny_beats_every_other_rule`, `tests/test_policy_core.py::test_max_calls_beats_constraint_and_approval`, `tests/test_policy_core.py::test_approval_is_the_last_gate`
 
-## Content independence
+7. **A refused call takes no quota unit and asks no person.** The attempt counts in `tool_calls`
+   but never as an executed action, and never against `max_calls`, which counts calls that cleared the chain.
+   Asserted by: `tests/test_policy_rows.py::test_blocked_is_judged_before_the_session_cap_before_quota_and_a_refused_call_takes_no_unit`, `tests/test_engine.py::test_a_refused_attempt_does_not_count_against_the_action_cap`, `tests/test_behaviour_golden.py::test_a_refused_attempt_is_not_counted_as_executed`, `tests/test_coverage.py::test_every_attempted_tool_call_is_counted_even_a_refused_one`, `tests/test_max_calls_counts_admitted.py::test_refused_attempts_do_not_use_up_max_calls`
 
-**One sentence.** Every core runtime decision — a detector's verdict, an
-admission refusal — is made from non-content signals: counts, hashes,
-timings, prices, declared capability classes. No prompt, reply or tool
-result is ever read to decide anything.
+8. **Arguments are validated, never coerced.** A refusal (`invalid_arguments`) names the parameter
+   and the types, never the value.
+   Asserted by: `tests/test_hooks_validation.py::test_the_case_table`, `tests/test_hooks_validation.py::test_validation_runs_without_a_policy_and_never_coerces`, `tests/test_hooks_validation.py::test_a_reason_names_the_parameter_and_the_types_never_the_value`
 
-**The bound.** Single process: exact, by construction rather than by
-scanning. `Event` (`runbound/events.py`) carries no message text at all —
-`tokens_in`/`tokens_out` (counts), `cost_usd` (a price-table lookup),
-`duration_s`, `model`, `tool_name`, `args_hash` (a salted digest, never the
-arguments) — so a detector reading an `Event` has no content to read even if
-it wanted to. The admission stages (`runbound/admission.py`) extend the
-same property to the door: every stage is a comparison of plain numbers a
-caller already read under a lock (`turns`, `elapsed_s`, `total_tokens`,
-`executed`, a posture's verdict) — none of them opens a request's
-`messages`/`content` field for anything beyond counting characters for the
-money and tokens estimates, and even that reads only a length, never the text
-itself.
+9. **Only pre hooks rewrite.** The rewritten arguments are re-validated and are what policy sees;
+    the caller's containers are never mutated. A rewrite from a gate hook, a framework adapter or
+    during an approved deferred execution (after the seal) is a hook error.
+    Asserted by: `tests/test_hooks_chain.py::test_a_rewrite_is_visible_to_policy`, `tests/test_hooks_chain.py::test_a_rewrite_is_revalidated_and_never_mutates_the_callers_arguments`, `tests/test_hooks_chain.py::test_a_gate_hook_cannot_rewrite`, `tests/test_hooks_chain.py::test_a_framework_adapter_cannot_apply_a_rewrite`, `tests/integration/test_approvals_plane.py::test_a_rewrite_after_the_seal_is_a_hook_error`
 
-**Asserted by:** every detector test in `tests/test_detectors.py` builds
-events from bare numbers and never a string a detector could have "read";
-`tests/test_admission_stages.py` calls every stage with plain numbers and no
-session, request or message object at all — there is nothing content-shaped
-to pass even if a stage wanted one.
+## Failures fail by capability class
 
----
+10. **A user hook that raises, returns nonsense or outlives `hook_timeout_s`** refuses with
+    `hook_error` for a consequential or unclassified tool; for a `read`, `write` or `external` tool
+    it is logged once, skipped and tagged `hook_error:<name>` on the `tool_result`.
+    Asserted by: `tests/test_hooks_chain.py::test_a_raising_user_hook_refuses_a_consequential_or_unclassified_tool`, `tests/test_hooks_chain.py::test_a_raising_user_hook_is_logged_once_and_a_read_write_or_external_tool_continues`, `tests/test_hooks_chain.py::test_a_hook_that_outlives_the_timeout_counts_as_raising`, `tests/test_hooks_chain.py::test_a_hook_returning_nonsense_is_a_hook_error`, `tests/test_post_chain.py::test_a_skipped_pre_hook_failure_is_tagged_on_the_result_event`
 
-## Upper bound
+11. **A built-in that raises refuses every class:** the validator, policy evaluation, a policy
+    constraint or approval callback. Its exception text is not in the refusal.
+    Asserted by: `tests/test_hooks_chain.py::test_a_built_in_that_raises_refuses_even_a_read_tool`, `tests/test_engine.py::test_enforce_policy_fails_closed_when_evaluation_breaks`, `tests/test_policy_core.py::test_a_constraint_that_raises_blocks_the_call_fail_closed`, `tests/test_policy_core.py::test_an_approval_callback_that_raises_blocks_the_call_fail_closed`, `tests/test_policy_core.py::test_a_policy_the_engine_cannot_evaluate_refuses_the_call`
 
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Reservation,
-and its upper bound").
+12. **The post chain never passes an unprocessed result on:** a redaction that raises withholds
+    the output for every class; a user post hook that raises or times out withholds it for a
+    consequential or unclassified tool and is tagged and skipped otherwise; a failed truncation
+    falls back to the plain size cap; a failed scan leaves the result untagged. Exception text
+    reaches neither the model nor the event.
+    Asserted by: `tests/test_post_chain.py::test_a_raising_redactor_withholds_the_output_for_every_class`, `tests/test_post_chain.py::test_a_raising_user_post_hook_withholds_a_consequential_or_unclassified_result`, `tests/test_post_chain.py::test_a_raising_user_post_hook_is_tagged_and_skipped_for_read_write_external`, `tests/test_post_chain.py::test_a_post_hook_that_outlives_the_timeout_counts_as_raising`, `tests/test_results.py::test_a_failed_truncation_falls_back_to_the_plain_size_cap`, `tests/test_post_chain.py::test_a_failed_scan_tags_and_passes_the_result_through`, `tests/test_post_chain.py::test_the_exception_text_never_reaches_the_model_or_the_event`
 
-**The bound.** Single process: exact, while the check runs and the calls it
-covers stay in flight. `Engine._admit_budget` compares a call's worst case
-against `budget_usd - (total_cost_usd + spend_offset_usd) - reserved["usd"]`
-and, on a pass, takes the hold and writes it to `reserved` in the same
-`session.lock` section as the compare — so two calls racing the same
-remaining dollar cannot both read "room" before either writes. The hold is
-given back — by whichever close-out path the call actually takes: an
-ordinary return, a raised exception, or — for a stream — exhaustion, an early
-`close()`, a mid-flight failure, or being abandoned and collected — which is
-what keeps `reserved` from drifting upward forever. This holds for a call
-made through a wrapped client or `@runbound.llm`, under `budget_admission`:
-a stated cap (`"capped"`, the default) or the assumed
-`admission_output_tokens` cap (`True`). An **uncapped** call under
-`"capped"` reserves nothing — nothing exact to reserve against — and is
-bounded only by the post-call wall in [Budget](#budget), exactly as it
-was before the reservation existed. The input side of the worst case is
-still chars/4, the same estimate
-[Budget](#budget) already lives with. `reserved` is **worker-local** — this
-process's own in-flight money, never folded into `spend_offset_usd` and
-never sent to the control plane — so the *fleet* bound is unchanged from
-[Budget](#budget): a worker's reservations say nothing to the rest of the
-fleet, and the cross-worker window described there still applies once a call
-settles. Fail-open still wins over this bound: a `Hold.release` that itself
-raises is logged and swallowed, and the money it was holding leaks for the
-rest of the run rather than the host's call being failed by our own bug.
+## Results
 
-**Asserted by:**
-- The floor under concurrency, and that it un-reserves back to zero once
-  every call resolves:
-  `tests/test_reservation_ledger.py::test_exactly_three_of_ten_concurrent_capped_calls_are_admitted`,
-  `::test_a_budget_that_is_not_a_multiple_of_the_worst_case_admits_the_floor`,
-  `::test_the_same_bound_holds_for_concurrent_async_calls[openai]`,
-  `::test_the_same_bound_holds_for_concurrent_async_calls[anthropic]`.
-- The hold lasts exactly as long as a stream is open, for every way a stream
-  can end: `::test_an_open_stream_holds_the_money_a_second_call_needs[openai]`,
-  `::test_an_open_stream_holds_the_money_a_second_call_needs[anthropic]`,
-  `::test_an_open_async_stream_holds_the_money_too[openai]`,
-  `::test_an_open_async_stream_holds_the_money_too[anthropic]`,
-  `::test_closing_a_stream_early_releases_its_hold`,
-  `::test_a_stream_that_dies_mid_flight_releases_its_hold`,
-  `::test_a_failed_then_closed_stream_releases_its_hold_exactly_once`,
-  `::test_an_abandoned_stream_releases_its_hold_when_it_is_collected`.
-- Every other close-out path gives the hold back in full:
-  `::test_a_provider_error_releases_the_hold_in_full`,
-  `::test_a_post_call_trip_still_releases_the_hold`,
-  `::test_an_in_flight_refusal_after_the_money_was_admitted_gives_the_hold_back`,
-  `::test_a_hold_whose_release_raises_is_logged_and_the_response_still_returns`.
-- `@runbound.llm` holds its assumed cap for exactly the decorated body's
-  lifetime, sync and async: `::test_the_llm_decorator_holds_its_assumed_cap_for_the_life_of_the_body`,
-  `::test_the_llm_decorator_releases_its_hold_when_the_body_raises`,
-  `::test_an_async_llm_decorator_holds_and_releases_too`.
-- `record_call` never holds anything, because the call it describes is
-  already over: `::test_record_call_never_holds_anything`.
-- Intended bound: the same upper bound for N concurrent calls spread across
-  *workers* racing one shared `budget_usd`. Not yet asserted by a test (needs a live multi-worker race; v1.1). `reserved` is
-  deliberately worker-local and the plane never sees it; only the single-worker floor is measured today.
+13. **Redact, then truncate, then scan, then user post hooks.** Secret-named keys are redacted
+    exactly, case-insensitively, at any depth; plain strings are not. A truncated JSON result
+    stays valid JSON with markers. A non-JSON result passes through untouched.
+    Asserted by: `tests/test_results.py::test_process_redacts_then_truncates_then_scans`, `tests/test_results.py::test_secrets_are_redacted_at_depth_case_insensitively_keeping_the_key`, `tests/test_results.py::test_matching_is_exact_not_substring`, `tests/test_results.py::test_a_plain_string_is_not_redacted_in_v1`, `tests/test_results.py::test_an_oversized_result_comes_back_truncated_as_valid_json_with_markers`, `tests/test_results.py::test_a_non_json_value_passes_through_untouched`, `tests/test_post_chain.py::test_a_post_hook_can_replace_the_result_after_redact_and_truncate`
 
----
+14. **The injection scan tags and never blocks**, and reports pattern names, never matched text.
+    Asserted by: `tests/test_post_chain.py::test_the_scan_tags_the_event_and_never_blocks_the_result`, `tests/test_results.py::test_scan_reports_names_never_the_matched_text`
 
-## Authorization before reservation
+15. **Every decorated call ends in one `tool_result` record** (`ok`, `error`, `refused`, `withheld`
+    or `pending_approval`) with `duration_s` and `outcome` and never the result, even in a latched
+    session, in its own ring apart from `events()`.
+    Asserted by: `tests/test_post_chain.py::test_the_event_carries_duration_and_outcome_ok`, `tests/test_post_chain.py::test_a_refused_call_records_a_refused_result_even_in_a_latched_session`, `tests/test_post_chain.py::test_tool_results_is_its_own_ring_and_events_stays_for_refusals`, `tests/test_post_chain.py::test_on_event_receives_a_tool_result_for_an_ok_call_a_flagged_result_and_a_withheld_one`
 
-**One sentence.** Every cheap, deterministic check runs before any resource
-is held; a hold is taken last, and released if a later stage denies.
+## Policy only tightens
 
-**The bound.** Single process: exact, by the order `Engine.admit` runs its
-stages in — for a model call, the stopped posture first, then circuit,
-unpriced model, then (under `config.envelope`) steps, run time and tokens, and
-only after all of those pass does the money hold (`_admit_budget`) run, as the
-*last* stage of `admit`. The one check that runs after it is the in-flight cap,
-which lives in the api's registry and runs right after `admit` returns; when it
-refuses, the hold is given back
-(`tests/test_reservation_ledger.py::test_an_in_flight_refusal_after_the_money_was_admitted_gives_the_hold_back`). A call denied by any earlier stage
-holds nothing at all — `tests/test_envelope.py::test_a_call_that_breaks_both_money_and_steps_reports_steps_and_holds_nothing`
-configures a call that would be refused by both the step limit and the
-money estimate and asserts the cheaper check (steps) wins and
-`session.reserved` stays empty, never touched. For a tool action the same
-ordering holds between posture and the customer's own action policy: a call
-a posture would refuse is never handed to a `require_approval` callback
-(`runbound/api.py::_announce_call`) — no approver is asked about a call that
-never runs.
+16. **An org policy merged onto the local one never permits a call either side refuses**, never
+    loosens the mode, and a dry-run org policy never changes the local mode. Constraints and the
+    approval callback stay local.
+    Asserted by: `tests/test_policy_merge_properties.py::test_the_merge_never_permits_a_call_either_input_refuses`, `tests/test_policy_merge_properties.py::test_the_merged_mode_is_never_looser_than_either_input`, `tests/test_policy_merge.py::test_a_dry_run_remote_never_changes_the_local_mode`, `tests/test_policy_merge.py::test_constraints_and_the_approval_callback_stay_local`
 
-**Asserted by:** `tests/test_envelope.py` (the stage-order tests above, and
-the fail-open tests proving a broken stage costs the call nothing more than
-that one check); `tests/test_reservation_ledger.py` (the reservation's own half: the
-hold is always the last thing `_admit_budget` does, never released *for* a
-later phase because there is no later phase after it).
+17. **A dashboard row folds onto the code's rules, most restrictive wins, field by field:**
+    `blocked` OR, the lower session cap, `approval_required` OR, the code's `approval_mode` when it
+    declares one, the lower timeout, the stricter `risk_class` (it can only raise the tool's
+    class), `fail_mode` `closed`. A malformed row is skipped.
+    Asserted by: `tests/test_policy_rows.py::test_a_row_can_only_add_never_loosen_what_the_code_requires`, `tests/test_policy_rows.py::test_a_dashboard_row_blocks_a_tool_the_code_allows`, `tests/test_policy_rows.py::test_a_row_session_cap_and_the_codes_cap_the_lower_wins`, `tests/test_policy_rows.py::test_code_wins_on_approval_mode_and_the_timeout_is_the_lower`, `tests/test_policy_rows.py::test_a_rows_risk_class_raises_the_tools_class_and_never_lowers_it`, `tests/test_policy_rows.py::test_fail_mode_closed_wins_and_malformed_rows_are_skipped`
 
----
+18. **Dry run refuses nothing.** A `dry_run` row or a `dry_run` policy records what it would have
+    refused (`would_refuse`) and lets the call run; a dry-run approval row asks nobody.
+    Asserted by: `tests/test_policy_rows.py::test_a_dry_run_row_refuses_nothing_and_records_would_refuse`, `tests/test_policy_rows.py::test_a_dry_run_approval_row_asks_nobody`, `tests/test_policy_rows.py::test_a_dry_run_quota_is_counted_and_records_would_refuse_without_refusing`, `tests/test_policy_core.py::test_dry_run_logs_and_never_raises`
 
-## Latch
+19. **Rows are replaced only when `rows_hash` changes**; a `policy_version` bump alone changes nothing.
+    Asserted by: `tests/test_policy_rows.py::test_rows_replace_only_when_their_hash_changes_and_a_version_bump_alone_changes_nothing`, `tests/integration/test_rows_quota_plane.py::test_an_unchanged_rows_hash_replaces_nothing_even_when_the_version_moves`
 
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Fleet
-consistency bounds").
+20. **A capability class rule refuses a decorated tool with `CapabilityRefused`** and never
+    latches; a call the decorator did not wrap skips the class rules.
+    Asserted by: `tests/test_engine.py::test_a_capability_class_rule_refuses_a_decorated_tool`, `tests/test_engine.py::test_an_undecorated_call_skips_the_class_rules`, `tests/test_decision_level.py::test_a_tool_refused_by_a_class_rule_is_a_process_decision`
 
-**The bound.** Single process: immediate — the very next `session()` entry
-(under `on_anomaly="raise"`) or the very next guarded call (otherwise) sees
-the latch, because it lives in the same process's memory. Fleet — Intended bound: a latch set
-on one worker reaches another within `control_plane_cache_s` **plus one
-in-flight turn** — the same window the budget bound uses, because both ride
-the same cached entry answer. Not yet asserted by a test (needs a live multi-worker race; v1.1).
+21. **Only `block_and_latch` stops a session:** every later call in it is refused with the first
+    anomaly; other session keys keep working; `block` and `dry_run` never latch.
+    Asserted by: `tests/test_latch.py::test_a_latched_user_is_refused_on_every_later_tool_call`, `tests/test_latch.py::test_the_latch_is_per_key_and_other_keys_keep_working`, `tests/test_policy_core.py::test_block_does_not_latch_the_session`, `tests/test_policy_core.py::test_dry_run_never_latches`
 
-**Asserted by:**
-- Local, single-process latch-before-the-call: `tests/test_latch.py::test_entering_a_latched_session_raises_before_the_body_runs`,
-  `::test_a_blocked_user_is_blocked_on_every_later_message`,
-  `::test_a_latched_session_skips_detection_entirely`.
-- Fleet propagation, refused before the model call runs:
-  `tests/test_session_sync.py::test_a_remote_latch_refuses_the_block_before_it_runs`.
-- Acme scorecard scenario 2 ("abuser blocked on the other worker") — a
-  cross-process demonstration with a real latency measurement proving no
-  model call happened.
-- Intended bound: a call already in flight when a latch lands is unaffected and the *next* one is refused. Not yet asserted by a test (needs a live multi-worker race; v1.1). For example, a test that starts a call already in flight when a latch
-  lands mid-call and shows that call is unaffected while the *next* one is
-  refused. What exists proves "the door checks before the body runs," not a
-  race between an in-flight call and a landing latch.
+## Quotas
+
+22. **Leases plus takes never exceed a quota across workers.** Held leases are spent first, all
+    of them dropped when the window changes; a per-key quota is never leased; a full window is
+    cached until it ends (one round trip per window).
+    Asserted by: `tests/integration/test_rows_quota_plane.py::test_three_sdk_workers_against_twenty_per_clock_minute_admit_exactly_twenty`, `tests/test_policy_rows.py::test_a_held_lease_is_spent_before_any_take`, `tests/test_policy_rows.py::test_everything_held_is_dropped_when_window_start_changes_or_the_window_has_passed`, `tests/test_policy_rows.py::test_a_per_key_quota_always_takes_with_the_session_key_hash_and_never_leases`, `tests/test_policy_rows.py::test_an_exhausted_window_is_cached_one_round_trip_per_window`
+
+23. **With the plane away the lease in hand is spent, then every class refuses
+    `quota_plane_unavailable`** under `fail_mode: closed`; `open` continues at a tenth of the limit
+    per heartbeat period.
+    Asserted by: `tests/test_policy_rows.py::test_with_the_plane_away_the_lease_is_spent_then_quota_plane_unavailable_for_every_class`, `tests/test_policy_rows.py::test_fail_mode_open_continues_at_a_static_share_per_heartbeat_period`, `tests/integration/test_rows_quota_plane.py::test_a_plane_outage_spends_the_lease_then_refuses_quota_plane_unavailable`
+
+24. **A call that will ask a person takes no unit itself:** the approval create takes it, a retried
+    create reuses its `request_id`, and a deferred execution never takes a second. A full quota on
+    create refuses `quota_exceeded` with `retry_after` and is not asked again inside the window.
+    Asserted by: `tests/test_policy_rows.py::test_a_tool_that_will_ask_a_person_takes_nothing_the_plane_takes_the_unit_at_create`, `tests/test_policy_rows.py::test_a_deferred_execution_does_not_take_a_second_unit`, `tests/test_approvals.py::test_the_create_carries_the_key_hash_and_the_same_request_id_on_a_retry`, `tests/test_approvals.py::test_a_429_on_create_is_quota_exceeded_with_retry_after_and_no_retry`, `tests/test_approvals.py::test_nothing_is_asked_again_inside_the_window`
+
+## Approvals
+
+25. **No connected plane, no approval:** a tool that needs one is refused at once
+    (`approval_unavailable`) and its body never runs; a degraded link refuses only *new* requests.
+    Asserted by: `tests/test_approvals.py::test_with_no_plane_an_approval_tool_is_refused_at_once_and_the_body_never_runs`, `tests/test_cache.py::test_in_degraded_everything_runs_on_the_cache_but_new_approvals_refuse`
+
+26. **Sync approval:** the request carries the final arguments (after rewrite hooks); a denial
+    refuses `approval_denied`, expiry `approval_timeout`; a transport error is retried until the
+    deadline and is never read as a denial.
+    Asserted by: `tests/integration/test_approvals_plane.py::test_the_request_carries_the_final_arguments_after_a_rewrite_hook`, `tests/integration/test_approvals_plane.py::test_sync_approve_runs_the_tool_and_reports_it`, `tests/integration/test_approvals_plane.py::test_sync_deny_refuses_with_approval_denied`, `tests/integration/test_approvals_plane.py::test_sync_timeout_refuses_with_approval_timeout`, `tests/integration/test_approvals_plane.py::test_a_plane_that_is_down_is_never_read_as_a_denial`
+
+27. **Deferred approval returns `pending_approval` at once and the body does not run.** Once
+    approved, one worker executes it through the tool's full chain, so a policy that tightened since
+    still refuses it.
+    Asserted by: `tests/integration/test_approvals_plane.py::test_deferred_returns_pending_then_a_worker_claims_and_executes`, `tests/integration/test_approvals_plane.py::test_two_replicas_exactly_one_executes`, `tests/test_approvals.py::test_a_policy_that_tightens_after_approval_stops_the_deferred_execution`
+
+28. **The seal is verified before anything runs.** An HMAC-SHA256 over the canonical
+    `{v, service, tool, request_id, args, not_after}`; any changed field or wrong secret fails it,
+    nothing runs and the plane is told `tampered`; a valid MAC past `not_after` (+300 s) is
+    `clock_skew`, and nothing runs either. The secret is never in the seal or sent to the plane.
+    Without a secret, only the requesting worker runs the request, with the arguments it parked.
+    Asserted by: `tests/test_approvals.py::test_the_mac_is_hmac_sha256_over_the_canonical_body`, `tests/test_approvals.py::test_any_changed_field_or_a_wrong_secret_breaks_the_seal`, `tests/test_approvals.py::test_a_missing_secret_malformed_seal_or_non_dict_args_never_verifies`, `tests/test_approvals.py::test_not_after_has_a_300_second_tolerance`, `tests/test_approvals.py::test_a_valid_mac_with_an_expired_not_after_is_clock_skew_not_tampered`, `tests/test_approvals.py::test_the_seal_does_not_contain_the_secret`, `tests/integration/test_approvals_plane.py::test_a_tampered_seal_is_refused_and_reported_tampered`, `tests/integration/test_approvals_plane.py::test_a_restart_with_no_seal_an_unsealed_request_is_never_run_elsewhere`
+
+29. **`runbound.current_request()` names the request while its deferred execution runs and is
+    `None` otherwise**: the idempotency key for a request offered twice. A running execution is
+    renewed on every hello; a claim the plane took back stops being renewed.
+    Asserted by: `tests/test_approvals.py::test_a_running_execution_is_named_on_every_hello_until_it_finishes`, `tests/test_approvals.py::test_current_request_is_none_outside_an_execution`, `tests/test_approvals.py::test_a_claim_the_plane_took_back_stops_being_renewed_and_a_cap_of_twenty_applies`
+
+30. **An outcome report survives an outage:** queued append-only (`0600`, no argument or result),
+    sent on the next connected hello, once.
+    Asserted by: `tests/test_approvals.py::test_the_queue_is_append_only_0600_and_holds_no_args_or_results`, `tests/test_approvals.py::test_drain_sends_each_record_once_keeps_the_unsent_and_dedupes`, `tests/test_approvals.py::test_a_report_the_plane_cannot_take_is_queued_and_drained_on_the_next_connected_hello`, `tests/integration/test_reports_queue_real.py::test_a_report_made_while_the_plane_is_unreachable_is_delivered_exactly_once_later`
+
+31. **Registration refuses a deferred tool whose arguments are not JSON-friendly** (`ValueError`).
+    Asserted by: `tests/test_approvals.py::test_a_deferred_tool_must_have_json_friendly_arguments`, `tests/integration/test_approvals_plane.py::test_registration_rejects_a_deferred_tool_with_arguments_that_are_not_json`
+
+## Plane loss and the policy cache
+
+32. **The plane-loss gate never refuses a `read`, `write` or `external` tool**, in any link
+    state, on a cache of any age. (A quota or an approval on that tool still needs the plane: 23, 25.)
+    Asserted by: `tests/test_cache.py::test_read_write_external_run_on_the_cache_in_every_state`, `tests/test_cache.py::test_through_the_decorator_a_consequential_tool_refuses_and_a_read_tool_runs`, `tests/test_session_sync.py::test_a_plane_that_is_down_never_stops_a_tool`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs`
+
+33. **Consequential and unclassified tools refuse `plane_unavailable`** once
+    `consequential_grace_s` (15 to 60, default 60) has passed since the last answered hello (or
+    start), and, before the first hello, unless the cache was confirmed within 15 minutes.
+    Asserted by: `tests/test_cache.py::test_consequential_tools_follow_the_grace_period_and_the_cache`, `tests/test_cache.py::test_a_cache_confirmed_more_than_15_minutes_ago_is_not_trusted_by_consequential_tools_at_boot`, `tests/test_cache.py::test_consequential_grace_s_is_configurable_between_15_and_60`, `tests/integration/test_plane_loss_real.py::test_a_destructive_tool_waits_for_a_hello_when_there_is_neither_a_hello_nor_a_cache`
+
+34. **A process with no plane configured has no plane gate.**
+    Asserted by: `tests/test_cache.py::test_no_plane_configured_means_no_plane_gate`
+
+35. **Link state:** `connecting`, `connected`, `degraded` (3 missed hellos, or one reply saying
+    the plane cannot read its own state), `unavailable` (60 s since the last answered hello: time,
+    not a count).
+    Asserted by: `tests/test_cache.py::test_the_four_states_and_their_transitions`, `tests/test_cache.py::test_connecting_counts_misses_toward_degraded`, `tests/test_cache.py::test_one_fleet_state_unavailable_reply_is_degraded`
+
+36. **A restarted worker enforces the cached policy before its first hello.** The cache is written
+    atomically (no torn reads), never lets an older `policy_version` overwrite a newer one, sits in
+    a `0700` directory as a `0600` file, never under `XDG_RUNTIME_DIR`, and holds no token. Rules
+    declared in code never come from it.
+    Asserted by: `tests/test_cache.py::test_a_new_worker_enforces_the_cached_policy_before_any_hello`, `tests/test_cache.py::test_four_writers_and_four_readers_give_no_torn_reads`, `tests/test_cache.py::test_an_older_version_never_overwrites_a_newer_one`, `tests/test_cache.py::test_the_layout_and_permissions`, `tests/test_cache.py::test_xdg_runtime_dir_is_never_used`, `tests/test_cache.py::test_round_trip_and_no_token_on_disk`, `tests/test_cache.py::test_code_declared_rules_are_never_in_the_cache`, `tests/integration/test_plane_loss_real.py::test_a_restart_enforces_the_cached_org_policy_before_the_first_hello`
+
+37. **The cache file is MAC'd with a key derived from the token:** a hand-edited, truncated,
+    other-token or other-service file is ignored as if absent. This is tamper-evidence, not a
+    boundary against anyone who can read the token.
+    Asserted by: `tests/test_cache.py::test_a_hand_edited_cache_is_rejected`, `tests/test_cache.py::test_another_tokens_cache_another_service_garbage_and_truncation_are_rejected`, `tests/test_cache.py::test_a_cache_with_a_different_token_is_not_loaded`
+
+38. **A fleet halt under `on_halt="raise"` refuses every tool of every class**; it lapses 60 s
+    after contact with the plane went quiet; a `narrow` halt is a full halt; `on_halt="warn"` only logs.
+    Asserted by: `tests/test_session_sync.py::test_a_fleet_halt_refuses_even_a_read_tool_under_stop`, `tests/test_plane_loss.py::test_a_stale_halt_is_released_after_the_window`, `tests/test_wall_sdk.py::test_a_narrow_halt_is_a_full_halt`, `tests/test_wall_sdk.py::test_on_halt_warn_logs_and_lets_the_tool_run`
+
+## What leaves the process
+
+39. **No plane configured, no network:** loading and running a guarded target that inits without a
+    token makes no connection.
+    Asserted by: `tests/test_check.py::test_no_network_is_touched_without_a_token`, `tests/test_session_sync.py::test_a_process_without_a_plane_url_stays_local`
+
+40. **The plane is off the call path:** a tool call with no approval and no quota row makes no
+    network call on the calling thread, and a collector that is down never blocks or raises.
+    Asserted by: `tests/test_session_sync.py::test_tool_calls_never_touch_the_network_on_the_calling_thread`, `tests/test_spans.py::test_a_down_collector_never_blocks_or_raises_and_a_400_drops`
+
+41. **Arguments and results stay in the process,** with one documented exception: an approval
+    request sends the call's final `args` to the plane so a person can decide. Everywhere else they
+    travel only as digests: `args_hash` on events, `args_digest` and `result_bytes` on spans,
+    `result_digest` on an approval report. Events carry no error text; refusals and anomalies carry
+    no arguments; the tool report carries parameter names and types, never default values.
+    Asserted by: `tests/test_spans.py::test_no_argument_no_result_no_exception_text_leaves_the_process`, `tests/test_local_events.py::test_records_never_carry_call_arguments_prompts_or_replies`, `tests/test_policy_hook.py::test_raw_arguments_never_reach_the_exception_or_the_anomaly`, `tests/test_decision_evaluation.py::test_policy_rule_refusals_state_their_rule_and_never_the_arguments`, `tests/test_plane_types.py::test_event_to_wire_has_no_error_text_field_at_all`, `tests/test_change_signals.py::test_records_carry_no_tool_argument`, `tests/test_tool_report.py::test_a_default_makes_a_parameter_optional_and_the_value_never_travels`
+
+42. **The session key leaves only as an unsalted sha256** (so one caller matches across workers),
+    unless `send_session_keys=True`.
+    Asserted by: `tests/test_privacy_wire.py::test_the_wire_anomaly_carries_the_hash_and_not_the_key`, `tests/test_privacy_wire.py::test_an_exported_anomaly_carries_no_raw_key`, `tests/test_privacy_wire.py::test_the_exporter_sends_raw_keys_only_when_told_to`, `tests/test_otel_export.py::test_a_raw_session_key_never_leaves_only_its_hash`, `tests/test_plane_types.py::test_key_hash_never_contains_the_key`
+
+43. **`args_hash` is salted per process:** an equality token inside one process, not a fingerprint
+    across workers or restarts.
+    Asserted by: `tests/test_hash_salt.py::test_the_hash_is_not_a_fingerprint_across_processes`, `tests/test_hash_salt.py::test_the_hash_differs_from_a_raw_unsalted_sha256`
+
+44. **One span per call** (`execute_tool {tool}`), to a configured OpenTelemetry provider or the
+    stdlib OTLP emitter, never both; with neither, no span. A refusal leaves the status UNSET with
+    `runbound.outcome=refused`.
+    Asserted by: `tests/test_spans.py::test_one_span_per_call_for_ok_error_refused_and_withheld`, `tests/test_spans.py::test_with_a_provider_configured_spans_go_there_and_the_stdlib_emitter_stays_silent`, `tests/test_spans.py::test_no_endpoint_and_no_provider_means_no_spans_and_no_cost`
+
+45. **The token and the approval secret stay out of `repr()`.**
+    Asserted by: `tests/test_config_plane.py::test_repr_hides_the_token`, `tests/test_approvals.py::test_the_secret_comes_from_init_or_the_environment`
 
 ---
 
-## Circuit
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Fleet
-consistency bounds").
-
-**The bound.** `circuit_failure_threshold` failures inside
-`circuit_window_seconds` opens it; it stays open for
-`circuit_cooldown_seconds`; the half-open state lets exactly one call
-through, and a fleet circuit does the same thing for every worker at once
-under one shared decision. That decision is shared, not instantaneous: a
-worker that did not see the failures itself adopts the plane's circuit on its
-next heartbeat, not the moment another worker opens it. Intended bound: one heartbeat
-(`control_plane_poll_s`). Not yet asserted by a test (needs a live multi-worker race; v1.1). The Acme scorecard's scenario 4 observes
-around 1.5-2 s from a polling loop; that is an observation, not an asserted bound.
-
-**Asserted by:** `tests/test_circuit.py::test_it_opens_exactly_at_the_failure_threshold`,
-`::test_the_cooldown_lets_exactly_one_probe_through`,
-`::test_a_successful_probe_closes_the_breaker`,
-`::test_concurrent_failures_open_it_once_and_stay_consistent`; also
-`tests/test_circuit_force.py`, `tests/test_autowrap.py`,
-`tests/test_selfhosted.py` (per-endpoint keying), `tests/test_real_sdk.py`
-(against real SDK classes). Fleet-wide circuits are verified by the control
-plane's own test suite (adapters, alert routing, the ledger, the live store,
-refusals, and the SDK-facing router); Acme scorecard scenario 4 ("one fleet
-circuit, one alert").
-
-**One page per outage.** A provider's circuit pages once however many retries run into the
-outage, and the page is forgotten when the circuit closes (a successful probe, or the fleet
-closing it), so the next outage pages again: open, close, open is two pages, and a retry storm
-on one open circuit is one (`tests/test_circuit_repage.py`).
-
----
-
-## Policy-monotonic
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Policy
-precedence").
-
-**The bound.** A per-scope policy version number only climbs, never repeats
-and never walks backward, and merging a local rule with a remote one always
-keeps the more restrictive of the two — a stricter `on_violation`, the union
-of every `deny`, the intersection of every `allow`, the lower of two
-matching limits.
-
-**Asserted by:**
-- The *merge is stricter-only* half of this invariant:
-  `tests/test_policy_merge.py::test_the_stricter_on_violation_wins`,
-  `::test_deny_is_the_union`,
-  `::test_allow_is_the_intersection_when_both_sides_set_one`,
-  `::test_the_lower_limit_carries_the_origin_of_the_side_that_set_it`,
-  `::test_a_dry_run_remote_never_changes_the_local_mode`.
-- The *merge never permits what either side refuses* half, as a property
-  rather than as examples: `tests/test_policy_merge_properties.py` generates
-  500 random policy pairs from a fixed seed (stdlib `random`; no new test
-  dependency) and, over 11,900 (tool, attempt-count) probes, asserts that a
-  call either input refuses is refused by the merged policy too — plus that
-  the merged `on_violation` is never looser than either side's. It generates
-  remote policies wire-shaped (no callables, since none can travel) and asks
-  a remote approval rule of the local callback, which is what the merged
-  policy does with it. It says nothing about propagation over time; that is
-  the half below.
-- The *version-never-goes-backward* half is verified by the control plane's
-  own test suite: versions climb per scope and never repeat, and a
-  transition that walks backward is refused.
-- Intended bound: a stale worker, mid-propagation, never enforces something
-  looser than it already had. Not yet asserted by a test (needs a live multi-worker race; v1.1). No single test combines both
-  halves — the two properties above are each tested on
-  their own, and nothing in this repo uses the literal term
-  `policy_monotonic`. Treat it as implied by the two proven
-  halves, not as a directly-asserted guarantee.
-
----
-
-## Posture is a capability contract
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Posture
-behaviour").
-
-**The bound.** Single process: exact. Every posture decision in the SDK goes
-through `runbound.posture.Posture.allows`, which turns a tool's declared
-capability classes into one verdict — the worst of its classes, so a tool is
-only as permitted as its least permitted class, and a tool that declared no
-class at all is admitted only by a posture that allows everything. The check
-runs in the `@runbound.tool` wrapper before the body, against the session's
-posture, the process's and the plane's tightened together (the strictest
-wins; a session's narrowing never loosens the process's); a denied
-tool raises `SafeModeViolation` and its body never executes. Class rules from
-`init(capabilities=...)` are the same function over the same classes, and the
-stricter of the two wins.
-
-Three limits, stated rather than hidden: it covers only tools declared with
-`@runbound.tool` (an undecorated function, or a framework tool seen only
-through the LangChain handler, is not refused); a bug reading the posture is
-fail-open like every other internal error — the call runs and a warning is
-logged; and `stopped` refuses every declared tool *and* every model call (see
-[Stopped means stopped](#stopped-means-stopped)).
-
-Fleet: the plane's posture reaches a worker on its next heartbeat
-(`control_plane_poll_s`, default 5 s) and is dropped 60 s after the last
-successful contact unless `stale_halt="hold"`, the halt's own rule. The plane
-can only **tighten**: its posture combines with the worker's by
-`posture.tighten`, so it can narrow a manual posture and can never widen one,
-and lifting its own directive leaves the worker's standing.
-
-**Asserted by:** `tests/test_postures.py` (the whole table, posture × class set
-× decorated; `allows` as the only decider, asserted by parsing every module;
-`tighten`; manual versus automatic; the ladder's three rungs; class rules;
-`require_rules`; fail-open) and `tests/test_session_sync.py` (the plane's
-posture within one heartbeat, tighten-only, staleness), and the Acme scorecard's
-scenario 11 (`demo/fleet_verify.py`), where a fleet-wide Narrow halt states
-`restricted` on every worker.
-
----
-
-## Stopped means stopped
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Posture
-behaviour").
-
-**The bound.** Single process: exact, by construction rather than by
-scanning. Every model call, whichever of a wrapped client's sync, async or
-streamed `create`, or a `@runbound.llm`-decorated function, funnels through
-one door (`Engine.admit`), and that door's very first stage for a model call
-reads the effective posture — the session's own narrowing, the process's,
-the plane's Controls-stated one and a fleet-wide Narrow halt's, tightened
-together, the same function every other posture decision goes through — and
-refuses before the circuit is even checked, let alone before the provider is
-touched. The other four postures (`full`, `restricted`, `read_only`,
-`no_side_effects`) keep serving model calls, exactly as the posture table
-says; only `stopped` reaches this stage's refusal. Reading the posture is
-fail-open like every other admission phase: a bug here costs a call nothing
-but a warning, never a refusal of our own making.
-
-**Asserted by:** `tests/test_stopped_posture.py` — `Engine.admit` refuses a
-model call under a manual, a ladder-set and a process-level `stopped`
-posture and serves one under every other posture (a table over all five); a
-bug reading the posture lets the call through; and, end to end through
-`runbound.wrap()` and `@runbound.llm`, a fake provider records **zero**
-calls under `stopped` for a sync call, an async call, a streamed call, a
-synchronous `@runbound.llm` function and an async one — proving the
-provider itself was never reached, not merely that an exception was raised
-somewhere.
-
----
-
-## A complete Decision
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Decision
-semantics").
-
-**The bound.** Single process: exact, by construction — and, as of this
-release, literally every refusal site, not most of them. Every one states,
-in `evaluation`, whichever of `limit`, `used`, `reserved`, `estimate`,
-`remaining` apply to what it judged, plus `provider_called: bool` — always,
-whether or not any of the other five do. `Engine.refuse`/`_stamp_decision`
-fold `provider_called` in once, centrally, for every site that raises
-through them (every admission stage, a posture or capability denial, a
-tool-policy violation, the action cap); the two api-level entry doors that
-predate the `Decision` object (fan-out, in-flight) state it themselves, the
-same way. The one number this bound does not promise is exactness of the
-estimate itself — a money or tokens figure is still the same estimate
-[Upper bound](#upper-bound) and [Budget](#budget) already document — only
-that whatever number the stage actually compared is the one written down. A
-post-call budget crossing is the one wall trip that also carries a
-`Decision`: `provider_called=True`, and its `reason` states in words that
-the call already happened and its result is withheld, since usage is only
-known after the fact and the money was already spent regardless of what
-happens next.
-
-Four sites decide a refusal from a fact relayed from elsewhere — an org
-budget the plane itself decided, an unreachable plane under
-`on_plane_loss="refuse"`, a fleet-wide halt, and a latch another worker set
-— rather than from a number this worker compared itself, so none of them
-has a `limit`/`used`/`reserved`/`estimate`/`remaining` to state; inventing
-one would be less honest than an `evaluation` that states only
-`provider_called` (always `False` — none of these is ever decided after a
-provider call) and, on the `Decision` itself, a `level` of `"fleet"` and a
-`boundary` naming the kind (`"money"`, `"plane"`, `"halt"`) where the
-relayed detector name says which one — see `runbound.api._relayed_decision`.
-What such a Decision never lacks is a `reason` in words, and whatever fact
-did arrive with the verdict: a halt reaches a worker as a flag and a mode,
-so its `evaluation` carries `halt_mode` (`"stop"` or `"narrow"`). It carries
-no directive id and no operator's note because the plane does not send
-them to workers; who halted the fleet, and why, is the plane's own record.
-
-**Asserted by:** `tests/test_decision_evaluation.py` — a table over every
-refusal site (circuit, a stopped posture, the steps/tokens door stages, the
-money reservation, a post-call budget crossing, the action cap, posture, a
-capability class rule, a tool-policy violation, the in-flight cap, the
-fan-out limits, an org budget from the plane, an unreachable plane, a fleet
-halt, a relayed latch), each checked against what can apply for its own
-boundary, plus a closed-set check that no stray evaluation key ships
-unread. Only a post-call wall trip other than the budget crossing (`loop`,
-`spike`, `error_storm`, the post-call `steps`/`timeout` walls) carries no
-`Decision` at all — `tests/test_refusal_contract.py` covers those, and
-`exc.reason` still resolves correctly for them from the anomaly's own
-detector. `tests/test_admission_stages.py` and
-`tests/test_envelope.py` cover the pure stage functions and the door
-integration each site is built from.
-
----
-
-## The refusal contract
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("The refusal
-contract").
-
-**The bound.** `ExecutionRefused` is the public name and the base class for
-the one exception runbound raises on purpose; `GuardrailTripped` is the
-identical class object under its old name, permanently — not a lookalike
-kept in sync by hand, so every handler already written as `except
-GuardrailTripped:` keeps working, forever, by construction. No refusal here
-ever subclasses `openai.APIError`, the Anthropic equivalent, or any other
-provider SDK's exception, so a provider's own retry layer — or an
-application's bare `except APIError: retry` — never mistakes a refusal for
-its own kind of failure to retry, whatever that client's `max_retries` is
-configured to. Every refusal exposes `reason` (one value from a 15-entry
-closed set — `budget`, `tokens`, `steps`, `time`, `posture`, `policy`,
-`approval`, `circuit`, `concurrency`, `blast_radius`, `halt`, `plane`,
-`loop`, `error_storm`, `spike` — resolved from the tool policy's own rule
-name, then the Decision's boundary, then the anomaly's detector, and never
-outside the set); `retryable` (`False` for every reason a bare wait cannot
-fix — budget, tokens, steps, time, posture, policy, halt, blast radius,
-approval, loop, error storm, spike — `True`, with a `retry_after` where one
-is known, for `circuit` and `concurrency`, and `True` with no known
-`retry_after` for `plane`); `provider_called`; and `scope` (which level
-decided, and an UNSALTED sha256 hash of the session's key, so one caller matches
-across workers; never the key itself).
-`runbound.is_retryable(exc)` is the predicate a retry loop should use in
-place of guessing from the exception's message or type.
-
-**Asserted by:** `tests/test_refusal_contract.py` — the alias identity
-(`GuardrailTripped is ExecutionRefused`), an `except GuardrailTripped:`
-still catching every built-in refusal, no refusal subclassing a provider
-exception, the reason set matching the closed list exactly, `retryable`
-for every named reason, and the property this bound exists for: a retry
-loop that checks `runbound.is_retryable` makes exactly one attempt on a
-budget refusal, and a loop that ignores the predicate entirely and blindly
-retries a refused tool call is still stopped — within `loop_threshold`
-attempts, by the loop detector's own latch, not by luck. Against the real
-`openai` and `anthropic` SDKs over a mock transport
-(`tests/test_real_sdk.py`), a pre-call refusal makes zero HTTP requests
-whatever the client's own `max_retries` is set to, and
-`isinstance(exc, openai.APIError)` / the Anthropic equivalent are `False`.
-
-## Halt (release / hold)
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Fleet
-consistency bounds").
-
-**The bound.** `"release"` (default): the halt stops being enforced 60
-seconds after the last successful contact with the plane. `"hold"`: no time
-bound at all — it stays enforced until a heartbeat explicitly lifts it, even
-on a link that has been dead far longer than 60 seconds.
-
-**The same bound, for a Narrow halt's posture.** A fleet-wide `"stop"`
-halt and a fleet-wide `"narrow"` one (`Engine.halt_posture`, posture
-`restricted`) obey the identical `stale_halt` rule off the identical clock
-(`RemoteState._halt_state`) — a Narrow that has gone stale under `"release"`
-stops narrowing (and stops being acked, `RemoteState._hello_payload`'s
-`halt_ack`) exactly when a Stop that had gone stale would stop refusing.
-Narrow is also gated by `on_halt`, same as Stop: `"raise"` (default) honours
-it, `"warn"` never installs the posture at all rather than force a
-`SafeModeViolation` into code that asked never to be stopped by the kill
-switch (`Engine.halt_posture`, `api._sync_entry`/`_warn_narrowed`) — the two
-plane-driven postures (this one and the Controls-stated one) are
-independent sources (`runbound.state.POSTURE_SOURCES`'s `"halt"` entry) that
-tighten together in `Engine.effective_posture` and must lift on their own.
-
-**Asserted by:** `tests/test_plane_loss.py::test_stale_halt_release_is_the_default`,
-`::test_stale_halt_release_drops_the_halt_after_the_window`,
-`::test_stale_halt_hold_keeps_the_halt_well_past_the_window`,
-`::test_stale_halt_hold_is_lifted_only_by_a_heartbeat_saying_so`,
-`::test_an_unrecognized_stale_halt_value_behaves_like_release`,
-`::test_halt_stale_s_is_none_with_no_halt`,
-`::test_halt_stale_s_counts_seconds_since_last_contact_while_enforced`; also
-`tests/test_shared_state.py`'s halt tests (including the narrow/mode
-ones), `tests/test_kill_switch.py` (Narrow at the `Engine` level, including
-the two-source tighten/lift test and the `on_halt="warn"` gate), and
-`tests/test_session_sync.py`'s Narrow block (end to end through
-`runbound.session`/`@runbound.tool`). Acme scorecard scenario 6 ("kill
-switch") exercises the Stop halt end to end but does not itself flip
-`stale_halt`; a separate scenario exercises Narrow and convergence.
-
----
-
-## Plane-loss (guard_locally / refuse)
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#what-is-guaranteed) ("Fleet
-consistency bounds").
-
-**The bound.** `"refuse"` latches nothing and costs no strike — the very
-next entry asks the plane again, so a `"refuse"` misconfiguration self-heals
-the moment the plane answers. An *answered* refusal (the plane said "no" for
-a real reason, e.g. an org daily budget already spent) is always honored
-regardless of this setting — `on_plane_loss` only governs an *unanswered*
-question.
-
-**Asserted by:** `tests/test_plane_loss.py::test_guard_locally_on_a_degraded_link_answers_none`,
-`::test_guard_locally_is_the_default_when_unset`,
-`::test_refuse_on_a_degraded_link`, `::test_refuse_on_a_timeout`,
-`::test_refuse_on_an_error`,
-`::test_refuse_is_never_cached_the_next_entry_asks_again`,
-`::test_invalid_key_guards_locally_under_guard_locally`,
-`::test_invalid_key_guards_locally_under_refuse_instead_of_refusing_forever`,
-`::test_limited_mode_answers_locally_under_guard_locally`,
-`::test_limited_mode_answers_locally_under_refuse_too`; also
-`tests/test_plane_refusal_entry.py` and `tests/test_edge_case_fixes.py`
-(the api honoring `EntryDecision.allow` at the door — the fix that made
-an *answered* plane refusal actually stop the call instead of being
-silently overruled).
-
----
-
-## Abandoned stream accounting
-
-**Guarantee:** stated for readers in [Guarantees and
-limitations](docs/reference/guarantees.md#guarantees-and-limitations)
-("An abandoned stream is recorded, but as an estimate, and only when
-garbage collected").
-
-**The bound.** Reported exactly once per stream either way (normal end, or
-abandonment) — never both, never zero unless nothing was ever collected at
-all (a live reference held forever, same as any Python object), or the
-process exits while the stream is still alive: the finalizer is registered
-with `atexit=False` on purpose, so a process that exits with the stream still
-referenced never reports it rather than calling out during interpreter
-teardown, when threads, logging handlers and the network may already be gone.
-
-**Asserted by:** `tests/test_streams_abandoned.py` (25 tests: sync and async
-abandonment mid-stream after `gc.collect()`, usage-present vs.
-chars-estimated tokens, in-flight slot release (`release_calls`), circuit neutrality (no
-success or failure reported for an abandoned stream), no double report); `tests/test_streaming.py::test_an_abandoned_stream_is_recorded_as_one_partial_call`,
-`::test_abandoned_anthropic_stream_is_recorded_as_one_partial_call`,
-`::test_abandoned_async_stream_is_recorded_as_one_partial_call`; also
-`tests/test_tool_requests.py`, `tests/test_unpriced.py` (abandonment
-interacting with unpriced-model accounting).
-
----
-
-## Unpriced model
-
-**One sentence.** A model with no known price — not in the static table, not
-in `custom_prices` — does exactly what `on_unpriced_model` says and nothing
-else: counted as `$0.00` with a once-per-model warning (`"zero"`, default),
-priced from a stated fallback pair and marked estimated (`"estimate"`), or
-refused at the door before the request goes out regardless of `on_anomaly`
-(`"refuse"`).
-
-**The bound.** `"refuse"` is unconditional *at the door* and ignores
-`on_anomaly` on purpose — the customer stated it, so it is not negotiable per
-anomaly — and every refusal reaches the observers (`tests/test_unpriced.py::test_before_records_every_refusal`). It is
-bounded by what the door can know: a `record_call()` report, and a model
-name only known after the response comes back, cannot be stopped after the
-fact — both are recorded instead, priced like `"estimate"` when a fallback
-pair was given, else like `"zero"`, under a once-per-model warning saying the
-call was recorded rather than refused (`runbound/pricing.py::_warn_refuse_recorded`).
-
-**Asserted by:** `tests/test_unpriced.py` (48 tests covering all three
-modes, the once-per-model warning/alert cap, and the `"refuse"` door check
-before the request goes out); also `tests/test_edge_case_fixes.py`,
-`tests/test_coverage_warnings.py`, `tests/test_wrappers.py`.
-
----
-
-## Salted hashes and correlation
-
-One line, stated plainly rather than folded into a table: **`args_hash` is
-salted per process by design, foreclosing fleet-wide loop correlation by
-hash** — the same tool call hashes differently on two different workers (and
-differently again after a restart), so a leaked ledger, or a plane operator
-looking at raw hashes across services, cannot line up "who called what with
-which arguments" by matching digests across the fleet. It is an equality
-token for spotting a repeat *inside one process*, never a fingerprint good
-for anything outside it. Asserted by `tests/test_hash_salt.py` (8 tests: the
-salt is per-process, survives `reset()`, and two processes hash the same
-call differently).
-
----
-
-## Detection vs. delivery
-
-**One sentence.** The SDK detects, stops, refuses and reports. The plane
-routes and delivers.
-
-**Why this is a division of labour, not a gate.** An earlier version of this
-invariant read "detection is never gated; delivery is," implemented as a
-truthiness check inside `runbound/`: the alerter classes stayed in the SDK
-and were built, or not, depending on whether a token was set. A review of
-that design found it could not be made to hold — `control_plane_url=""`
-passed validation while the gate and `shared.build` asked different
-questions about the same field, and any non-empty token turned delivery on
-for the life of the process, revoked or invented, because `Engine.alerters`
-is fixed at construction. A paid feature cannot be enforced by a conditional
-running inside the customer's own process. So the delivery code left
-rather than grow a second gate: `SlackAlerter`, `PagerDutyAlerter`,
-`WebhookAlerter` and everything that existed only to send are gone from
-`runbound/alerts.py`, and `Engine._alert` (`runbound/engine.py`) now only
-notifies observers. It used to also run `for alerter in self.alerters:
-alerter.send(...)`; that loop is deleted, not merely unreached, so there is
-nothing left for a fork to un-gate.
-
-**The bound.** Every detector, every reaction, the latch, refusals, tool
-policy, the circuit breaker and the in-flight cap work with no token, no
-network and no account: free and local. `on_anomaly` decides how the anomaly reaches
-the customer's *own* process, and the three settings are alternatives, never
-a set: `"raise"` hands the caller a `GuardrailTripped`, `"callback"` hands the
-anomaly to the customer's own function, and only `"warn"` logs it
-(`runbound/engine.py::_react` — `raise` and `callback` both return before
-the `_LOG.warning` line; they do not also log). None of the three, before or
-after that change, ever posted anywhere — an anomaly is never "always logged."
-What a token (or a self-hosted `control_plane_url`) buys is a *connection*,
-not delivery by itself: `GuardrailConfig.plane_mode` (`runbound/config.py`
-— `_normalize_connection`, `_validate_plane`) says which of **off**, hosted
-(`token` alone, once the hosted plane exists — until then a bare token warns
-once and stays **off**) or **self-hosted** (`control_plane_url`, `token=""` for no
-auth) a configuration is. Once connected, exits and trips reach the plane as
-telemetry; whether any of that becomes a Slack message, a page or a webhook
-POST is an alert route the customer configures on the plane, gated by plan
-and enforced there with a `403` (verified by the control plane's own test
-suite) — the enforcement the SDK-resident version of this feature could
-never have provided. A missing, expired or invalid token never changes what
-the SDK detects, stops or refuses.
-
-**Asserted by:** `tests/test_token_and_delivery.py` —
-`test_detection_latch_policy_and_circuit_are_identical_with_and_without_a_token`
-drives the same synthetic run with and without a token and asserts identical
-detection, latch, policy and circuit outcomes; the parametrized
-`test_on_anomaly_reactions_are_identical_with_and_without_a_token`
-(`"warn"` / `"raise"` / `"callback"`) asserts the actual observable
-difference each reaction makes — raised, received by the callback, or
-logged — identically with and without a token, and calls `validate()`
-explicitly on both arms. `tests/test_plane_modes.py` is the regression net
-for the blocker that motivated this rewrite: every mode from the call and
-from the environment, a blank `control_plane_url` from either source
-settling to `"off"`, `""` never producing a plane client, and `plane_mode`
-agreeing with `shared.build` over the full `{None, "", "x"} x {None, "",
-"url"}` table. `tests/test_config_plane.py::test_repr_hides_the_token` and
-`test_repr_hides_the_api_key` assert the secret stays out of `repr()`.
-Signature verification and thread draining — what `runbound/alerts.py` is
-left with — are asserted by `tests/test_alert_lifecycle.py`.
-
----
-
-## Repository boundary
-
-**One sentence.** The public mirror of this project contains only the SDK —
-nothing from the control plane, the dashboard, the demo fleet, the marketing
-site, or this project's own internal planning documents ever reaches it.
-
-**The bound.** The mirror is this SDK's own directory, published by one
-release commit per version, built by `scripts/publish_sdk.sh` from exactly the
-committed content of that directory — anything outside it is excluded by
-construction, not by care taken while writing a commit. Before publishing, the
-release script lints
-every file in the directory and refuses to publish if any of them still
-contains a reference to the private half of this project: the control
-plane's source or its Python package name, the marketing site, this
-project's internal planning and business documents, or the product's
-retired internal name — or is a symlink, is over 1 MB, or carries a
-provider API key. A public mirror that fails that lint is never published.
-
-**Asserted by:** the lint's own tests, which test release tooling that lives
-in the development monorepo and so are not part of this repository: each
-lint token, a planted symlink, a file over 1 MB and a planted provider key
-fails the lint, and a clean tree passes.
+## Not yet asserted
+
+True in the code today, with no test pinning it:
+
+- **`GuardrailTripped` is `ExecutionRefused`**, the same class object (`runbound.exceptions`).
+- **The refusal `reason` set is closed** (`runbound.exceptions.REASONS`), and `retryable` is true only
+  for `plane` and `plane_unavailable`. Individual reasons are asserted; the set and the retryable
+  table as a whole are not.
+- **The halt and plane-loss doors run before the user pre hooks** (`Engine.admit_call` order). The
+  later positions are asserted (invariant 6); these two are not.
+- **An unclassified decorated tool is refused by the class rules once any class is narrowed**
+  (`ClassRules.allows`).
+- **The runtime is standard library only** (`dependencies = []` in `pyproject.toml`) and `import
+  runbound` opens no connection. Invariant 39 covers a no-token run, not a bare import.

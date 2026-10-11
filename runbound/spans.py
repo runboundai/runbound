@@ -1,0 +1,218 @@
+"""One span per tool call: ``execute_tool {tool}``, kind INTERNAL, scope ``runbound``.
+
+Two paths, chosen **per call** and never both (a user who has OpenTelemetry wants one pipeline):
+
+1. **A configured provider.** When ``opentelemetry`` is importable and its global
+   ``TracerProvider`` is a real one (not the API's proxy), the span goes to that provider and
+   its exporters, nests under whatever span is current, and becomes current while the body
+   runs. Imported lazily; the SDK never depends on it, and never installs a provider.
+2. **The stdlib emitter.** Otherwise, if ``init(otel_endpoint=...)`` names a collector, the span
+   is queued on a :class:`~runbound.otlp.SpanExporter` and posted as OTLP/JSON.
+
+With neither, :func:`begin` returns ``None`` and a call pays one attribute lookup.
+
+A span carries the GenAI standard attributes and ``runbound.*`` ones (``otel_names.py``);
+never an argument, a result or prompt text. Status: an exception from the body is ERROR with
+``error.type``; a refusal is **not** a failure of the tool, so its status stays UNSET with
+``runbound.outcome=refused`` and ``error.type=runbound.refused``.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from typing import Any
+
+from . import otel_names as n
+from . import otlp
+from .plane_types import redact_key
+
+_LOG = logging.getLogger("runbound")
+
+#: The stdlib emitter, set by :func:`configure`. ``None`` when ``otel_endpoint`` is unset.
+_EXPORTER: "otlp.SpanExporter | None" = None
+_RESOURCE: dict = {}
+
+#: ``opentelemetry.trace`` and its context module, imported on first use; ``False`` if absent.
+_API: Any = None
+
+
+def configure(config: Any, version: str) -> None:
+    """(Re)start the stdlib emitter for ``config``; called by :func:`runbound.init`. Never raises."""
+    global _EXPORTER, _RESOURCE
+    previous, _EXPORTER = _EXPORTER, None
+    if previous is not None:
+        previous.stop()
+    endpoint = getattr(config, "otel_endpoint", None)
+    if not endpoint:
+        return
+    try:
+        _RESOURCE = {
+            n.RESOURCE_SERVICE_NAME: config.service,
+            n.RESOURCE_INSTANCE_ID: config.resolved_worker_id(),
+            n.RESOURCE_SDK_NAME: "runbound",
+        }
+        exporter = otlp.SpanExporter(endpoint, config.token or None, _RESOURCE, version)
+        exporter.start()
+        _EXPORTER = exporter
+    except Exception:
+        _LOG.warning("runbound: could not start the OTLP span emitter; no spans", exc_info=True)
+
+
+def shutdown() -> None:
+    """Stop the stdlib emitter, posting what is queued."""
+    global _EXPORTER
+    exporter, _EXPORTER = _EXPORTER, None
+    if exporter is not None:
+        exporter.stop()
+
+
+def exporter() -> "otlp.SpanExporter | None":
+    return _EXPORTER
+
+
+def active() -> bool:
+    """Would a span started now be received by anything?"""
+    return _EXPORTER is not None or _provider() is not None
+
+
+def _otel() -> Any:
+    """``(trace, context)`` from opentelemetry-api, or ``None`` when it is not installed."""
+    global _API
+    if _API is None:
+        try:
+            from opentelemetry import context, trace
+
+            _API = (trace, context)
+        except Exception:
+            _API = False
+    return _API or None
+
+
+def _provider() -> Any:
+    """The user's real global ``TracerProvider``, or ``None`` (not installed, or only the proxy)."""
+    api = _otel()
+    if api is None:
+        return None
+    try:
+        provider = api[0].get_tracer_provider()
+        return None if type(provider).__name__ == "ProxyTracerProvider" else provider
+    except Exception:
+        return None
+
+
+def begin(tool_name: str, run_id: str | None, version: str, call_id: str | None = None) -> "CallSpan | None":
+    """Start the span for one call, or ``None`` when nothing would receive it."""
+    try:
+        provider = _provider()
+        if provider is not None:
+            return CallSpan(tool_name, call_id, provider=provider, version=version)
+        if _EXPORTER is not None:
+            return CallSpan(tool_name, call_id, run_id=run_id)
+    except Exception:
+        _LOG.debug("runbound: could not start a span", exc_info=True)
+    return None
+
+
+class CallSpan:
+    """The span of one call in flight. :meth:`end` finishes it exactly once."""
+
+    def __init__(
+        self, tool_name: str, call_id: str | None, *, provider: Any = None, version: str = "", run_id: str | None = None
+    ) -> None:
+        self.tool = tool_name
+        self.call_id = call_id
+        self.args_digest: str | None = None
+        self._ended = False
+        self._start_ns = time.time_ns()
+        self._span = self._token = None
+        if provider is not None:
+            trace, context = _otel()
+            tracer = provider.get_tracer(n.SCOPE_NAME, version)
+            self._span = tracer.start_span(n.SPAN_NAME.format(tool=tool_name), kind=trace.SpanKind.INTERNAL)
+            self._token = context.attach(trace.set_span_in_context(self._span))
+        else:
+            self._trace_id = otlp.new_trace_id(run_id)
+            self._span_id = otlp.new_span_id()
+
+    def end(self, facts: dict, exc: BaseException | None = None) -> None:
+        """Finish the span with ``facts`` (already the attribute dict). Never raises."""
+        if self._ended:
+            return
+        self._ended = True
+        try:
+            attrs = {k: v for k, v in facts.items() if v is not None}
+            if self._span is not None:
+                self._end_provider(attrs, exc)
+            elif _EXPORTER is not None:
+                status = otlp.STATUS_ERROR if exc is not None else otlp.STATUS_UNSET
+                _EXPORTER.add(otlp.span_json(
+                    self._trace_id, self._span_id, n.SPAN_NAME.format(tool=self.tool),
+                    self._start_ns, time.time_ns(), attrs, status,
+                ))
+        except Exception:
+            _LOG.debug("runbound: could not end a span", exc_info=True)
+
+    def _end_provider(self, attrs: dict, exc: BaseException | None) -> None:
+        trace, context = _otel()
+        try:
+            for key, value in attrs.items():
+                self._span.set_attribute(key, list(value) if isinstance(value, tuple) else value)
+            if exc is not None:
+                self._span.record_exception(exc)
+                self._span.set_status(trace.Status(trace.StatusCode.ERROR))
+        finally:
+            self._span.end()
+            if self._token is not None:
+                context.detach(self._token)
+
+
+def error_type(exc: BaseException) -> str:
+    """The exception's qualified class name (``builtins.`` left off), never its message."""
+    cls = type(exc)
+    return cls.__qualname__ if cls.__module__ == "builtins" else f"{cls.__module__}.{cls.__qualname__}"
+
+
+def facts(
+    tool: str, outcome: str, *, config: Any, run_id: str | None, key: str | None, effects: frozenset,
+    call_id: str | None, args_digest: str | None, exc: BaseException | None, decision: Any,
+    policy_version: int | None, flags: tuple, flag_score: float, result_chars: int,
+    approval_request_id: str | None = None, would_refuse: str | None = None,
+) -> dict:
+    """The attribute dict of one finished call (RS-3 / otel-clickhouse.md §1.2)."""
+    refused = outcome == "refused"
+    out = {
+        n.OPERATION_NAME: n.OPERATION_EXECUTE_TOOL,
+        n.TOOL_NAME: tool,
+        n.TOOL_TYPE: n.TOOL_TYPE_FUNCTION,
+        n.TOOL_CALL_ID: call_id,
+        n.SERVICE: getattr(config, "service", None),
+        n.WORKER_ID: config.resolved_worker_id() if config is not None else None,
+        n.RUN_ID: run_id,
+        n.CAPABILITY: ",".join(sorted(effects)) or None,
+        n.OUTCOME: outcome,
+        n.ARGS_DIGEST: args_digest,
+        n.RESULT_BYTES: result_chars or None,
+        n.RESULT_FLAGS: tuple(flags) or None,
+        n.RESULT_FLAG_SCORE: flag_score or None,
+        n.APPROVAL_REQUEST_ID: approval_request_id,
+        n.DECISION_VERDICT: "refuse" if refused else "would_refuse" if would_refuse else "allow",
+        n.DECISION_KIND: "action",
+    }
+    if refused:
+        out[n.ERROR_TYPE] = n.ERROR_TYPE_REFUSED
+        if decision is not None:
+            reason = decision.reason
+            out[n.DECISION_BOUNDARY] = decision.boundary
+            out[n.DECISION_LEVEL] = decision.level
+            out[n.DECISION_DETECTOR] = decision.detector
+            out[n.DECISION_REASON] = redact_key(reason, key) if isinstance(reason, str) else None
+    elif exc is not None:
+        out[n.ERROR_TYPE] = error_type(exc)
+    if would_refuse and not refused:  # a dry_run row's rule: the call ran, the span says what a live row would have done
+        out[n.DECISION_BOUNDARY] = "policy"
+        out[n.DECISION_DETECTOR] = "policy"
+        out[n.DECISION_REASON] = would_refuse
+    pv = policy_version if policy_version else getattr(decision, "policy_version", None)
+    out[n.DECISION_POLICY_VERSION] = pv or None
+    return out

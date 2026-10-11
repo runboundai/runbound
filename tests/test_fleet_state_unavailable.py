@@ -69,10 +69,6 @@ class _Handler(http.server.BaseHTTPRequestHandler):
                 state.hello_calls += 1
                 reply = state.hello
             self._send_json(200, to_wire(reply))
-        elif self.path == "/v1/enter":
-            self._send_json(503, {"error": "plane_unavailable"})
-        elif self.path == "/v1/trip":
-            self._send_json(200, {"ack": True, "generation": 0})
         elif self.path == "/v1/events":
             self._send_json(202, {"accepted": 0, "dropped_by_plan": 0})
         else:
@@ -133,15 +129,10 @@ class _Config:
     """The handful of attributes :class:`RemoteState` reads off a config —
     everything else it reads defensively via ``getattr``."""
 
-    def __init__(self, stale_halt: str = "release") -> None:
+    def __init__(self) -> None:
         self.service = "checkout"
-        self.budget_usd = None
-        self.stale_halt = stale_halt
-        self.on_plane_loss = "guard_locally"
         self.control_plane_poll_s = POLL_S
-        self.control_plane_cache_s = 0.0
         self.send_session_keys = False
-        self.circuit_fleet = False
         self.export_events = False
 
     def resolved_worker_id(self) -> str:
@@ -164,9 +155,9 @@ def fake_plane():
     plane.stop()
 
 
-def start_remote(fake_plane: FakePlane, clock: _MovableClock, stale_halt: str) -> RemoteState:
-    config = _Config(stale_halt=stale_halt)
-    client = PlaneClient(fake_plane.url, None, config.service, "w1", timeout_s=1.0, now=clock)
+def start_remote(fake_plane: FakePlane, clock: _MovableClock) -> RemoteState:
+    config = _Config()
+    client = PlaneClient(fake_plane.url, None, config.service, "w1", now=clock)
     remote = RemoteState(client, exporter=None, config=config, now=clock)
     remote.start(engine=None)
     return remote
@@ -182,10 +173,10 @@ def start_remote(fake_plane: FakePlane, clock: _MovableClock, stale_halt: str) -
 # commit is never checked in.
 
 
-def test_a_held_halt_survives_fleet_state_unavailable_under_hold(fake_plane):
+def test_a_halt_survives_fleet_state_unavailable_inside_the_window(fake_plane):
     clock = _MovableClock()
     fake_plane.set_hello(HelloReply(halt=True, halt_mode="stop"))
-    remote = start_remote(fake_plane, clock, stale_halt="hold")
+    remote = start_remote(fake_plane, clock)
     try:
         wait_until(lambda: remote.halted() is True)
 
@@ -193,25 +184,20 @@ def test_a_held_halt_survives_fleet_state_unavailable_under_hold(fake_plane):
         # Waits on the condition itself, not on the server having merely
         # received a new heartbeat: the reply still has to cross the
         # network and be processed by apply_hello() on the poller's own
-        # thread, and a wait keyed on the request side alone raced ahead
-        # of that at least once (a real, if rare, ordering this test must
-        # not assume away).
+        # thread.
         wait_until(lambda: remote.status().reason == "fleet state unavailable")
 
         assert remote.halted() is True
         assert remote.status().mode == "degraded"
-
-        # "hold" keeps enforcing no matter how far past the stale window.
-        clock.advance(STALE_HALT_S * 10)
-        assert remote.halted() is True
     finally:
         remote.stop()
 
 
-def test_a_held_halt_lifts_after_the_stale_window_under_release(fake_plane):
+
+def test_a_halt_lifts_after_the_stale_window_while_state_is_unavailable(fake_plane):
     clock = _MovableClock()
     fake_plane.set_hello(HelloReply(halt=True, halt_mode="stop"))
-    remote = start_remote(fake_plane, clock, stale_halt="release")
+    remote = start_remote(fake_plane, clock)
     try:
         wait_until(lambda: remote.halted() is True)
 
@@ -235,7 +221,7 @@ def test_a_held_halt_lifts_after_the_stale_window_under_release(fake_plane):
 def test_the_halt_reapplies_once_the_plane_recovers_and_says_so(fake_plane):
     clock = _MovableClock()
     fake_plane.set_hello(HelloReply(halt=True, halt_mode="stop"))
-    remote = start_remote(fake_plane, clock, stale_halt="release")
+    remote = start_remote(fake_plane, clock)
     try:
         wait_until(lambda: remote.halted() is True)
 
@@ -252,27 +238,6 @@ def test_the_halt_reapplies_once_the_plane_recovers_and_says_so(fake_plane):
     finally:
         remote.stop()
 
-
-def test_enter_treats_a_503_as_plane_loss_not_a_directive(fake_plane):
-    """The fake plane's ``/v1/enter`` always answers 503 -- confirms entry
-    guards locally (``on_plane_loss="guard_locally"``) and, in particular,
-    never lifts anything: :meth:`RemoteState._absorb` only ever *raises* a
-    halt from a decision, never lowers one."""
-    from types import SimpleNamespace
-
-    clock = _MovableClock()
-    fake_plane.set_hello(HelloReply(halt=True, halt_mode="stop"))
-    remote = start_remote(fake_plane, clock, stale_halt="hold")
-    try:
-        wait_until(lambda: remote.halted() is True)
-
-        state = SimpleNamespace(lock=threading.Lock(), total_cost_usd=0.0, total_tokens=0, tags={})
-        decision = remote.enter("some-key", state, remote._config)
-
-        assert decision is None  # "decide locally" -- never a stored refusal
-        assert remote.halted() is True
-    finally:
-        remote.stop()
 
 
 # --- coverage()'s one-line nudge --------------------------------------------
@@ -293,7 +258,7 @@ def test_coverage_fleet_names_the_unavailable_state_reason():
     try:
         assert api._fleet_report() == (
             "connected; fleet state unavailable: deciding locally, "
-            "last halt and posture held"
+            "last halt held"
         )
     finally:
         with api._LOCK:

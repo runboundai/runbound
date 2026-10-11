@@ -229,9 +229,13 @@ class ToolRules:
     reviewed: bool = False
     #: The capability classes this tool carries, or an empty set for
     #: unclassified. Not a rule: it removes no freedom by itself, so it never
-    #: counts towards :meth:`stated`. It is what a posture reads, and what
+    #: counts towards :meth:`stated`. It is what the capability class rules read, and what
     #: makes ``require_rules`` stricter for a consequential class.
     effects: frozenset = frozenset()
+    #: ``@tool(approval="required", mode=...)``: reported so the plane knows this tool asks a person (and never
+    #: leases it quota). Not a rule folded into the policy, so it never counts towards :meth:`stated`.
+    approval: str | None = None
+    approval_mode: str | None = None
 
     def enforces(self) -> bool:
         """Does this state a rule that can actually refuse a call?"""
@@ -295,6 +299,9 @@ class ToolRules:
             report["require_approval"] = _dotted(self.require_approval)
         if self.reviewed:
             report["reviewed"] = True
+        if self.approval:
+            report["approval"] = self.approval
+            report["approval_mode"] = self.approval_mode or "sync"
         return report
 
 
@@ -606,7 +613,9 @@ def _merge_mode(
     return max(ranked, key=_STRICTNESS.__getitem__)
 
 
-def evaluate(policy: ToolPolicy, call: ToolCall, calls_so_far: int) -> Violation | None:
+def evaluate(
+    policy: ToolPolicy, call: ToolCall, calls_so_far: int, stage: str = "all"
+) -> Violation | None:
     """The rule ``call`` breaks under ``policy``, or ``None`` if it is allowed.
 
     Rules are applied in a fixed order — deny, allow, max_calls, constraint,
@@ -615,6 +624,10 @@ def evaluate(policy: ToolPolicy, call: ToolCall, calls_so_far: int) -> Violation
 
     ``calls_so_far`` counts this attempt: with a limit of 1, the first call
     passes and the second is a violation.
+
+    ``stage`` splits the order for the hook chain: ``"rules"`` is deny, allow,
+    max_calls and constraint; ``"approval"`` is the approval rule alone (it runs
+    after the capability check); ``"all"`` is both, as before.
 
     A constraint or approval callback that raises is a violation (fail-closed,
     see the module docstring); only the exception type is reported.
@@ -625,13 +638,16 @@ def evaluate(policy: ToolPolicy, call: ToolCall, calls_so_far: int) -> Violation
     dry — the rule itself is reported unchanged, and what to do about it is
     the engine's decision.
     """
-    violation = (
-        _check_deny(policy, call)
-        or _check_allow(policy, call)
-        or _check_max_calls(policy, call, calls_so_far)
-        or _check_constraint(policy, call)
-        or _check_approval(policy, call)
-    )
+    violation = None
+    if stage in ("all", "rules"):
+        violation = (
+            _check_deny(policy, call)
+            or _check_allow(policy, call)
+            or _check_max_calls(policy, call, calls_so_far)
+            or _check_constraint(policy, call)
+        )
+    if violation is None and stage in ("all", "approval"):
+        violation = _check_approval(policy, call)
     if violation is None:
         return None
     return _with_origin(policy, violation)

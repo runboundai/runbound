@@ -123,7 +123,7 @@ def test_polling_idempotent_and_retryable_are_reported_when_set():
 def test_a_model_requested_undeclared_tool_reports_the_three_flags_false():
     runbound.init()
 
-    api._HOOKS.tool_request("mystery_tool", "req:h1")
+    _coverage.tool_requested("mystery_tool")
 
     item = entry(runbound.tools(), "mystery_tool")
     assert item["polling"] is False
@@ -287,10 +287,10 @@ def test_a_request_never_downgrades_a_declared_tool_whichever_order_it_comes_in(
     ]
 
 
-def test_the_wrappers_tool_request_hook_records_the_name():
-    """A model asking for a tool the developer dispatches by hand still counts."""
+def test_a_tool_seen_by_a_framework_adapter_is_reported_undecorated():
+    """A tool a framework dispatches by hand (the adapter says its name) still counts."""
     runbound.init()
-    api._HOOKS.tool_request("wire_money", "req:abc")
+    _coverage.tool_requested("wire_money")
 
     assert entry(runbound.tools(), "wire_money")["decorated"] is False
 

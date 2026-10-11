@@ -2,91 +2,74 @@
 
 [← Docs](../README.md)
 
-**Open-source runtime. Cloud control plane.**
+The SDK is free and runs with no account. A control plane adds the rules a person sets in a
+console, and the things only a shared service can do: count across workers, ask a person, stop a
+fleet. This page says which is which.
 
-Runbound's SDK is yours. The fleet intelligence is ours. This page states
-the line and what falls on each side of it.
+## How a process connects
 
-## Three principles
+```python
+import runbound
 
-1. **Every local deterministic safety or control feature is free.**
-   If it can be decided correctly from local state, it is in the
-   open-source SDK, configurable in code, with no account, no token, no
-   cloud dependency and no telemetry sent to us by default.
-2. **No feature is made artificially worse in the SDK to create a
-   paywall.** No "detected but will not stop", no trial timers, and no
-   call is ever refused for plan reasons.
-3. **The paid product sells coordination, authoritative state, central
-   control, evidence and operations**, not the ability to perform a local
-   `if`. You can enforce a budget locally for free; you pay when that
-   boundary has to stay true across your fleet and be managed centrally.
+runbound.init()  # no plane: everything below "Free" works; nothing leaves the process
+```
 
-**Architecture rules that follow:** plan gating happens on the plane. The SDK
-never refuses a call for a plan; it only follows what the plane says your plan
-includes, by closing the telemetry lanes it does not. Entitlements and Controls are separate objects: entitlements say
-what your org's plan includes (fleet policy, simulation, retention,
-agents, workers); Controls say what a run may do, and the control engine
-never reads an entitlement. Local and central configuration merge
-tighten-only, one function: your code states a control, and a connected
-plane can only narrow it, or state one from scratch where your code leaves
-it unconfigured — never loosen what you already set. Local telemetry is
-free: `runbound.events()`/`runbound.decisions()` read an in-memory ring of
-this process's own anomalies, refusals, posture transitions and Decisions,
-with no account and nothing sent anywhere.
+A self-hosted plane needs both a URL and a token: `init(control_plane_url=..., token=...)`, or
+`RUNBOUND_PLANE_URL` and `RUNBOUND_TOKEN` in the environment. A token with no URL logs one warning
+and the process stays local (there is no hosted plane yet). A URL from the environment with no
+token also stays local, with a warning. `control_plane_url=""` pins a process local whatever the
+environment says. `runbound.plane_status().mode` is `"local"` with no plane configured.
 
-## Every control is free and local
+## Free: no account, no plane
 
-Every `init()` keyword in the
-[configuration reference](../reference/configuration.md) is free and local,
-including six that a connected plane can additionally coordinate across
-your fleet: circuit rate mode and posture-narrowing, loop shapes beyond
-"repeat", the budget soft line, `max_actions_per_run`, class-rule
-capabilities, and spike detection with the abuse ladder. Configure any of
-them in code and they run with no account at all — the plane's own version
-of each is a *tightening*, never a requirement.
+| What | Where |
+|---|---|
+| Code rules: `blocked=`, `max_calls=`, `constraint=`, `require_approval=` on `@runbound.tool`, and `init(tool_policy=...)` | [Per-tool policy](../guides/policy.md) |
+| Capability class rules (`init(capabilities=...)`), `max_actions_per_run`, `require_rules` | [Configuration](../reference/configuration.md) |
+| Argument validation against the signature and type hints | [How it works](how-it-works.md) |
+| User hooks: `pre_hooks`, `gate_hooks`, `post_hooks` | [How it works](how-it-works.md) |
+| The post chain: redact, truncate, scan | [How it works](how-it-works.md#after-the-body) |
+| Sessions and keys: `runbound.session(key)`, per-session counts | [How it works](how-it-works.md#sessions-and-keys) |
+| Spans: one per call, to your OpenTelemetry provider or to `init(otel_endpoint=...)` as OTLP/JSON | [OpenTelemetry](../guides/opentelemetry.md) |
+| Local records: `runbound.events()`, `decisions()`, `tool_results()`, `init(on_event=...)` | [API](../reference/api.md) |
+| Self-checks: `runbound.coverage()`, `tools()`, `check()`, `assert_guarded()`, `python -m runbound check` | [Boundaries](boundaries.md#it-guards-only-what-is-decorated) |
+| The LangChain callback handler | [LangChain](../guides/langchain.md) |
 
-| Feature | Free, open-source SDK (local) | Runbound Cloud (coordination, state, control, evidence, ops) |
-|---|---|---|
-| Dollar and token budgets, reservation, per-call ceilings | yes | fleet-shared counters, fleet reservation, windows that survive restarts |
-| Steps, events, run time | yes | fleet configuration |
-| Concurrency, fan-out, actions per run | yes, per process | none yet (see *Planned, not built*) |
-| Loop and cycle shapes, retry and error storms | yes | cross-worker storm signals |
-| Spike detection, the ladder | yes | the key's ladder rung kept across workers and restarts |
-| Provider circuit, count and rate modes | yes | shared circuit state |
-| Tool rules, capability classes, class rules, constraints | yes | org and agent policy, versioning, rollout |
-| Postures and safe mode | **yes, locally configured** | fleet-wide posture, Narrow, automatic rollout, incident history |
-| Approvals | local callback and same-process approve | the refusal ledger and its audit export |
-| MCP client enforcement | yes | central governance of MCP tools |
-| Dry run / shadow | yes, locally | centralized simulation and policy impact preview |
-| Decisions, local events, local audit trail | yes | durable centralized records, timelines, export |
-| Coverage, control surface, CI gate | yes | fleet control surface, drift over time |
-| Hierarchy (process, agent, key, run, tag scopes) | yes, inside one process | org, service and agent scopes across workers |
-| Refusal profiles, pricing, custom prices | yes | fleet-managed |
-| Kill switch | local manual stop | fleet Stop and Narrow with convergence |
-| Remote latch, alerts routing, dashboard, API keys, retention | none | all |
+`otel_endpoint` needs no plane: spans go straight to the collector you name, with `token` (if
+set) as the Bearer key.
 
-## The mechanism
+## Connected: needs a plane
 
-A connected plane delivers a `Controls` payload on its heartbeat to your
-worker, tightened against your own `init()` configuration by one merge
-function (`runbound.controls_merge`) — the same algebra whichever control
-it touches. The SDK's enforcement code ships in the open-source package
-and runs from `init()` on, with or without a plane; a connected plane can
-only narrow a value you already set, or hand you one from scratch where
-you left a field unconfigured. `coverage()["fleet"]` says whether a plane
-is coordinating right now (`"connected"`) or not
-(`"local protection active; fleet coordination: not connected"`) — the one
-nudge, never a per-call log line or a warning at `init()`.
+| What | With no plane |
+|---|---|
+| **Console rows**: per-tool `blocked`, `max_calls_per_session`, `approval_required`, `risk_class`, `fail_mode`, `quota`, and `dry_run` rollout, folded with the code rules (most restrictive wins) | no rows; the code rules alone apply |
+| **Org tool policy**, merged with yours (it can only remove freedom) | your policy alone |
+| **Quotas**: a row's limit per fixed UTC window, shared by every worker of the service | none |
+| **Approvals**: `@runbound.tool(approval="required")`, sync or deferred, and a row's `approval_required` | refused at once: `reason="approval_unavailable"`; the body never runs |
+| **Halt**: the plane stops every tool of the fleet (`on_halt="raise"` refuses with `reason="halt"`) | nothing to halt |
+| **Policy cache**: the last served policy and rows on disk, enforced by a restarted worker before its first heartbeat | nothing cached; code rules come from code |
+| **Fleet view**: each worker's tool report (names, parameters, classes, rules; never arguments) and its exported refusals and changes (`export_events`), in one console | records stay in the process |
 
-The SDK itself never refuses anything for plan reasons: entitlements are a
-separate object, carrying only coordination and scale facts (protected
-agents, synced workers, history), never a control name — the control
-engine reads no entitlement at all.
+Approvals with no plane are refused rather than run: a call that needs a person is never run
+because nobody could be asked. A `capabilities={...: "approve"}` class rule refuses too
+(`CapabilityRefused`), plane or not.
 
-## Planned, not built
+## What connecting adds to the call path
 
-Named on the [roadmap](../roadmap.md) and **not built**: a fleet-shared
-`max_calls` tally, fleet-wide fan-out counters and in-flight caps, and native
-wrappers for non-OpenAI-shaped SDKs. Nothing above depends on them.
+With a plane configured, a tool carrying `financial`, `destructive` or `privileged`, or no class,
+is refused (`plane_unavailable`, retryable) once the plane has not answered for
+`consequential_grace_s` (60 s by default), and while the first heartbeat is still pending unless
+the policy cache was confirmed in the last 15 minutes. `read`, `write` and `external` tools keep
+running on the cache. A new approval needs a connected link; a quota past its lease refuses
+`quota_plane_unavailable` while the row's `fail_mode` is `closed`. A process with no plane
+configured has none of this. See [Plane loss](../guides/plane-loss.md).
 
----
+Hellos, the policy fetch and event export run on background threads, never on a tool call. The
+plane is reached during a tool call only to file an approval (and, for a sync one, wait for the
+answer) and to take a quota unit when the worker holds no lease for it (`POST /v1/quota/take`; a
+refusal is then cached until the window ends).
+
+## Related
+
+- [The plane link](../guides/plane-link.md): the wire the SDK speaks.
+- [Privacy](../reference/privacy.md): what leaves the process, connected or not.

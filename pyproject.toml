@@ -4,29 +4,33 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runbound"
-version = "0.11.2"
-description = "Deterministic, LLM-free runaway detection and circuit breaking for AI agents."
+version = "1.0.0a2"
+description = "A policy boundary around the tools an AI agent can call: per-tool policy, quotas, human approvals, fail-closed on plane loss, OpenTelemetry spans."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Amanjot Singh" }]
 keywords = [
     "ai agents",
-    "observability",
-    "circuit breaker",
-    "runaway",
-    "cost control",
+    "tool calling",
+    "guardrails",
+    "policy",
+    "human in the loop",
+    "approvals",
+    "opentelemetry",
     "llm",
 ]
 classifiers = [
-    "Development Status :: 4 - Beta",
+    "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
-    "Topic :: System :: Monitoring",
+    "Topic :: Security",
+    "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = []
 
@@ -38,12 +42,12 @@ Changelog = "https://github.com/runboundai/runbound/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
-dev = ["pytest>=7.0"]
 langchain = ["langchain-core"]
 otel = ["opentelemetry-api>=1.39,<2", "opentelemetry-sdk>=1.39,<2"]
 
 [tool.setuptools]
-packages = ["runbound", "runbound.wrappers", "runbound.integrations"]
+packages = ["runbound", "runbound.integrations"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["plane: runs against a real control-plane process (needs RUNBOUND_PLANE_PYTHON)"]

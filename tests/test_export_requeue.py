@@ -22,7 +22,6 @@ import pytest
 from runbound import export as export_module
 from runbound.export import Exporter
 from runbound.events import Anomaly, Event
-from runbound.plane_types import ExitDelta
 from runbound.state import SessionState
 
 
@@ -75,15 +74,15 @@ def anomaly(detector: str = "budget") -> Anomaly:
     return Anomaly(detector=detector, severity="critical", message="over", details={"spend": 3})
 
 
-def delta(seq: int = 1) -> ExitDelta:
-    return ExitDelta(
-        key_hash="abc",
-        seq=seq,
-        spend_delta_usd=0.25,
-        tokens_delta=100,
-        steps_delta=3,
-        tool_calls={"search": 2},
-    )
+def change(to: int = 1) -> dict:
+    """A runtime-change record, as :mod:`runbound.local_events` hands it to sinks."""
+    return {
+        "kind": "runtime_change",
+        "at": 1_700_000_000.0,
+        "what": "policy_version",
+        "from": to - 1,
+        "to": to,
+    }
 
 
 def exporter(client: FakeClient, **kwargs) -> Exporter:
@@ -100,8 +99,8 @@ def test_a_failed_batch_is_kept_intact_and_pending(wall):
     sink = exporter(client, batch_size=100)
     sink.on_event(session(), event(step=1))
     sink.on_event(session(), event(step=2))
-    sink.on_exit(delta(seq=9))
-    sink.on_circuit("openai", "open", 1, 5.0)
+    sink.on_change(change(9))
+    sink.on_anomaly(session(), anomaly(), "raise")
 
     sink.flush()
 
@@ -117,8 +116,8 @@ def test_a_failed_batch_is_delivered_intact_once_the_plane_recovers(wall):
     sink = exporter(client, batch_size=100)
     sink.on_event(session(), event(step=1))
     sink.on_event(session(), event(step=2))
-    sink.on_exit(delta(seq=9))
-    sink.on_circuit("openai", "open", 1, 5.0)
+    sink.on_change(change(9))
+    sink.on_anomaly(session(), anomaly(), "raise")
 
     sink.flush()
     client.ok = True
@@ -129,8 +128,8 @@ def test_a_failed_batch_is_delivered_intact_once_the_plane_recovers(wall):
     assert sink.resends == 1  # the delivery that landed was not itself a resend
     assert len(client.batches) == 2  # the failed attempt, then the delivery
     delivered = client.batches[1]
-    assert [w["seq"] for w in delivered["exits"]] == [9]  # priority lane first
-    assert [w["label"] for w in delivered["circuits"]] == ["openai"]
+    assert [w["to"] for w in delivered["changes"]] == [9]  # priority lane first
+    assert [w["detector"] for w in delivered["anomalies"]] == ["budget"]
     assert [w["step"] for w in delivered["events"]] == [1, 2]  # order preserved
 
 
@@ -378,7 +377,7 @@ def test_an_invalid_key_still_drops_without_retry(wall):
     sink = exporter(client)
 
     sink.on_event(session(), event())
-    sink.on_exit(delta())
+    sink.on_change(change())
     sink.flush()
 
     assert client.batches == []
@@ -460,15 +459,21 @@ def test_eight_producer_threads_still_lose_nothing_under_the_queue_bound(wall):
     assert sum(len(batch["events"]) for batch in client.batches) == 1600
 
 
-def test_on_trip_and_include_events_are_unaffected_by_the_retry_path(wall):
+def test_refusals_and_include_events_are_unaffected_by_the_retry_path(wall):
     client = FakeClient(ok=False)
     sink = exporter(client, include_events=False)
 
-    sink.on_trip(session(), anomaly(), "door")
+    sink.on_anomaly(session(), anomaly(), "door")  # a refusal: still queued
     sink.on_event(session(), event())  # dropped: include_events is off
 
-    assert sink.pending == 1  # only the trip; the plain event never queued
+    assert sink.pending == 0  # customer export_events=False silences refusals too
+
+    sink2 = exporter(client)
+    sink2.include_events = False  # the plane closing the telemetry lanes, not the customer
+    sink2.on_anomaly(session(), anomaly(), "door")
+    sink2.on_event(session(), event())
+    assert sink2.pending == 1  # only the refusal; the plain event never queued
 
     client.ok = True
-    sink.flush()
-    assert [record["reacted"] for record in client.batches[0]["anomalies"]] == ["door"]
+    sink2.flush()
+    assert [record["reacted"] for record in client.batches[-1]["anomalies"]] == ["door"]

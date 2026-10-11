@@ -4,7 +4,7 @@ A ``token`` on its own means the customer is on the hosted plane and we
 resolve the endpoint for them; a ``control_plane_url`` means they run the
 plane in their own cluster. They are
 not one setting with a truthiness test, and the difference is worth a name —
-:attr:`GuardrailConfig.plane_mode`.
+:attr:`RunboundConfig.plane_mode`.
 
 The table test at the bottom is the regression net for a defect an early
 version had: two call sites asked two different
@@ -20,7 +20,7 @@ import logging
 import pytest
 
 from runbound import shared
-from runbound.config import GuardrailConfig
+from runbound.config import RunboundConfig
 
 URL = "http://plane.test:8090"
 
@@ -32,8 +32,8 @@ def _no_ambient_connection(monkeypatch):
     monkeypatch.delenv("RUNBOUND_PLANE_URL", raising=False)
 
 
-def _config(**kwargs) -> GuardrailConfig:
-    config = GuardrailConfig(**kwargs)
+def _config(**kwargs) -> RunboundConfig:
+    config = RunboundConfig(**kwargs)
     config.validate()
     return config
 
@@ -76,7 +76,6 @@ def test_a_bare_token_is_hosted_once_there_is_a_hosted_plane(monkeypatch):
     ``HOSTED_PLANE_URL`` is ``None`` until that plane is live, so this pins
     the behaviour by standing in a url the way flipping the constant will.
     """
-    monkeypatch.setattr(shared, "HOSTED_PLANE_URL", "https://api.runbound.test")
     import runbound.config as config_module
 
     monkeypatch.setattr(config_module, "HOSTED_PLANE_URL", "https://api.runbound.test")
@@ -91,7 +90,7 @@ def test_a_bare_token_with_no_hosted_plane_yet_warns_once_and_stays_off(caplog, 
     # run may already have spent it; this asks for the first one again.
     import runbound.config as config_module
 
-    monkeypatch.setattr(config_module, "_TOKEN_NO_PLANE_WARNED", False)
+    monkeypatch.setattr(config_module, "_WARNED", set())
     config = _config(token="ag_live_x")
     assert config.plane_mode == "off"
     assert config.control_plane_url is None
@@ -115,7 +114,7 @@ def test_an_env_url_with_no_token_warns_once_and_stays_local(caplog, monkeypatch
 
     # Once per process, like the token-side warning above; ask for the
     # first one again in case an earlier test in this run already spent it.
-    monkeypatch.setattr(config_module, "_ENV_PLANE_URL_NO_TOKEN_WARNED", False)
+    monkeypatch.setattr(config_module, "_WARNED", set())
     monkeypatch.setenv("RUNBOUND_PLANE_URL", URL)
     config = _config()
     assert config.plane_mode == "off"
@@ -130,7 +129,7 @@ def test_an_env_url_with_no_token_warns_only_once(caplog, monkeypatch):
     caplog.set_level(logging.WARNING, logger="runbound")
     import runbound.config as config_module
 
-    monkeypatch.setattr(config_module, "_ENV_PLANE_URL_NO_TOKEN_WARNED", False)
+    monkeypatch.setattr(config_module, "_WARNED", set())
     monkeypatch.setenv("RUNBOUND_PLANE_URL", URL)
     _config()
     _config()
@@ -226,7 +225,7 @@ def test_a_blank_url_passed_to_init_is_no_plane(blank):
 def test_plane_mode_cannot_be_passed_in():
     """It is a conclusion, not a setting."""
     with pytest.raises(TypeError):
-        GuardrailConfig(plane_mode="hosted")
+        RunboundConfig(plane_mode="hosted")
 
 
 # --- the regression net ----------------------------------------------------

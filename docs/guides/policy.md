@@ -1,306 +1,275 @@
-# Action policy — rules for what your agent may do
+# Per-tool policy
 
 [← Docs](../README.md)
 
-Detectors watch how *much* an agent is doing. A policy states what it is
-*allowed* to do — and once an agent can send email, issue refunds and move
-money, that is where the liability sits. Monitoring can tell you afterwards
-which refund went out; only something sitting on the tool call can refuse it.
-`@runbound.tool` already fires before the function body runs, so a policy is
-evaluated there: **we enforce the rules you state, we never judge the action,
-and no model is involved in the decision.**
+A tool call is checked before its body runs. The rules come from three places,
+and every one of them can only take freedom away:
 
-## The rule lives on the tool
+1. **Code**: keywords on `@runbound.tool`, plus `init(tool_policy=...)` for what a
+   decorator cannot say.
+2. **Capability class rules**: `init(capabilities=...)`, a verdict per class.
+3. **The console**: per-tool rows a connected control plane serves. Rows are
+   folded with the code rules field by field, and the most restrictive value wins.
 
-No policy file, no CLI, no second place to look. A tool's rule is a keyword on
-its decorator, so it sits in the same line — and lands in the same diff, and
-gets the same review — as the function it governs:
+Nothing here asks a model. A rule is a number, a name or your own predicate.
+
+## Rules on the decorator
 
 ```python
 import runbound
+from runbound import ToolCall
 
-runbound.init(on_anomaly="raise")             # governs detectors; policy is separate
 
-@runbound.tool(max_calls=1, constraint=under_500)
-def issue_refund(user: str, amount: float): ...
+def under_500(call: ToolCall) -> bool:
+    return call.kwargs["amount"] <= 500
 
-@runbound.tool(blocked=True)                  # the model may ask for it; it never runs
-def send_email(to: str): ...
 
-@runbound.tool(require_approval=ask_a_human)
-def wire_money(account: str, amount: float): ...
+def on_call_says_yes(call: ToolCall) -> bool:
+    return call.session_key == "user:trusted"
 
-@runbound.tool
-def lookup_order(order_id: str): ...          # known, allowed, no rule
-```
 
-| Keyword | You give | A call is refused when |
-|---|---|---|
-| `blocked` | `True` | ever. The blunt one: this agent may never do this. Reported as the `deny` rule. |
-| `max_calls` | `int >= 1` | the tool has been attempted more times than the limit **in this session**. The count includes the attempt being judged, so `1` means the first call runs and the second is refused. |
-| `constraint` | `predicate(call) -> bool` | your predicate returns `False`. It receives a `ToolCall` — `name`, `args`, `kwargs`, `session_key`, `tags` — so it can decide on the real arguments, or on who is calling ("free-tier users may not do this"). |
-| `require_approval` | `predicate(call) -> bool` | your callback returns `False`. Same `ToolCall`. Each tool gets **its own** callback: two tools can ask two different people. |
-| `reviewed` | `True` | never. It states that this tool was reviewed and is deliberately unrestricted, so it satisfies `require_rules` below. It is **not** an allow-list and it restricts nothing. |
-| `effects` | a set of capability classes | only when the [posture](#classify-by-capability) (or a dashboard-configured class rule) denies one of them. It classifies the tool rather than restricting it; left unset the tool is unclassified, and then only `full` admits it. |
+runbound.init()
 
-The rules take effect the moment the decorator runs, which is normally *after*
-`init()` — your module configures runbound at the top and defines its tools
-below. A keyword that could never be enforced (`max_calls=0`, a `constraint`
-that is not callable) raises `ValueError` right there at decoration, the same
-way a bad `init()` argument does.
-
-## The CI gate: `require_rules=True`
-
-```python
-runbound.init(require_rules=True)
-```
-
-Now a `@runbound.tool` that states no rule at all is a `ValueError` — named at
-`init()` for every tool already imported, and raised at decoration for every
-one declared afterwards. Any CI step that imports your app fails with it, so a
-tool cannot reach production without a stated rule. A tool that genuinely needs
-none says so out loud with `reviewed=True`.
-
-## Classify by capability
-
-`effects=` says which **capability classes** a tool carries. There are six —
-`read`, `write`, `external`, `financial`, `destructive`, `privileged` — and a
-tool declares the set that applies to it. Left unset it is unclassified. It is
-not a rule and restricts nothing on its own; two things read it.
-
-```python
-@runbound.tool(effects={"read"}, reviewed=True)
-def lookup_order(order_id: str): ...
-
-@runbound.tool(effects={"write", "external"}, max_calls=3)
-def send_email(to: str): ...
 
 @runbound.tool(effects={"financial"}, max_calls=1, constraint=under_500)
-def issue_refund(user: str, amount: float): ...
+def issue_refund(*, user: str, amount: float) -> str:
+    return f"refunded {user}"
 
-@runbound.tool(effects={"destructive", "privileged"}, require_approval=ask_a_human)
-def drop_tenant(tenant: str): ...
+
+@runbound.tool(effects={"external"}, blocked=True)  # the model may ask; it never runs
+def send_email(to: str) -> str:
+    return "sent"
+
+
+@runbound.tool(effects={"financial"}, require_approval=on_call_says_yes)
+def wire_money(account: str, amount: float) -> str:
+    return "wired"
+
+
+@runbound.tool(effects={"read"}, reviewed=True)  # looked at, deliberately unrestricted
+def lookup_order(order_id: str) -> dict:
+    return {"order": order_id}
 ```
 
-**Postures — a hot run keeps thinking and loses the right to act.** A posture
-is a capability contract: which classes may run right now. Five ship built in,
-widest first, and `runbound.posture()` names the one in force:
+| Keyword | Value | Refuses a call when |
+|---|---|---|
+| `blocked` | `True` | always. Reported as the `deny` rule. |
+| `max_calls` | `int >= 1` | the tool has been attempted more than `max_calls` times **in this session**. The attempt being judged counts, so `1` lets the first call run and refuses the second. |
+| `constraint` | `predicate(call) -> bool` | the predicate returns `False` or raises. |
+| `require_approval` | `predicate(call) -> bool` | the predicate returns `False` or raises. Each tool has its own. |
+| `reviewed` | `True` | never. It says the tool was looked at and is deliberately unrestricted, which satisfies `require_rules`. It is not an allow-list. |
+| `effects` | a set of capability classes | never on its own. Class rules and the plane-loss rules read it (below). |
+| `approval="required"`, `mode`, `timeout_s` | | a person denies it or does not answer. See [Approvals](approvals.md). |
 
-| Posture | read | write | external | financial | destructive | privileged |
-|---|---|---|---|---|---|---|
-| `full` | allow | allow | allow | allow | allow | allow |
-| `restricted` | allow | allow | deny | deny | deny | deny |
-| `read_only` | allow | deny | deny | deny | deny | deny |
-| `no_side_effects` | deny | deny | deny | deny | deny | deny |
-| `stopped` | deny | deny | deny | deny | deny | deny |
+A predicate receives a `ToolCall`: `name`, `args`, `kwargs`, `session_key` and
+`tags`. It sees the arguments as the caller passed them; nothing is rebound to
+parameter names, so a keyword-only parameter (`*, amount`) is the reliable way
+to find a value in `call.kwargs`. The arguments live only for the duration of
+the predicate call and are never stored or logged.
 
-`no_side_effects` refuses every tool and still lets model calls out;
-`stopped` is the run being over. **Safe mode is `posture() != "full"`.**
+A predicate that raises is a refusal (fail-closed), and only the exception's
+type is reported, never its message. A keyword that can never be enforced
+(`max_calls=0`, a `constraint` that is not callable, `blocked=True` together
+with `reviewed=True`) raises `ValueError` at decoration.
 
-A tool is refused, before its body runs, when the posture denies **any one** of
-its classes: a tool that both writes and reaches outside is refused wherever
-either is. An **unclassified tool is refused by every posture but `full`**,
-because nothing said what it does and runbound will not assume it merely
-reads. The refusal is `SafeModeViolation` — a `PolicyViolation`, so code that
-already handles a refused action keeps working — with detector `safe_mode`, and
-its anomaly names the posture, the class that was denied and who narrowed the
-run. A function with no `@runbound.tool` at all is never refused by a posture;
-`coverage()["safe_mode"]["applies_to"]` says so.
+`max_calls` counts attempts, not successes: a refused call still counts.
+`runbound.tool_calls(key=None)` reads the tally without making a call.
 
-How a run gets narrowed:
+### `require_rules`: the CI gate
 
-- `session.enter_safe_mode(reason, posture="read_only")` for that session;
-- `runbound.enter_safe_mode(reason, posture="restricted")` for the process;
-- the abuse ladder (`on_spike="limit"`, a local `init()` keyword that a control
-  plane can also turn on): its
-  limited rung sets `restricted`, and its closed rung `stopped`;
-- the control plane, per service: every worker tightens on its next heartbeat.
+`init(require_rules=True)` makes a tool with no rule a `ValueError`, named at
+`init()` for every tool already imported and at decoration for each one after.
+A rule is `blocked`, `max_calls`, `constraint`, `require_approval` or
+`reviewed=True`. A tool carrying `financial` or `destructive` needs a rule that
+can refuse it: `reviewed=True` alone does not pass for those two classes.
 
-How it widens again: `exit_safe_mode()`, `runbound.clear(key)` for a session,
-or — for the ladder's own narrowing — the session healing. **An automatic
-driver never lifts or overrides a manual posture**, and the plane can only
-*tighten*: a plane that says `read_only` over your manual `restricted` gives
-`read_only`, and lifting its own directive leaves your `restricted` standing.
-`session_status(key)["posture"]` says which posture, why and since when.
+## `init(tool_policy=...)`
 
-A refusal latches nothing and costs no strike: the run goes on with less
-autonomy. It is still an attempt, recorded before the posture judges it, so it
-counts towards `tool_calls()`, the step count and the loop window, exactly as a
-policy refusal does. The posture is judged **before** your rules, so no
-approver or constraint is asked about a call the posture would refuse anyway.
-
-**Class rules, whatever the posture.** A class rule states a verdict for a
-class that holds even under `full` — `"deny"` refuses every tool carrying
-that class, `"approve"` refuses it too and says approval was required (until
-approvals have a durable queue there is nobody to ask, and a gate that cannot
-answer must not wave a call through). Editing a posture's own row — a
-process that means something different by "restricted" than the table above
-does — is the same kind of override. **Both are free, local `init()`
-keywords** (`capabilities=` and `postures=`) — configure them in code, no
-account required — and a connected plane's own class rules can only
-tighten yours further (`allow` -> `approve` -> `deny`), never loosen them,
-or state one from scratch where you left a class unconfigured.
-
-**`require_rules` is stricter for the consequential classes.** With
-`require_rules=True`, a tool carrying `financial` or `destructive` needs a rule
-that can refuse it — `blocked=True`, `max_calls=`, `constraint=` or
-`require_approval=`. `reviewed=True` alone does not pass the gate for it:
-"looked at and left unrestricted" is a fine answer for a tool whose worst case
-can be undone or unpaid, and not for one whose worst case cannot. The error
-names the tool, the class and those four keywords.
-
-## `tool_policy=` on `init()`: the fleet allow-list, and tools with no decorator
-
-Two things a decorator cannot say, so this stays:
-
-- **An allow-list across all tools.** `ToolPolicy.allow` is the one rule that
-  *inverts*: set it and the listed tools are the only ones permitted, which is
-  a statement about the whole process rather than about any one tool.
-- **A rule for a tool you did not write.** A framework's tools (LangChain's,
-  say) carry no decorator of yours; name them here.
+`ToolPolicy` says what a decorator cannot: an allow-list across all tools, and
+rules for tools you did not decorate yourself.
 
 ```python
+import runbound
 from runbound import ToolPolicy
 
 runbound.init(
     tool_policy=ToolPolicy(
-        allow=["lookup_order", "issue_refund"],   # ONLY these tools may run
+        allow=["lookup_order", "issue_refund"],  # only these tools may run
         deny=["wire_money"],
         max_calls={"framework_search": 5},
         require_approval=["delete_account"],
-        approval_callback=lambda call: ask_a_human(call.name),
-        on_violation="block",                     # "block_and_latch" | "dry_run"
+        approval_callback=lambda call: call.session_key == "user:trusted",
+        on_violation="block",  # or "block_and_latch", "dry_run"
     ),
 )
 ```
 
-A plain dict of the same fields is identical — useful when the policy comes out
-of your own config file. It is coerced and validated at `init()`, and an unknown
-key raises there rather than silently dropping a rule you believed was enforced:
+A dict with the same fields is the same policy. It is checked at `init()`: an
+unknown key, a tool in both `deny` and `allow`, a `max_calls` that is not an
+int of at least 1, or `require_approval` with no `approval_callback` raises
+`ValueError`.
 
 ```python
+import runbound
+
 runbound.init(tool_policy={"deny": ["wire_money"], "max_calls": {"framework_search": 5}})
 ```
 
-`on_violation` belongs here and only here: it is what a *broken rule* does, a
-property of the policy rather than of any one tool.
+Where a decorator and `tool_policy` both state a rule for the same tool, the
+decorator wins and a warning names the tool once. A tool the decorator blocks
+is dropped from the `allow` list.
 
-**Where both name the same tool, the decorator wins** — the rule that ships in
-the same diff as the function is the one that was reviewed with it — and a
-warning says so once, naming the tool. A tool the decorator blocks is dropped
-from an `allow` list here, exactly the way an org policy's deny resolves the
-same disagreement.
+`on_violation` is what a broken code rule does:
 
-The five rules are evaluated in a fixed order — `deny`, `allow`, `max_calls`,
-`constraint`, `approval` — and the first one broken is the one reported, so an
-explicitly blocked tool reads as "denied" however many other rules also cover
-it.
+- `"block"` (default): refuse the call.
+- `"block_and_latch"`: refuse it and stop the session; every later call in that
+  session is refused with the same refusal.
+- `"dry_run"`: log `Policy dry-run: would block tool ...` and let the call run.
 
-**Catch a refusal apart from a runaway.** `PolicyViolation` is a subclass of
-`GuardrailTripped`, so code that already catches trips keeps working; catch it
-first when you want to tell "the agent tried something it may not do" from "the
-agent ran away":
+The code rules are checked in a fixed order (`deny`, `allow`, `max_calls`,
+`constraint`, then `approval` later in the chain) and the first one broken is
+reported. All of them refuse with `PolicyViolation`: `reason="tool_blocked"` for `deny`, `reason="policy"`
+for the others (`reason="approval"` for the approval callback).
+
+### An org policy from the plane
+
+A connected plane may also serve a policy body in the same shape. It is merged
+with yours, and the merge only removes freedom:
+
+| Field | Merged |
+|---|---|
+| `deny`, `require_approval` | union |
+| `allow` | intersection when both state one, else whichever does |
+| `max_calls` | the lower, per tool |
+| `constraints`, `approval_callback` | yours only: code never comes over the wire |
+| `on_violation` | the stricter (`dry_run` < `block` < `block_and_latch`), unless the org states none or its policy is a dry run |
+
+A refusal by a rule the org added carries `details["origin"] == "org"`. A merge
+that cannot be enforced (an org approval rule with no local callback) is logged
+and your own policy applies alone.
+
+## Capability classes
+
+`effects=` names the classes a tool carries: `read`, `write`, `external`,
+`financial`, `destructive`, `privileged`. A tool with none is unclassified.
+`init(capabilities=...)` gives a class a verdict, `allow`, `approve` or `deny`;
+a class you leave out allows.
 
 ```python
-try:
-    run_agent()
-except PolicyViolation as exc:
-    # exc.violation.rule is "deny" | "allow" | "max_calls" | "constraint" | "approval"
-    log.warning("refused %s (%s): %s", exc.violation.tool, exc.violation.rule, exc)
-    ask_the_user_what_to_do()
-except GuardrailTripped as exc:
-    shut_down_cleanly(exc.anomaly)
+import runbound
+
+runbound.init(capabilities={"destructive": "deny", "financial": "approve"})
 ```
 
-`ToolPolicy`, `ToolCall`, `Violation` and `PolicyViolation` are all exported from
-the package root. `runbound.tool_calls(key=None)` reads the tally `max_calls`
-is measured against, without provoking a violation:
+A tool is refused with `CapabilityRefused` (`reason="capability"`) when any one
+of its classes is denied. `approve` also refuses, saying the approval is
+missing: a class rule has no approval queue. An unclassified tool is allowed
+only while every class allows; as soon as one class is narrowed it is refused,
+because nothing said what it does. A capability refusal latches nothing.
 
-```python
-runbound.tool_calls("user:8842")
-# {'send_email': 2, 'issue_refund': 2, 'wire_money': 1}
-```
+`init(max_actions_per_run=n)` caps the tool calls a session may execute; the
+next one is refused with `reason="blast_radius"`.
 
-Those are **attempts, not successes** — a call the policy refused is counted,
-because it was made. The attempt is recorded before the policy judges it, so a
-refused call still counts towards the loop window and the step count too, and an
-agent that is both running away and misbehaving can be stopped by a detector
-before the policy ever sees the call. That is the right order: the session is
-already over.
+## Console rows
 
-**Roll it out with `dry_run`.** Nobody's first draft of a policy is right, and a
-wrong rule in `block` mode breaks a working agent. Ship with
-`on_violation="dry_run"` for a week: every violation is logged
-(`[runbound] Policy dry-run: would block tool 'send_email' ...`) and alerted (a
-repeat of the same violation pages once), and every tool still runs. Read what it would have refused, fix the rules that
-were wrong, then change one word to `"block"`.
+A control plane serves one row per tool of a service with `GET /v1/policy`
+(`rows` and `rows_hash`; see [Plane link](plane-link.md)). A row is in state
+`dry_run` or `enforced`, and it is folded with the tool's code rules **field by
+field, the most restrictive wins**. A row can add a block, a cap, an approval or
+a quota. It can never loosen what the code states.
 
-Four honest notes:
+| Row field | Folded with code |
+|---|---|
+| `blocked` | OR with `blocked=True` |
+| `max_calls_per_session` | both apply, so the lower holds |
+| `approval_required` | OR with code approval |
+| `approval_mode` | code wins when it declares a mode; else the row's (`sync` by default). A `deferred` row on a tool whose arguments are not JSON-friendly falls back to `sync`. |
+| `approval_timeout_s` | the lower |
+| `risk_class` | the stricter by rank `read < write < external < financial < destructive < privileged`; on a tool that declares no class, the row's class becomes its class |
+| `quota` | enforced as below |
+| `fail_mode` | used by the quota: `closed` unless the row says `open` |
 
-- **An approval nobody can answer is a refusal.** Each tool's own
-  `require_approval` callback is asked first; a tool that has none falls
-  through to the `approval_callback` you configured on `init()`; if there is
-  neither, the call is refused, not permitted. Fail-**closed**, like every
-  other gate here.
-- **A gate that errors refuses the call.** Everywhere else in runbound a bug
-  is swallowed so your call proceeds. A constraint or approval callback is the
-  one exception: it is a permission gate you opted into, and a gate that cannot
-  answer must not wave the call through. A predicate that raises therefore
-  counts as a violation — fail-**closed** — exactly as if it had returned
-  `False`. Only the exception's *type* reaches the anomaly (`error: 'KeyError'`),
-  never its message, which usually quotes the argument it choked on.
-- **The real arguments go to your predicate and nowhere else.** `ToolCall.args`
-  and `.kwargs` live for the duration of your call and are never stored,
-  logged, or put in an anomaly or an alert — only the salted digest the loop
-  detector compares is kept. A violation names the tool, the rule
-  and the numbers behind it — never a refund amount or an email address.
-- **Approval callbacks are synchronous by contract.** runbound calls yours on
-  the agent's own thread and waits, which is what makes the refusal arrive
-  before the tool runs. In an async app a callback that blocks on a human blocks
-  the event loop: return a decision you already have (a cached approval, a
-  queue, a flag) rather than waiting inside it.
+A row that cannot be parsed is skipped. The rows a worker holds are replaced
+only when `rows_hash` changes; a new `policy_version` alone keeps them. The
+rows and their hash are kept in the [policy cache](plane-loss.md), and rules
+declared in code are never written there.
 
-Two boundaries worth stating plainly:
+### `dry_run`, then `enforced`
 
-- **`max_calls` is per session.** Inside `runbound.session(key)` each key gets
-  its own tally; outside one, everything counts against the default session
-  `init()` created. Both are per process.
-- **Under LangChain, constraints see the input string.** The handler enforces
-  the policy in `on_tool_start`, where LangChain hands us the tool's name and a
-  single `input_str` — so `call.args == (input_str,)` and `call.kwargs == {}`.
-  Deny, allow, `max_calls` and approval work exactly as they do elsewhere;
-  a constraint that wants typed arguments needs the `@runbound.tool`
-  decorator on the function itself.
+A `dry_run` row evaluates everything and refuses nothing. When it would have
+refused, the call runs and the SDK records `would_refuse`:
 
-The whole thing, offline, in three acts —
-dry-run, block, and a denied tool that latches the session:
-[`examples/policy_demo.py`](../../examples/policy_demo.py).
+- the call's `tool_result` gets the tag `would_refuse:<reason>`, for example
+  `would_refuse:tool_blocked` (read it with `runbound.tool_results()`);
+- a warning anomaly `Dry run: would refuse tool ...` and its Decision (boundary
+  `row`, verdict `deny`) are recorded once per session, reason and tool, in
+  `runbound.events()` and `runbound.decisions()`.
 
-## An org policy merged with yours: the algebra
+A `dry_run` row never asks a person, and its `risk_class` is not applied. Its
+quota is counted (the unit is taken) so the numbers you read are the real ones.
 
-In [fleet mode](fleet-mode.md#fleet-mode--one-truth-across-all-your-workers-control-plane)
-the plane states one policy per `service`, and the SDK merges it with the
-`tool_policy` you wrote locally. The merge can only ever *remove* freedom,
-and it does so one rule at a time:
+Roll a rule out as `dry_run`, read the `would_refuse` tags, then switch the row
+to `enforced`. For code rules the same step is `on_violation="dry_run"`, then
+`"block"`.
 
-| Rule | Merged how | Why that one |
+## Quotas
+
+A row's `quota` is `{"limit": n, "window": "minute" | "hour" | "day", "per":
+"service" | "key"}`, counted by the plane in a **fixed, calendar-aligned UTC
+window**: "20 per hour" means 20 per clock hour, not 20 in any sliding 60
+minutes. The plane keeps one counter, so leases and takes together never exceed
+the limit, however many workers run.
+
+- **`per: "service"`.** The hello reply's `quota_leases` grants this worker units
+  for the current window; the next hello reports what it still holds
+  (`quota_held`). A held unit is spent first, with no network. Everything held is
+  dropped when `window_start` changes or the window ends.
+- **No lease left.** One call is taken with `POST /v1/quota/take`. A refusal is
+  remembered for the `retry_after_s` the plane sends back (the rest of the
+  window), so a loop costs one round trip per window.
+- **`per: "key"`.** Never leased: every call takes, with the sha256 hash of the
+  session key (never the key). A call outside a keyed `runbound.session(...)`
+  is not counted against a per-key quota.
+- **Over the limit.** `ExecutionRefused`, `reason="quota_exceeded"`, with
+  `exc.retry_after` in seconds. It is `retryable`, after `retry_after`:
+  retrying before then is refused again.
+- **The plane away** (the link is not `connected`, or a take fails). The lease in
+  hand keeps being spent. Past it, every class is refused with
+  `reason="quota_plane_unavailable"` while `fail_mode` is `closed` (the
+  default). With `open` the worker admits `limit // 10` calls (at least 1) per
+  `control_plane_poll_s` seconds, because it cannot know how many peers share the
+  quota.
+- **A take the plane does not recognise** (HTTP 400 or 404, a row that changed
+  under the worker): the call runs.
+- **A tool that will ask a person** takes nothing here. `POST /v1/approvals`
+  takes the unit before an approval exists; a full quota there is
+  `quota_exceeded` too, and the same tool and key is not asked again for the
+  `retry_after_s` the plane sends (60 s if it sends none). A deferred request executed later never takes a second unit.
+
+A call refused by an earlier rule consumes no quota and asks no person.
+
+## The order of a call
+
+Every decorated call passes these in order; the first refusal wins and the body
+does not run.
+
+| # | Check | Refusal `reason` |
 |---|---|---|
-| `deny` | **Union** | A ban either side states is a ban. A tool the org denies is also dropped from your `allow` list, so the two can never disagree about the same tool. |
-| `allow` | **Intersection** | Only tools both sides permit survive. A side that states no allow-list is not restricting anything, so the other side's list carries unchanged — intersecting with "everything". |
-| `max_calls` | **The lower of the two**, over every tool either side limits | A limit is a ceiling; the lower ceiling is the one that holds. The tally it is counted against stays local (one process, one session). |
-| `constraints`, `approval_callback` | **Local only** | A policy that arrived over the wire cannot carry code, and runbound will not run someone else's predicate in your process. Your callables are exactly as you wrote them. |
-| `require_approval` | **Union** | A tool either side wants approved is approved — by *your* callback, since the org's rule brings no code with it. If there is no local callback to ask, the merge raises `ValueError` at configuration time rather than build a gate nobody can answer. |
-| `on_violation` | **The stricter of the two** (`dry_run` < `block` < `block_and_latch`) | Propagation may tighten a reaction, never loosen one. Unless the org states no mode at all, or its policy is being rolled out `dry_run` — in both cases yours stands unchanged. |
+| 0 | a session already stopped by `block_and_latch` | the stored refusal again |
+| 1 | a fleet halt from the plane (`on_halt="raise"`) | `halt` |
+| 2 | the plane gone, for a consequential or unclassified tool | `plane_unavailable` |
+| 3 | your `pre_hooks` (may rewrite the arguments) | `hook_refused`, `hook_error` |
+| 4 | argument validation against the signature and hints | `invalid_arguments` |
+| 5 | code rules: `deny` (`blocked=True`), then `allow`, `max_calls`, `constraint` | `tool_blocked` for `deny`, else `policy` |
+| 6 | row: `blocked`, then the session cap | `tool_blocked`, `session_max_calls` |
+| 7 | capability class rules, then `max_actions_per_run` | `capability`, `blast_radius` |
+| 8 | quota | `quota_exceeded`, `quota_plane_unavailable` |
+| 9 | code `require_approval` callback | `approval` |
+| 10 | a person (`approval="required"` or a row) | `approval_denied`, `approval_timeout`, `approval_unavailable`, `quota_exceeded` |
+| 11 | your `gate_hooks` (refuse only) | `hook_refused`, `hook_error` |
 
-A violation of a rule the org contributed reports `details["origin"] == "org"`,
-and `details["dry_run"] is True` while that policy is still being rolled out
-dry, so a log line tells you whose rule stopped the call.
-
-The one property underneath all six rows: **the merged policy never permits a
-call that either input would have refused.** `tests/test_policy_merge.py`
-pins each row by hand; `tests/test_policy_merge_properties.py` asserts the
-property itself over 500 randomly generated policy pairs (stdlib `random`, a
-fixed seed, 11,900 probes) so the combinations nobody thought to write down
-are covered too.
+Step 2 uses the tool's classes after a row's `risk_class` is folded in. What
+each reason means, and which are retryable, is in
+[Handling refusals](handling-refusals.md).
 
 ---

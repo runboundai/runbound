@@ -16,7 +16,7 @@ A clear description of what you expected and what you saw instead.
 
 ## Minimal reproduction
 
-Ideally something that runs offline, the way `examples/runaway_demo.py`
+Ideally something that runs offline, the way `examples/tool_rules.py`
 does — no network, no API key, no account. If it needs a real provider
 call, say so and trim it to the smallest snippet that still reproduces it.
 

@@ -1,24 +1,26 @@
-"""What the configuration reference's columns are checked against: the code (shared by the generator and the test).
+"""What the configuration reference's columns are checked against: the code.
 
-``default_text`` renders a ``GuardrailConfig`` field's default the way the reference prints it, and ``tightenable``
-reads which ``init()`` fields the plane's Controls can tighten from the engine's own source: the fields its
-``_code_*`` snapshots take from ``config`` are exactly the values a Controls merge tightens against.
+``default_text`` renders a ``RunboundConfig`` field's default the way the reference prints it, ``type_text`` its
+annotation, and ``tightenable`` names the ``init()`` fields a connected plane can make stricter (only the tool policy:
+the engine merges the plane's policy with the local one, and the merge can only remove freedom).
 """
 
 from __future__ import annotations
 
 import dataclasses
-import re
 from pathlib import Path
 
 ENGINE = Path(__file__).resolve().parent.parent / "runbound" / "engine.py"
-#: ``init(capabilities=...)`` is read with ``getattr`` (it may be absent on a bare config-like object), so the
-#: pattern below cannot see it; the line it is read on is named here and checked to exist.
-CAPABILITIES_LINE = 'self._code_capabilities: dict = dict(getattr(config, "capabilities", None) or {})'
+#: The one place the plane's policy reaches the engine: ``merge(local, remote, ...)`` of the tool policy, which can only
+#: remove freedom. The line is named here and checked to exist, so a change to how the plane's rules arrive fails here.
+MERGE_LINE = "merged = merge(local, remote, remote_dry_run=dry_run)"
+
+#: Module prefixes an annotation's text carries that the reference leaves off.
+_PREFIXES = ("collections.abc.", "typing.", "runbound.policy.")
 
 
 def default_text(field: dataclasses.Field) -> str:
-    """A field's default as the reference prints it: ``None``, ``True``, ``"warn"``, ``5.0``, ``()``, ``{}``."""
+    """A field's default as the reference prints it: ``None``, ``True``, ``"raise"``, ``5.0``, ``()``, ``{}``."""
     if field.default is not dataclasses.MISSING:
         value = field.default
     elif field.default_factory is not dataclasses.MISSING:  # type: ignore[misc]
@@ -37,11 +39,18 @@ def _render(value) -> str:
     return repr(value)
 
 
+def type_text(field: dataclasses.Field) -> str:
+    """A field's annotation as the reference prints it: ``str | None``, ``ToolPolicy | dict | None``, ``float``."""
+    hint = field.type
+    if isinstance(hint, type):
+        return hint.__name__
+    text = str(hint)
+    for prefix in _PREFIXES:
+        text = text.replace(prefix, "")
+    return text.replace("NoneType", "None")
+
+
 def tightenable() -> set[str]:
-    """The ``init()`` fields a plane's Controls can tighten, from the engine's ``_code_*`` snapshots."""
-    source = ENGINE.read_text()
-    start = source.index("self._code_limits: dict = {")
-    end = source.index("self._controls_lock = threading.Lock()")
-    block = source[start:end]
-    assert CAPABILITIES_LINE in block, "the engine no longer reads capabilities the way this reference expects"
-    return set(re.findall(r"config\.([a-z_0-9]+)", block)) | {"capabilities"}
+    """The ``init()`` fields a plane can tighten: the tool policy, merged tighten-only in the engine."""
+    assert MERGE_LINE in ENGINE.read_text(), "the engine no longer merges the plane's policy the way this reference expects"
+    return {"tool_policy"}

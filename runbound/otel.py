@@ -1,24 +1,20 @@
 """OpenTelemetry export: ``pip install "runbound[otel]"``.
 
 Sends what this process already records locally (:func:`runbound.events`) to
-your OpenTelemetry pipeline, as log records and five metrics::
+your OpenTelemetry pipeline, as log records and two metrics::
 
     import runbound
     from runbound import otel
 
-    runbound.init(budget_usd=5.00)
+    runbound.init(max_actions_per_run=50)
     otel.enable()   # uses the global OpenTelemetry providers
 
-Log records, one per anomaly, refusal, posture change and runtime change
-(``event_name`` ``runbound.anomaly``, ``runbound.refusal``,
-``runbound.posture`` and ``runbound.runtime_change``). A refusal or anomaly
-that carries a :class:`~runbound.events.Decision` puts its fields on the
-record as ``runbound.decision.*`` attributes, the numbers behind it as
-``runbound.decision.evaluation.<name>``. Metrics: ``runbound.refusals``,
-``runbound.anomalies`` and ``runbound.posture_changes``, and, one tick per guarded model call,
-``runbound.guarded_calls`` (``runbound.model``, ``runbound.provider``, ``runbound.outcome`` of ``ok`` or ``error``) and
-``runbound.estimated_usd`` (the SDK's own price estimate for the call, in USD, with ``runbound.model``, ``runbound.provider``
-and ``runbound.priced`` of ``estimated`` when the price came from a fallback). All counters.
+Log records, one per anomaly, refusal and runtime change (``event_name``
+``runbound.anomaly``, ``runbound.refusal`` and ``runbound.runtime_change``). A
+refusal or anomaly that carries a :class:`~runbound.events.Decision` puts its
+fields on the record as ``runbound.decision.*`` attributes, the numbers behind
+it as ``runbound.decision.evaluation.<name>``. Metrics: ``runbound.refusals``
+and ``runbound.anomalies``, both counters.
 
 Content independence holds, as everywhere else in the SDK: a record carries
 detector names, scopes, numbers and the sentence a refusal already carries,
@@ -74,9 +70,7 @@ def enable(*, logger_provider: Any = None, meter_provider: Any = None) -> bool:
         previous, _ACTIVE = _ACTIVE, exporter
     if previous is not None:
         local_events.remove_sink(previous)
-        local_events.remove_call_sink(previous._call_record)
     local_events.add_sink(exporter)
-    local_events.add_call_sink(exporter._call_record)
     return True
 
 
@@ -87,7 +81,6 @@ def disable() -> None:
         exporter, _ACTIVE = _ACTIVE, None
     if exporter is not None:
         local_events.remove_sink(exporter)
-        local_events.remove_call_sink(exporter._call_record)
 
 
 class _Exporter:
@@ -97,15 +90,9 @@ class _Exporter:
         self._logger = logger
         self._severity = logs_api.SeverityNumber
         self._refusals = meter.create_counter(
-            "runbound.refusals", unit="{refusal}", description="Calls runbound refused.")
+            "runbound.refusals", unit="{refusal}", description="Tool calls runbound refused.")
         self._anomalies = meter.create_counter(
             "runbound.anomalies", unit="{anomaly}", description="Anomalies runbound detected.")
-        self._postures = meter.create_counter(
-            "runbound.posture_changes", unit="{change}", description="Posture transitions.")
-        self._guarded = meter.create_counter(
-            "runbound.guarded_calls", unit="{call}", description="Model calls runbound guarded, however they ended.")
-        self._usd = meter.create_counter(
-            "runbound.estimated_usd", unit="USD", description="Cost runbound estimated for the model calls it guarded.")
 
     def __call__(self, record: dict) -> None:
         kind = record.get("kind")
@@ -136,34 +123,6 @@ class _Exporter:
         self._refusals.add(1, _only(
             attrs, "runbound.detector", "runbound.decision.boundary", "runbound.decision.level"))
 
-    def _posture(self, record: dict) -> None:
-        attrs = _base(record)
-        attrs.update({
-            "runbound.posture": record.get("posture"),
-            "runbound.posture.from": record.get("from"),
-            "runbound.posture.scope": record.get("scope"),
-            "runbound.posture.source": record.get("source"),
-            "runbound.posture.level": record.get("level"),
-        })
-        self._emit("runbound.posture", record, _text(record, record.get("reason")),
-                   self._severity.INFO, attrs)
-        self._postures.add(1, _only(attrs, "runbound.posture", "runbound.posture.source"))
-
-    def _call_record(self, record: dict) -> None:
-        if record.get("kind") == "call":
-            self._call(record)
-
-    def _call(self, record: dict) -> None:
-        attrs = {
-            "runbound.model": record.get("model"),
-            "runbound.provider": record.get("provider"),
-        }
-        self._guarded.add(1, _only({**attrs, "runbound.outcome": record.get("outcome")}, *attrs, "runbound.outcome"))
-        cost = record.get("cost_usd")
-        if isinstance(cost, (int, float)) and not isinstance(cost, bool) and cost > 0:
-            self._usd.add(float(cost), _only({**attrs, "runbound.priced": record.get("priced")},
-                                             *attrs, "runbound.priced"))
-
     def _runtime_change(self, record: dict) -> None:
         attrs = {
             "runbound.runtime.what": record.get("what"),
@@ -187,7 +146,6 @@ class _Exporter:
 _HANDLERS = {
     "anomaly": _Exporter._anomaly,
     "refusal": _Exporter._refusal,
-    "posture": _Exporter._posture,
     "runtime_change": _Exporter._runtime_change,
 }
 

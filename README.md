@@ -1,184 +1,138 @@
 # runbound
 
-**Runbound is a runtime control plane for autonomous AI: it decides what
-an agent may consume, how far it may run, and what it may do, and enforces
-those boundaries across the fleet.** The open-source SDK is the runtime for
-that — free, local, no account required.
+**Runbound is a policy boundary around the tools an AI agent can call.** Declare a
+tool with one decorator and every call is checked *before its body runs*: against
+rules in your code and rules set in a console, against a quota, and, when you say
+so, against a person's approval. When the control plane is unreachable the
+consequential tools fail closed. Every call leaves one OpenTelemetry span.
 
-Add one initialization line. No agent rewrites, decorators, or policy code
-required. runbound counts, times, hashes and prices what an agent does; it
-never stores, logs or sends a prompt or a reply (the only thing it takes from
-the text is a length),
-puts no gateway in your hot path, and never speaks to your users — when it refuses something, it hands control straight
-back to your own code.
+Add one initialization line and one decorator per tool. No agent rewrites or
+policy code required. runbound sees tool names, argument hashes, timings and
+outcomes; it never stores, logs or sends a prompt, a reply or a result, and an
+argument leaves the process only when the tool asks a person (the approver must
+see it). It puts no gateway in your hot path, and never speaks to your users: when it
+refuses something it hands control straight back to your own code.
+
+> **1.0.0a2 is an alpha.** The detection, provider-wrapper and cost
+> features of 0.11.x are gone; see [CHANGELOG.md](CHANGELOG.md) for what was
+> removed and how to migrate.
 
 ## Install
 
 ```bash
-pip install runbound
+pip install runbound --pre
 ```
 
-See the whole core loop in thirty seconds — no clone, no key, no network:
-
-```bash
-python -m runbound.demo
-```
-
-There are no runtime dependencies — stdlib only. There are two optional extras:
-`pip install "runbound[langchain]"` for LangChain and
-`pip install "runbound[otel]"` for OpenTelemetry export.
+Requires **Python 3.10 or newer** (pip refuses the install on older versions, and `import runbound` on
+3.9 raises an `ImportError` that says so). No runtime dependencies: stdlib only. There are two optional extras:
+`pip install "runbound[langchain]"` and `pip install "runbound[otel]"`.
 
 ## Quick start
 
 ```python
 import runbound
-runbound.init(budget_usd=5.0, max_steps=50, on_anomaly="raise")
 
-runbound.record_call("gpt-4o", tokens_in=1_000, tokens_out=500)   # guarded; needs no provider package
+@runbound.tool(effects={"read"})
+def lookup_order(order_id: str) -> dict:
+    return {"order": order_id}
+
+@runbound.tool(effects={"financial"}, approval="required", mode="deferred")
+def issue_refund(order_id: str, amount: float) -> str:
+    return "refunded"
+
+runbound.init(token="rb_...", control_plane_url="https://plane.example", service="support-agent")
 ```
 
-With a provider SDK (`pip install openai`), `runbound.init()` wraps the client
-for you, automatic for a client built after `init()`:
+**Decorate before `init()`.** Import your tool modules, then call `init()`: the
+first heartbeat carries the tool report, and a tool declared afterwards can run for
+a moment before the plane knows its rules.
+
+A refused call raises one typed exception, never a fake success:
 
 ```python
-from openai import OpenAI
-
-client = OpenAI()   # wrapped: every call below is counted, priced and limited
+try:
+    lookup_order(order_id=123)          # wrong type: refused before the body runs
+except runbound.ExecutionRefused as exc:
+    print(exc.reason, exc.retryable)    # invalid_arguments False
 ```
 
-Give it a user key when a limit should follow that person across requests
-instead of resetting every call — a **run** budget that starts fresh on every
-entry, checked side by side with the **key**'s own daily total:
+## The hook chain
 
-```python
-runbound.init(run_budget_usd=1.0, budget_usd=20.0, budget_window="day")
+Every call passes the same fixed chain; the first refusal wins and the body never
+runs:
 
-with runbound.session(f"user:{user_id}"):
-    client.chat.completions.create(...)   # refused by whichever budget is tighter
-```
+your rewrite hooks, argument validation against the signature, the tool's rules,
+the console row, the capability class, the quota, the approval, your gate hooks,
+the body, and finally the *post chain* on what it returned (redact secret-named
+keys, truncate, scan for injection patterns, your post hooks). Hooks that fail are
+treated by class: a hook error refuses a consequential or unclassified tool and is
+logged and skipped for a read, write or external one. See
+[How it works](docs/concepts/how-it-works.md).
 
-Decorate the two or three tools that matter and runbound refuses a call
-before its body runs:
+## Per-tool policy
 
-```python
-@runbound.tool(max_calls=1)
-def issue_refund(user: str, amount: float): ...
-```
+Rules come from two places and only ever tighten each other: the decorator
+(`blocked`, `max_calls`, `constraint`, `require_approval`, `effects`) and rows set
+in the console (blocked, session cap, approval, risk class, fail mode, quota). The
+most restrictive wins, field by field. A row starts as **dry run**: it evaluates
+everything, refuses nothing and records `would_refuse`, so you see what it would
+have stopped before you switch it to **enforced**.
 
-The short version — wiring every limit, checking what's actually
-guarded, and handling a refusal — is in
-[Getting started](docs/getting-started.md), which also shows the graded loop
-and [a runaway, start to finish](docs/guides/a-runaway.md).
+A quota is a fixed clock window: "20 per clock hour", per service or per key. A
+full quota refuses with `quota_exceeded` (retryable, with a `retry_after`). See
+[Per-tool policy](docs/guides/policy.md).
 
-Not a Python agent? [Which door](docs/which-door.md) covers the gateway (change
-one base URL) and the action API (one HTTP call before an action).
+## Approvals
 
-## Three levels of protection
+`@runbound.tool(approval="required", mode="sync" | "deferred")` asks a person.
+*Sync* waits for the answer up to `timeout_s`. *Deferred* returns
+`{"status": "pending_approval", "request_id": ...}` at once; when a person
+approves, a worker verifies an HMAC **seal** (keyed by `RUNBOUND_APPROVAL_SECRET`,
+which never leaves your processes) and runs the tool with the approved arguments
+through the whole chain again. `runbound.current_request()` is the idempotency key.
+See [Approvals](docs/guides/approvals.md).
 
-**Level 1: runtime limits.** Two lines. `runbound.init()` wraps the OpenAI
-and Anthropic clients for you — wrap is automatic for a client built after
-`init()`, or call `runbound.wrap(client)` yourself for one built earlier or
-shaped like a gateway. From then on every model call is counted, timed and
-priced with no network call and no account:
+## When the plane is unreachable
 
-- dollar limits
-- token limits
-- per-call caps
-- run and event limits
-- run timeouts
-- error storms
-- provider circuits
-- loop detection from the tool calls a model asks for
-- spike detection
-- local safe mode
-- local enforcement
+`plane_status().mode` is `connecting`, `connected`, `degraded` or `unavailable`.
+The last policy is kept on disk and enforced before the first heartbeat after a
+restart. While the plane is away `read`, `write` and `external` tools keep running
+on it; `financial`, `destructive`, `privileged` and unclassified tools refuse with
+`reason="plane_unavailable"` once `consequential_grace_s` (default 60) has passed.
+See [Plane loss](docs/guides/plane-loss.md).
 
-These are what you can switch on, not what one line sets: `init(budget_usd=5.0)`
-sets the dollar budget; token, step, event, per-call and run limits are off until
-you state them. Error-storm, loop and spike detection are on by default and notify;
-a loop is contained only if you choose a reaction for it
-(`on_loop="break"`, `"throttle"` or `"escalate"`, or `on_spike="limit"`).
+A worker with `export_events=False` exports nothing, refusals included, so the
+console will not show that worker's refusals.
 
-Two honest limits, in the same breath: this level only sees what a wrapped
-client or `@runbound.tool` reports it, so an action's own body is only
-governed once that tool carries `@runbound.tool`, and a raw or unsupported
-provider path is not guarded at all — `runbound.coverage()` is how you find
-out which one you're in.
+## OpenTelemetry spans
 
-**Level 2: identity limits.** One line per unit of work,
-`runbound.session(key)` — the key is any id you already have: a run, a job,
-a tenant, a customer. Every budget and posture above becomes per key instead of per
-process, so one caller's run stops without touching anyone else's. Circuits and
-caps (fan-out, in-flight, active sessions) stay per process.
+Each call is a span named `execute_tool {tool}`, scope `runbound`, sent to your
+OpenTelemetry provider or, with `init(otel_endpoint=...)`, posted as OTLP/JSON. It
+carries the tool, the outcome, the decision and a hash of the arguments, never the
+arguments. See [OpenTelemetry](docs/guides/opentelemetry.md) and
+[LangChain](docs/guides/langchain.md).
 
-**Level 3: capability limits.** Decorate the tools that are irreversible or
-reach the outside world with `@runbound.tool`, state a rule (deny, a call
-cap, an approval, a predicate over the arguments), and the call is refused
-*before its body runs*. Narrowing a run's posture — `restricted`,
-`read_only`, `stopped` — denies a whole class of actions at once without
-ending the run.
+## What runbound does not do
 
-## When Runbound refuses
-
-There is no fake success. A refusal is a typed `ExecutionRefused` — never a
-swallowed error, never an answer made up to look normal — carrying `reason`,
-`retryable` and `provider_called`, so your own code decides what happens
-next: retry, queue, fall back, or tell the caller. Catch that one name:
-every refusal is an `ExecutionRefused` (`GuardrailTripped` is the same class,
-and `SafeModeViolation` and `PolicyViolation` are subclasses), and it is never
-one of a provider's own exceptions. See
-[Handling refusals](docs/guides/handling-refusals.md).
-
-## Content-independent enforcement
-
-Every decision above is made from counts, hashes, timings and prices — never
-from reading what an agent said or what a model answered:
-
-- Prompts and model replies are never stored or sent; the only thing taken from
-  them is a length (`estimate_tokens`, the admission estimate).
-- Tool arguments are sha256-hashed before storage, salted per process; raw
-  arguments never leave your process.
-- A session key reaches a connected plane as a hash, never in the clear. That
-  hash is unsalted, so the same caller is recognisable across your workers.
-- No network calls except the ones you configure — no telemetry, no
-  phone-home, nothing sent anywhere with no `token` set.
-
-Full accounting: [What the SDK actually sees](docs/concepts/what-it-sees.md)
-and [Boundaries](docs/concepts/boundaries.md) — what runbound deliberately
-does not do, and what to use instead.
-
-## Open-source runtime. Cloud control plane.
-
-Everything above is free, local, in the open-source SDK, configurable in
-code, with no account. A connected control plane adds what one process
-cannot give itself: coordination across every worker in your fleet, state
-that survives a restart, central policy and posture, and durable evidence.
-See [Free SDK, connected plane](docs/concepts/free-and-connected.md).
+It guards the tools you decorate; it does not read prompts, wrap model providers,
+detect loops, price tokens or sandbox a tool's body. `runbound.coverage()` and
+`python -m runbound check` tell you which tools are guarded. See
+[Boundaries](docs/concepts/boundaries.md) and
+[Guarantees](docs/reference/guarantees.md).
 
 ## Documentation
 
-The manual lives in [`docs/`](docs/README.md), and that repository manual is
-canonical. [runbound.co/docs](https://runbound.co/docs) renders whole the six pages that the site's
-`manual-sources.ts` lists and some reference sections from fragments of it; the other pages are written separately.
-
-- **[Getting started](docs/getting-started.md)** — install, the core loop, and
-  checking what is actually guarded.
-- **[Concepts](docs/README.md#concepts)** — the three levels, boundaries, and
-  the free SDK / connected plane split.
-- **[Guides](docs/README.md#guides)** — keyed runs, action policy, handling
-  refusals, async and streaming.
-- **[Reference](docs/README.md#reference)** — every configuration field, the
-  detectors, and the guarantees.
-
-[Roadmap](docs/roadmap.md) is what is shipped, what is still open, and what is
-explicitly out of scope.
+The manual is in [`docs/`](docs/README.md): [Getting started](docs/getting-started.md),
+[Configuration](docs/reference/configuration.md), [API](API.md),
+[Handling refusals](docs/guides/handling-refusals.md),
+[Privacy](docs/reference/privacy.md) and three runnable [examples](examples/README.md).
 
 ## Getting help
 
-**Something not working, or a question?** Open an issue at
-[github.com/runboundai/runbound/issues](https://github.com/runboundai/runbound/issues),
-or email **runboundai@gmail.com** if it is not something you can post in
-public.
+Open an issue at [github.com/runboundai/runbound/issues](https://github.com/runboundai/runbound/issues),
+or email **runboundai@gmail.com** for anything you cannot post in public. **Never
+paste** a token, an approval secret, an argument or a real session key into an
+issue. Security issues go to email: see [SECURITY.md](SECURITY.md).
 
 ```python
 import runbound
@@ -186,14 +140,7 @@ print(runbound.__version__)
 print(runbound.coverage())   # after init() and your first guarded call
 ```
 
-`coverage()` shows at a glance whether runbound can see your traffic at all —
-the most common cause of "it isn't catching anything." **Never paste** an API
-key, a control-plane token, a prompt, a reply, or a real session key into an
-issue. Security issues go to email, not to an issue — see
-[SECURITY.md](SECURITY.md).
-
 ## License
 
-MIT — see [LICENSE](LICENSE). Release history is in
-[CHANGELOG.md](CHANGELOG.md). The promises above, stated as bounds with the
-tests that assert them (and the gaps it names as not yet asserted), are in [INVARIANTS.md](INVARIANTS.md).
+MIT, see [LICENSE](LICENSE). Release history is in [CHANGELOG.md](CHANGELOG.md); the
+invariants, each with the test that asserts it, are in [INVARIANTS.md](INVARIANTS.md).

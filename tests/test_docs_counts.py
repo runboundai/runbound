@@ -27,28 +27,11 @@ def test_the_optional_extras_the_docs_name_are_the_ones_the_package_has():
             assert f"runbound[{name}]" in text
 
 
-def test_the_opentelemetry_counters_are_five_wherever_the_docs_count_them():
+def test_the_opentelemetry_counters_are_two_wherever_the_docs_count_them():
     source = _read("runbound", "otel.py")
     counters = re.findall(r'create_counter\(\s*"(runbound\.\w+)"', source)
-    assert len(counters) == 5
-    assert "five counters" in _read("docs", "README.md")
+    assert len(counters) == 2
     guide = _read("docs", "guides", "opentelemetry.md")
-    assert "Five **counters**" in guide
+    assert "two counters" in guide
     for name in counters:
         assert name in guide
-
-
-def test_the_readme_says_how_many_manual_pages_the_site_renders_whole():
-    """The README says the site renders six manual pages whole; the site's own list of them (``manual-sources.ts``, which
-    exists in the development monorepo only) has exactly that many, and each is a real file of this manual."""
-    import pytest
-
-    sources = _ROOT.parent / "website" / "scripts" / "manual-sources.ts"
-    if not sources.exists():
-        pytest.skip("the site is not part of this checkout (the public repository)")
-    listed = re.findall(r'source:\s*"(docs/[^"]+\.md)"', sources.read_text())
-    assert len(listed) == 6, "README.md says six; update it with manual-sources.ts"
-    for path in listed:
-        assert _ROOT.joinpath(path).is_file(), path
-    readme = _read("README.md")
-    assert "renders whole the six" in readme and "manual-sources.ts" in readme

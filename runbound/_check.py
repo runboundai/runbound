@@ -2,13 +2,13 @@
 
 A quick answer to "is anything actually protected here?" for a person at a terminal, a coding agent that just
 attached the SDK, and CI. It reads what :func:`runbound.coverage`, :func:`runbound.tools`,
-:func:`runbound.posture` and :func:`runbound.events` already know: it makes no call to a control plane (it reads
+:func:`runbound.events` already know: it makes no call to a control plane (it reads
 the link's last status, never asks it anything), and it never prints a token.
 
 **How it inspects your process.** A report can only describe the process that holds the state, so there are two
 forms and they share one report. ``runbound.check()`` is called in your own process, at the end of its setup. The
 command form ``python -m runbound check TARGET`` loads the target (a script path, or a module name) in its own
-process first, as ``runbound_check`` rather than ``__main__``: your ``init()``, ``wrap()`` and ``@runbound.tool``
+process first, as ``runbound_check`` rather than ``__main__``: your ``init()`` and ``@runbound.tool``
 lines at import time run, and an ``if __name__ == "__main__":`` block (a server loop, a ``main()``) does not. Code
 that only wires runbound inside such a block is reported as not guarded, and the report says to call
 ``runbound.check()`` there instead.
@@ -16,7 +16,7 @@ that only wires runbound inside such a block is reported as not guarded, and the
 Private module on purpose, like :mod:`runbound._coverage`: a public ``runbound.check`` submodule would replace the
 ``check`` function on the package.
 
-Exit codes: 0 when at least one wrapped client, decorated tool or guarded call exists, 1 when nothing is guarded, 2
+Exit codes: 0 when at least one decorated tool exists, 1 when nothing is guarded, 2
 when the target could not be loaded. ``--json`` prints the report with a stable shape (``schema`` 1).
 """
 
@@ -32,9 +32,8 @@ from . import __version__, api
 
 SCHEMA = 1
 EVENTS_SHOWN = 10
-#: The limits ``init()`` can state that this report calls "budgets in force", in the order it prints them.
-BUDGET_KEYS = ("budget_usd", "budget_window", "run_budget_usd", "max_total_tokens", "max_steps", "max_actions_per_run",
-               "max_events", "max_cost_per_call_usd", "max_tokens_out_per_call")
+#: The limits ``init()`` can state that this report calls "limits in force", in the order it prints them.
+LIMIT_KEYS = ("max_actions_per_run", "require_rules")
 LOAD_AS = "runbound_check"
 
 
@@ -45,31 +44,17 @@ def build_report() -> dict:
     coverage = api.coverage()
     engine = getattr(api, "_ENGINE", None)
     config = getattr(engine, "config", None)
-    labels = coverage.get("auto_wrapped") or []
-    grouped: dict[str, list[str]] = {}
-    for label in labels:
-        provider, _, shape = str(label).partition(":")
-        grouped.setdefault(provider, []).append(shape)
     tools = [{"name": row.get("name"), "classes": sorted(row.get("effects") or [])} for row in (_tools() or [])]
-    guarded = bool(coverage.get("guarded_calls") or coverage.get("decorated_tools") or coverage.get("wrapped_clients")
-                   or labels)
+    guarded = bool(coverage.get("decorated_tools"))
     return {
         "schema": SCHEMA,
         "runbound": __version__,
         "python": platform.python_version(),
         "guarded": guarded,
         "initialized": engine is not None,
-        "clients": {
-            "wrapped_clients": int(coverage.get("wrapped_clients") or 0),
-            "auto_wrapped": grouped,
-            "providers_imported": list(coverage.get("providers_imported") or []),
-            "providers_unguarded": list(coverage.get("providers_unguarded") or []),
-        },
         "tools": tools,
         "plane": _plane(coverage, config),
-        "posture": api.posture(),
-        "budgets": {k: getattr(config, k) for k in BUDGET_KEYS if getattr(config, k, None) is not None} if config else {},
-        "guarded_calls": int(coverage.get("guarded_calls") or 0),
+        "limits": {k: getattr(config, k) for k in LIMIT_KEYS if getattr(config, k, None) not in (None, False)} if config else {},
         "tool_calls_seen": int(coverage.get("tool_calls_seen") or 0),
         "events": [_event(e) for e in (api.events(EVENTS_SHOWN) or [])][-EVENTS_SHOWN:],
     }
@@ -94,10 +79,7 @@ def _plane(coverage: dict, config: Any) -> dict:
 
 def _event(event: dict) -> dict:
     kind = str(event.get("kind") or "")
-    if kind == "posture":
-        line = f"posture {event.get('from') or '?'} -> {event.get('posture') or event.get('to') or '?'}" + (
-            f" ({event['reason']})" if event.get("reason") else "")
-    elif kind == "runtime_change":
+    if kind == "runtime_change":
         line = f"{event.get('what')}: {event.get('from')} -> {event.get('to')}"
     else:
         detector = event.get("detector")
@@ -109,24 +91,12 @@ def render(report: dict) -> str:
     """The report for a person: short, one section a question."""
     lines = [f"runbound {report['runbound']} on python {report['python']}"]
     lines.append("GUARDED" if report["guarded"] else
-                 "Nothing is guarded in this process: no wrapped client, no @runbound.tool, no guarded call.")
+                 "Nothing is guarded in this process: no @runbound.tool is decorated.")
     if not report["initialized"]:
-        lines.append("  runbound.init() has not run here. Add runbound.init(...) before your first model call, or call "
+        lines.append("  runbound.init() has not run here. Add runbound.init(...) before your first tool call, or call "
                      "runbound.check() at the end of your setup (a target's __main__ block is not run).")
-    clients = report["clients"]
     lines.append("")
-    lines.append("Clients")
-    if clients["auto_wrapped"] or clients["wrapped_clients"]:
-        for provider, shapes in sorted(clients["auto_wrapped"].items()):
-            lines.append(f"  {provider}: wrapped automatically ({', '.join(shapes)})")
-        if clients["wrapped_clients"]:
-            lines.append(f"  {clients['wrapped_clients']} client(s) wrapped by hand")
-    else:
-        lines.append("  none wrapped")
-    if clients["providers_unguarded"]:
-        lines.append(f"  imported but not yet seen guarded: {', '.join(clients['providers_unguarded'])}")
-    lines.append(f"  guarded calls so far: {report['guarded_calls']}; tool calls seen: {report['tool_calls_seen']}")
-    lines.append("")
+    lines.append(f"Tool calls seen: {report['tool_calls_seen']}")
     lines.append("Tools")
     if report["tools"]:
         for tool in report["tools"]:
@@ -136,10 +106,10 @@ def render(report: dict) -> str:
     plane = report["plane"]
     lines += ["", "Plane", f"  {plane['mode']}" + (f" at {plane['url']}" if plane["url"] else " (state stays in this process)")
               + (f" - {plane['detail']}" if plane.get("detail") else "")]
-    lines += ["", f"Posture: {report['posture']}", "", "Budgets and limits in force"]
-    if report["budgets"]:
-        for key, value in report["budgets"].items():
-            lines.append(f"  {key}: {'$' + format(value, 'g') if key.endswith('_usd') else value}")
+    lines += ["", "Limits in force"]
+    if report["limits"]:
+        for key, value in report["limits"].items():
+            lines.append(f"  {key}: {value}")
     else:
         lines.append("  none stated (the defaults apply)")
     lines += ["", f"Last events ({len(report['events'])})"]
@@ -221,6 +191,5 @@ def cli(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     if argv[:1] == ["check"]:
         return main(argv[1:])
-    sys.stderr.write("usage: python -m runbound check [--json] [TARGET]\n"
-                     "(python -m runbound.demo runs the demo)\n")
+    sys.stderr.write("usage: python -m runbound check [--json] [TARGET]\n")
     return 2

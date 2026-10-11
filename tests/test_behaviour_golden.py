@@ -1,17 +1,10 @@
-"""The golden fixture that a behaviour change must keep reproducing.
+"""The golden fixture that a behaviour change at the tool boundary must keep reproducing.
 
-The scenario and the normaliser live in ``tests/golden_script.py`` (not a
-test module itself — see its docstring), defined exactly once so this file
-can never drift from what produced the fixtures. This file only runs the
-scenario and compares.
-
-Nothing under ``runbound/`` was touched to build this fixture: it is
-captured against unmodified product code, and the two fixtures
-(``tests/fixtures/behaviour_golden.json``,
-``tests/fixtures/behaviour_golden_no_admission.json``) are the baseline
-captured before the execution envelope existed, which every later commit
-must keep matching under ``envelope=False`` (today, silently — see
-``golden_script``'s "envelope=False problem" section).
+The scenario and the normaliser live in ``tests/golden_script.py`` (not a test
+module itself — see its docstring), defined exactly once so this file can never
+drift from what produced the fixture. This file only runs the scenario and
+compares. It covers decorated-tool rules, capability class rules, the latch and
+the action cap; every feature that was removed from the SDK is gone from it.
 """
 
 import json
@@ -29,82 +22,46 @@ def _load(name: str) -> dict:
         return json.load(fh)
 
 
-def test_default_configuration_matches_the_golden():
-    result = golden.run_scenario(dict(golden.BASE_INIT_KWARGS))
-    assert result == _load("behaviour_golden.json")
+def test_the_scenario_matches_the_golden():
+    assert golden.run_scenario() == _load("behaviour_golden.json")
 
 
-def test_budget_admission_false_matches_its_own_golden():
-    result = golden.run_scenario(golden._no_admission_kwargs())
-    assert result == _load("behaviour_golden_no_admission.json")
+def test_policy_rules_are_judged_before_the_capability_class():
+    """The invariant the fixture pins by name: slot 3 (policy) runs before slot 4 (capability)."""
+    rules = _load("behaviour_golden.json")["rules"]
+    both = [a for a in rules["anomalies"] if a[3].get("tool") == "golden_both"]
+
+    assert [a[0] for a in both] == ["policy"]  # it also breaks the financial class rule
 
 
-def test_the_two_fixtures_differ_on_the_reservation_and_nothing_else():
-    """The reservation wall is the one call in the scenario that states an
-    output cap, so it is the one place ``budget_admission`` can make a
-    difference — every other call is uncapped and takes the same path
-    either way (``test_with_no_stated_cap_capped_is_byte_identical_to_admission_off``,
-    ``tests/test_budget_soft_and_reservation.py``). This names exactly which
-    fields move, and by how much, rather than asserting general inequality —
-    see ``golden_script``'s "WHAT DIFFERS" section for the reasoning.
-    """
-    capped = _load("behaviour_golden.json")
-    uncapped = _load("behaviour_golden_no_admission.json")
+def test_a_latched_session_refuses_every_tool_and_another_key_is_untouched():
+    latching = _load("behaviour_golden.json")["latching"]
 
-    assert capped != uncapped
+    assert latching["sessions"]["golden:latch"]["latched_by"] == "policy"
+    assert latching["sessions"]["golden:other"]["latched_by"] is None
+    assert [r["detector"] for r in latching["refusals"]] == ["policy"] * 3
+    assert len(latching["anomalies"]) == 1  # the on-call is paged once, when it latched
 
-    # "capped" refuses the reservation before it reaches the fake; "False"
-    # lets it through and it actually costs $1.00.
-    assert len(capped["refusals"]) == len(uncapped["refusals"]) + 1
-    assert len(capped["anomalies"]) == len(uncapped["anomalies"]) + 1
-    assert capped["client_calls"] == uncapped["client_calls"] - 1
 
-    reservation_refusals = [r for r in capped["refusals"] if r["rule"] == "reservation"]
-    assert len(reservation_refusals) == 1
-    assert reservation_refusals[0]["detector"] == "budget"
-    assert not any(r["rule"] == "reservation" for r in uncapped["refusals"])
+def test_a_refused_attempt_is_not_counted_as_executed():
+    cap = _load("behaviour_golden.json")["action_cap"]["sessions"]["default"]
 
-    assert capped["budget"]["golden:wall-reservation"] == {
-        "limit": 3.0,
-        "spent": 2.0,
-        "remaining": 1.0,
-        "soft_at": None,
-        "window": None,
-        "resets_at": None,
-        "scope": "session",
-        "reserved": 0.0,
-    }
-    assert uncapped["budget"]["golden:wall-reservation"] == {
-        "limit": 3.0,
-        "spent": 3.0,
-        "remaining": 0.0,
-        "soft_at": None,
-        "window": None,
-        "resets_at": None,
-        "scope": "session",
-        "reserved": 0.0,
-    }
-
-    # Every other session's budget, and the latching phase, are untouched.
-    for key in ("default", "golden:wall-budget", "golden:wall-steps", "golden:wall-tokens"):
-        assert capped["budget"][key] == uncapped["budget"][key]
-    assert capped["latching"] == uncapped["latching"]
-    assert capped["is_tripped"] == uncapped["is_tripped"] is None
+    assert (cap["executed"], cap["tool_calls"]["golden_ping"]) == (2, 4)
 
 
 # --- determinism -------------------------------------------------------
 
 
-def _run_in_a_subprocess(repo_root: str, which: str) -> dict:
+def _run_in_a_subprocess(repo_root: str) -> dict:
     result = subprocess.run(
-        [sys.executable, "-m", "tests.golden_script", "--print", which],
+        [sys.executable, "-m", "tests.golden_script", "--print"],
         cwd=repo_root,
         timeout=60,
         capture_output=True,
         text=True,
     )
     assert result.returncode == 0, result.stderr
-    return json.loads(result.stdout.strip())
+    return json.loads(result.stdout.strip().splitlines()[-1])
 
 
 def test_the_scenario_is_deterministic_in_process_and_across_processes():
@@ -114,10 +71,10 @@ def test_the_scenario_is_deterministic_in_process_and_across_processes():
     """
     repo_root = str(pathlib.Path(golden.__file__).resolve().parent.parent)
 
-    in_process_first = golden.run_scenario(dict(golden.BASE_INIT_KWARGS))
-    in_process_second = golden.run_scenario(dict(golden.BASE_INIT_KWARGS))
-    cross_process_first = _run_in_a_subprocess(repo_root, "default")
-    cross_process_second = _run_in_a_subprocess(repo_root, "default")
+    in_process_first = golden.run_scenario()
+    in_process_second = golden.run_scenario()
+    cross_process_first = _run_in_a_subprocess(repo_root)
+    cross_process_second = _run_in_a_subprocess(repo_root)
 
     assert in_process_first == in_process_second
     assert cross_process_first == cross_process_second

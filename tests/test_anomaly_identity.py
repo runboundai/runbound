@@ -1,12 +1,8 @@
 """One anomaly, one identity, on both channels.
 
-An anomaly that stops a session is reported to the control plane twice: the
-synchronous trip (``POST /v1/trip``, so the rest of the fleet learns the
-latch now) and the telemetry export of the same anomaly (``POST /v1/events``,
-whenever the exporter next flushes). Before this the plane had to guess that
-the two reports were one fact. Now the anomaly says so itself: ``Anomaly``
-stamps an ``anomaly_id`` on itself at construction and every wire form
-carries it unchanged.
+An anomaly reaches the caller (as ``exc.anomaly``) and the control plane (the
+telemetry export) as one fact. ``Anomaly`` stamps an ``anomaly_id`` on itself
+at construction and every form of it carries that id unchanged.
 
 Privacy: the id is ``uuid4().hex`` -- random, never derived from the session
 key, the org or the message -- so a customer's key cannot be recovered from
@@ -18,7 +14,6 @@ import re
 
 from runbound.events import Anomaly
 from runbound.plane_types import (
-    TripReport,
     WireAnomaly,
     anomaly_to_wire,
     from_wire,
@@ -138,32 +133,20 @@ def test_a_payload_from_an_older_sdk_decodes_to_an_empty_id():
     assert from_wire(WireAnomaly, old).anomaly_id == ""
 
 
-# --- the id on a trip report ----------------------------------------------
+# --- one refusal, both channels, one id ------------------------------------
 
 
-def test_a_trip_report_can_carry_the_id_and_the_worker():
-    report = TripReport(key_hash="a" * 64, anomaly_id="abc123", worker_id="host-1:42")
+def test_the_refusal_and_the_telemetry_export_agree_on_one_id():
+    # The whole point of the id: the exception the caller catches, the local
+    # event record and the exported anomaly are one refusal, not three.
+    import pytest
 
-    assert from_wire(TripReport, to_wire(report)).anomaly_id == "abc123"
-    assert from_wire(TripReport, to_wire(report)).worker_id == "host-1:42"
-
-
-def test_a_trip_report_from_an_older_sdk_names_neither():
-    old = {"key_hash": "a" * 64, "anomaly": {}, "strikes": 1}
-
-    report = from_wire(TripReport, old)
-
-    assert (report.anomaly_id, report.worker_id) == ("", "")
-
-
-# --- one anomaly, two channels, one id ------------------------------------
-
-
-def test_the_trip_and_the_telemetry_export_of_one_anomaly_agree_on_its_id():
-    # The whole point of the id: this is the pair the plane has to file as
-    # one refusal. Both channels are driven here from the same `Anomaly`
-    # object, exactly as `engine._latch` drives them.
+    from runbound import api
+    from runbound.config import RunboundConfig
+    from runbound.engine import Engine
+    from runbound.events import Decision
     from runbound.export import Exporter
+    from runbound.exceptions import GuardrailTripped
     from runbound.state import SessionState
 
     class Client:
@@ -178,29 +161,20 @@ def test_the_trip_and_the_telemetry_export_of_one_anomaly_agree_on_its_id():
             self.batches.append(batch)
             return True
 
-    class Plane(Client):
-        def __init__(self) -> None:
-            super().__init__()
-            self.reports: list[TripReport] = []
+    api._teardown_for_tests()
+    try:
+        anomaly = an_anomaly(detector="policy")
+        session = SessionState("sess-1", key="user-9")
+        plane = Client()
+        sink = Exporter(plane, maxlen=100, flush_every_s=60.0, batch_size=200)
+        engine = Engine(RunboundConfig(), observers=[sink])
 
-        def trip(self, report: TripReport) -> object:
-            self.reports.append(report)
-            return {"ack": True}
+        with pytest.raises(GuardrailTripped) as excinfo:
+            engine.refuse(session, anomaly, Decision(verdict="deny", kind="action"), reacted="blocked")
+        sink.flush()
 
-    from runbound.config import GuardrailConfig
-    from runbound.shared import RemoteState
-
-    anomaly = an_anomaly()
-    session = SessionState("sess-1", key="user-9")
-    plane = Plane()
-    sink = Exporter(plane, maxlen=100, flush_every_s=60.0, batch_size=200)
-    shared = RemoteState(plane, sink, GuardrailConfig(control_plane_url="http://plane"))
-
-    shared.trip("user-9", session, anomaly, 60.0, False)
-    sink.on_anomaly(session, anomaly, "raise")
-    sink.flush()
-
-    exported = plane.batches[-1]["anomalies"][0]
-    assert plane.reports[0].anomaly_id == anomaly.anomaly_id
-    assert plane.reports[0].anomaly["anomaly_id"] == anomaly.anomaly_id
-    assert exported["anomaly_id"] == anomaly.anomaly_id
+        exported = plane.batches[-1]["anomalies"][0]
+        assert excinfo.value.anomaly.anomaly_id == anomaly.anomaly_id
+        assert exported["anomaly_id"] == anomaly.anomaly_id
+    finally:
+        api._teardown_for_tests()

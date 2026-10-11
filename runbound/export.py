@@ -17,16 +17,12 @@ every decision here.
   plane comes back. Retries back off exponentially so a dead plane is polled
   less often, not hammered; an invalid key is the one failure that still
   drops on the spot, since retrying past a rejected key would never help.
-* **Trips first.** Exits, trips, circuit transitions and changes (a posture
-  moving, a model or policy version changing) go to a priority lane that is
+* **Changes first.** Changes (a policy version changing) go to a priority lane that is
   drained before ordinary events, so the record of an incident is not stuck
   behind a queue of routine token counts.
 
-At interpreter exit the queue is drained once, within the same few seconds the
-alert module already budgets for: the flusher thread is registered through
-:func:`runbound.alerts._track` so that drain waits for it too, and this
-module's own hook — registered later, so it runs first — stops the thread and
-posts what is left.
+At interpreter exit the queue is drained once: this module's ``atexit`` hook
+stops the flusher thread and posts what is left, within a few seconds.
 
 ``dropped`` is cumulative for the life of the process and is reported on every
 batch, so the plane can see loss as a counter rather than a one-off event.
@@ -40,10 +36,9 @@ from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from . import alerts, local_events
+from . import local_events
 from .plane import WARN_INTERVAL_S, _PeriodicWarning, warn_periodically
 from .plane_types import (
-    ExitDelta,
     anomaly_to_wire,
     event_to_wire,
     fresh_batch_id,
@@ -71,11 +66,14 @@ _wall = time.time
 #: The reactions that mean a call was actually turned away.
 REFUSAL_REACTIONS = frozenset({"raise", "blocked", "door"})
 
-_CHANGE_KINDS = {"posture": "posture_change", "runtime_change": "runtime_change"}
+#: The per-call event kinds that spans replace on ``/v1/events`` once ``otel_endpoint`` is set.
+_CALL_KINDS = frozenset({"tool_call", "tool_result", "tool_error", "tool_request"})
+
+_CHANGE_KINDS = {"runtime_change": "runtime_change"}
 
 
 def change_to_wire(record: dict) -> dict:
-    """One posture or runtime change record, in its wire form.
+    """One runtime change record, in its wire form.
 
     The session key is replaced by its hash, and redacted out of the reason
     (a manual reason is the caller's own text and may name it); the local
@@ -95,7 +93,7 @@ def change_to_wire(record: dict) -> dict:
         "key_hash": digest,
         "scope": record.get("scope"),
         "from": record.get("from"),
-        "to": record.get("posture") if kind == "posture_change" else record.get("to"),
+        "to": record.get("to"),
         "source": record.get("source"),
         "reason": reason,
         "level": record.get("level"),
@@ -118,11 +116,10 @@ class Exporter:
     nothing has filled a batch, and a full batch wakes it immediately.
 
     ``include_events`` is the customer's ``export_events`` setting, and it
-    covers telemetry only: with it off, events and detector verdicts are
-    dropped where they are handed over, while exits, circuit transitions and
-    trips still queue and still ship. Those are fleet *state* — a worker that
-    stopped reporting its exits would stop contributing to the shared spend,
-    which is the one thing fleet mode exists to get right.
+    is an opt-out of the whole stream: with it off nothing is queued, refusals
+    included, so the console shows none of this worker's refusals. (The plane
+    can also close the telemetry lanes on its own, e.g. a monthly events cap;
+    that never closes the refusal lane.)
 
     ``send_session_keys`` is the customer's setting of the same name, and off
     (the default) it is what keeps a raw key out of an exported anomaly: see
@@ -138,8 +135,12 @@ class Exporter:
         now: Callable[[], float] = time.monotonic,
         include_events: bool = True,
         send_session_keys: bool = False,
+        include_calls: bool = True,
     ) -> None:
         self._client = client
+        #: False once spans carry the per-call record (``otel_endpoint``): ``/v1/events`` then
+        #: keeps only what is audit-worthy and low-volume (refusals and changes).
+        self.include_calls = bool(include_calls)
         #: Whether an exported anomaly may carry raw session keys.
         self.send_session_keys = bool(send_session_keys)
         #: Whether the telemetry lanes are open. Read by
@@ -154,7 +155,7 @@ class Exporter:
         self._now = now
         self._events: deque = deque()
         self._anomalies: deque = deque()
-        self._priority: deque = deque()  # (lane, wire) with lane in exits|circuits|changes
+        self._priority: deque = deque()  # (lane, wire) with lane in exits|changes
         self.dropped = 0
         #: Consecutive failed posts, for diagnostics and the backoff below.
         #: Reset to 0 on the next successful post.
@@ -190,6 +191,8 @@ class Exporter:
         """
         if not self.include_events or self._discarding():
             return
+        if not self.include_calls and event.kind in _CALL_KINDS:
+            return
         try:
             wire = to_wire(
                 event_to_wire(event, self._key_hash(session), self._stamp_for(event.ts))
@@ -206,24 +209,13 @@ class Exporter:
         a refusal (``reacted`` ``raise``, ``blocked`` or ``door``) is evidence
         that something was stopped, not telemetry, and is exported whatever
         the plan says (a monthly events cap closes the telemetry lanes; it
-        never closes this one). The customer's own ``export_events=False`` is
-        still honoured: it is theirs to choose. The trip that a latch is made
-        of travels on :meth:`on_trip` instead, which does not ask.
+        never closes this one). The customer's own ``export_events=False``
+        silences it too: that opt-out is total, refusals included.
         """
         if not self.include_events and not (
             self.customer_events and reacted in REFUSAL_REACTIONS
         ):
             return
-        self._queue_anomaly(session, anomaly, reacted)
-
-    def on_trip(self, session, anomaly, reacted: str) -> None:
-        """Queue a trip the plane would not take synchronously. Never raises.
-
-        The fallback behind :meth:`runbound.shared.RemoteState.trip`: a trip
-        is what makes the fleet's other workers refuse a key, so it is queued
-        whatever ``include_events`` says. Same lane and same wire form as an
-        exported anomaly — the plane reads one shape, not two.
-        """
         self._queue_anomaly(session, anomaly, reacted)
 
     def _queue_anomaly(self, session, anomaly, reacted: str) -> None:
@@ -252,44 +244,12 @@ class Exporter:
             return
         self._enqueue(self._anomalies, wire)
 
-    def on_exit(self, delta: ExitDelta) -> None:
-        """Queue a session's spend/token delta on the priority lane."""
-        if self._discarding():
-            return
-        try:
-            wire = to_wire(delta)
-        except Exception:
-            self._unencodable()
-            return
-        self._enqueue(self._priority, ("exits", wire))
-
-    def on_circuit(self, label, state, failures, cooldown_s) -> None:
-        """Queue a provider circuit transition on the priority lane."""
-        if self._discarding():
-            return
-        try:
-            wire = {
-                "ts_wall": _iso(_wall()),
-                "label": str(label),
-                "state": str(state),
-                "failures": int(failures),
-                "cooldown_s": float(cooldown_s),
-            }
-        except Exception:
-            self._unencodable()
-            return
-        self._enqueue(self._priority, ("circuits", wire))
-
     def on_change(self, record: dict) -> None:
-        """Queue a posture change or a runtime change on the priority lane.
-        Never raises.
+        """Queue a runtime change on the priority lane. Never raises.
 
         A :mod:`runbound.local_events` sink, registered by :meth:`start`.
-        Every other record kind is ignored. A posture change is state the
-        fleet acts on, like a trip, so it is queued whatever
-        ``include_events`` says; a runtime change (which model, which
-        provider, which version) is telemetry, and ``include_events`` off
-        silences it.
+        Every other record kind is ignored. A runtime change (which policy
+        version) is telemetry, and ``include_events`` off silences it.
         """
         kind = record.get("kind") if isinstance(record, dict) else None
         if kind not in _CHANGE_KINDS:
@@ -441,7 +401,6 @@ class Exporter:
             "events": events,
             "anomalies": anomalies,
             "exits": [wire for lane, wire in priority if lane == "exits"],
-            "circuits": [wire for lane, wire in priority if lane == "circuits"],
             "changes": [wire for lane, wire in priority if lane == "changes"],
             "dropped": dropped,
         }
@@ -600,10 +559,6 @@ class Exporter:
         thread = threading.Thread(target=self._run, name="runbound-exporter", daemon=True)
         self._thread = thread
         thread.start()
-        try:
-            alerts._track(thread)
-        except Exception:
-            _LOG.warning("runbound: exporter thread could not be tracked", exc_info=True)
         if not self._exit_registered:
             atexit.register(self._drain_at_exit)
             self._exit_registered = True
@@ -630,9 +585,6 @@ class Exporter:
     def _drain_at_exit(self) -> None:
         """The ``atexit`` hook: stop and drain, silently, whatever happens.
 
-        Registered after :mod:`runbound.alerts` registers its own drain, so
-        it runs first (``atexit`` is last-registered-first) and leaves the
-        flusher thread finished by the time that drain joins it.
         """
         try:
             self.stop(DRAIN_TIMEOUT_S)

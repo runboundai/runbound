@@ -3,13 +3,12 @@
 ``runbound.init(control_plane_url=...)`` and then ordinary SDK usage: a
 :class:`FakePlane` stands in for the control plane (injected where the api
 builds its client), and everything else — the engine, the exporter, the
-poller, the session registry — is the real thing.
+poller — is the real thing.
 
-The promises under test are the ones a customer would notice: the plane is
-contacted at the door and at the exit and nowhere else, a fleet-wide budget
-stops the same turn a single worker would, a plane that is slow or broken
-costs a request a bounded delay and never an answer, and none of it leaks a
-thread.
+The promises under test are the ones a customer would notice: tool calls never
+touch the network, a fleet halt stops (or only warns about) every
+tool call, a plane that is slow or broken never reaches the host, the heartbeat
+brings policy and its poll interval, and none of it leaks a thread.
 """
 
 import threading
@@ -19,9 +18,8 @@ import pytest
 
 import runbound
 from runbound import api, shared as shared_module
-from runbound.exceptions import CircuitOpen, GuardrailTripped, PolicyViolation
-from runbound.plane_types import EntryDecision, HelloReply, key_hash
-from spike_test_helpers import spike_controls_body
+from runbound.exceptions import GuardrailTripped, PolicyViolation, CapabilityRefused
+from runbound.plane_types import HelloReply
 from test_shared_state import FakePlane
 
 PLANE_URL = "https://plane.example"
@@ -61,7 +59,6 @@ def start(**kwargs) -> None:
         "worker_id": "host-1:42",
         "control_plane_poll_s": 3600.0,
         "export_events": False,
-        "auto_wrap": False,
     }
     fields.update(kwargs)
     runbound.init(**fields)
@@ -73,245 +70,181 @@ def main_thread_calls(plane: FakePlane) -> list[str]:
     return [called for called, _payload, thread in plane.calls if thread == name]
 
 
-def exported(plane: FakePlane, lane: str) -> list:
-    """Everything the exporter has posted on one lane, flushed first."""
-    api._SHARED._exporter.flush(1.0)
-    return [record for batch in plane.payloads("events") for record in batch.get(lane, [])]
+def _tool(effects, name="issue_refund"):
+    ran = []
+
+    @runbound.tool(name=name, effects=effects, max_calls=99)
+    def fn():
+        ran.append(True)
+        return "done"
+
+    return fn, ran
 
 
-def latch_payload(**fields) -> dict:
-    payload = {
-        "detector": "budget",
-        "severity": "critical",
-        "message": "Budget exceeded on another worker",
-        "details": {"limit_hit": "budget_usd", "total_cost_usd": 5.4},
-        "ttl_remaining_s": 30.0,
-    }
-    payload.update(fields)
-    return payload
+def _read_tool():
+    ran = []
+
+    @runbound.tool(name="lookup", effects={"read"})
+    def lookup():
+        ran.append(True)
+        return "found"
+
+    return lookup, ran
 
 
-# --- the plane is contacted at the door and nowhere else --------------------
+# --- the plane is not on the call path --------------------------------------
 
 
-def test_the_observation_path_never_touches_the_network(plane):
-    plane.decision = EntryDecision(fleet_spend_usd=0.1)
-    start(budget_usd=100.0, custom_prices={"test": (0.0, 300.0)})
+def test_tool_calls_never_touch_the_network_on_the_calling_thread(plane):
+    start()
 
-    @runbound.tool
+    @runbound.tool(effects={"read"})
     def search(query: str) -> str:
         return "ok"
 
     with runbound.session("user-9"):
         for index in range(5):
             search(f"q{index}")
-            runbound.record_call("test", tokens_in=10, tokens_out=10)
 
-    assert main_thread_calls(plane) == ["enter"]
-
-
-def test_entry_and_exit_are_the_only_calls_a_quiet_block_makes(plane):
-    plane.decision = EntryDecision()
-    start(export_events=True)
-
-    with runbound.session("user-9"):
-        pass
-
-    assert main_thread_calls(plane) == ["enter"]
-    assert [delta["key_hash"] for delta in exported(plane, "exits")] == [key_hash("user-9")]
+    assert main_thread_calls(plane) == []
 
 
 def test_a_process_without_a_plane_url_stays_local():
-    runbound.init(budget_usd=5.0)
+    runbound.init()
 
     assert runbound.plane_status().mode == "local"
-    assert runbound.fleet_status("user-9") is None
 
 
-# --- what the plane says at the door ----------------------------------------
+# --- halts, enforced per tool call ------------------------------------------
 
 
-def test_a_remote_latch_refuses_the_block_before_it_runs(plane):
-    plane.decision = EntryDecision(latch=latch_payload())
-    start(on_anomaly="raise")
-    ran = False
-
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            ran = True
-
-    assert ran is False
-    assert caught.value.anomaly.message == "Budget exceeded on another worker"
-    assert caught.value.anomaly.detector == "budget"
-    assert runbound.is_tripped("user-9") is not None
-    # A relayed latch carries a Decision too (provider_called is always
-    # False here -- a latch this worker adopted is never one it made a
-    # provider call to find out about) even though the relaying worker's own
-    # boundary is data, not something this one can know for certain: the
-    # relayed detector name ("budget") maps to a sensible one.
-    decision = caught.value.decision
-    assert decision is not None
-    assert decision.level == "fleet"
-    assert decision.boundary == "money"
-    assert caught.value.provider_called is False
-    assert caught.value.scope == {"level": "fleet", "key_hash": key_hash("user-9")}
-
-
-def test_a_remote_latch_expires_on_its_own_ttl(plane):
-    plane.decision = EntryDecision(latch=latch_payload(ttl_remaining_s=0.0))
-    start(on_anomaly="raise")
-
-    with runbound.session("user-9"):
-        pass  # a latch with nothing left on it stops nothing
-
-
-def test_the_fleet_spend_offset_trips_mid_block(plane):
-    plane.decision = EntryDecision(fleet_spend_usd=4.80)
-    start(budget_usd=5.0, on_anomaly="raise", custom_prices={"test": (0.0, 300.0)})
-
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            # $0.30 locally, $4.80 already spent by the rest of the fleet.
-            runbound.record_call("test", tokens_in=0, tokens_out=1000)
-
-    assert caught.value.anomaly.detector == "budget"
-    assert caught.value.anomaly.details["fleet_spend_offset_usd"] == pytest.approx(4.80)
-
-
-def test_the_offset_never_double_counts_this_workers_own_spend(plane):
-    plane.decision = EntryDecision(fleet_spend_usd=4.80)
-    start(budget_usd=5.0, custom_prices={"test": (0.0, 300.0)})
-
-    with runbound.session("user-9") as state:
-        runbound.record_call("test", tokens_in=0, tokens_out=500)
-    # $4.95 fleet-wide now, of which $0.15 is this worker's and already
-    # counted locally: the offset is still the other workers' $4.80.
-    api._SHARED._cache.clear()
-    plane.decision = EntryDecision(fleet_spend_usd=4.80 + 0.15)
-    with runbound.session("user-9") as state:
-        pass
-
-    assert state.spend_offset_usd == pytest.approx(4.80)
-
-
-def test_a_cached_decision_never_hides_this_workers_own_spending(plane):
-    plane.decision = EntryDecision(fleet_spend_usd=4.80)
-    start(budget_usd=5.0, custom_prices={"test": (0.0, 300.0)})
-
-    with runbound.session("user-9") as state:
-        runbound.record_call("test", tokens_in=0, tokens_out=500)
-    with runbound.session("user-9") as state:  # inside the 5 s cache window
-        pass
-
-    assert state.spend_offset_usd == pytest.approx(4.80)
-    assert state.total_cost_usd == pytest.approx(0.15)
-
-
-def test_the_fleet_token_offset_is_applied_too(plane):
-    plane.decision = EntryDecision(fleet_tokens=900)
-    start(max_total_tokens=1000, on_anomaly="raise")
-
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            runbound.record_call("test", tokens_in=60, tokens_out=60)
-
-    assert caught.value.anomaly.details["limit_hit"] == "max_total_tokens"
-
-
-def test_the_fleets_strikes_and_generation_are_carried_over(plane):
-    plane.decision = EntryDecision(strikes=2, generation=7)
-    start()
-    # on_spike="limit" is a real, local init() keyword too; delivered
-    # through the fake plane's Controls instead, this suite's own
-    # coverage of that path.
-    plane.controls_body = {"version": 1, "controls": spike_controls_body("limit")}
-    api._SHARED.apply_hello(HelloReply(controls_version=1))
-
-    with runbound.session("user-9") as state:
-        assert state.fleet_generation == 7
-
-    assert runbound.session_status("user-9")["strikes"] == 2
-
-
-def test_a_local_strike_is_never_lowered_by_the_plane(plane):
-    plane.decision = EntryDecision(strikes=0)
-    start()
-    api._STRIKES["user-9"] = 3
-
-    with runbound.session("user-9"):
-        pass
-
-    assert api._STRIKES["user-9"] == 3
-
-
-# --- halts ------------------------------------------------------------------
-
-
-def test_a_fleet_halt_refuses_the_block_under_raise(plane):
-    plane.decision = EntryDecision(halt=True)
+def test_a_fleet_halt_refuses_a_tool_call_under_raise(plane):
     start(on_halt="raise")
-    ran = False
+    api._SHARED.apply_hello(HelloReply(halt=True))
+    tool, ran = _tool({"write"})
 
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            ran = True
+    with runbound.session("user-9"):
+        with pytest.raises(GuardrailTripped) as caught:
+            tool()
 
-    assert ran is False
+    assert ran == []
     assert caught.value.anomaly.detector == "halt"
     assert caught.value.anomaly.message == "Fleet halted by the control plane"
     assert caught.value.anomaly.details["service"] == "checkout"
-    assert caught.value.anomaly.details["key_hash"] == key_hash("user-9")
-    # The halt carries a Decision too -- nothing but its own identity
-    # (there is no limit/used a halt is measured against, only the fact of
-    # it), but provider_called and scope are still there to read.
+    assert caught.value.reason == "halt"
     decision = caught.value.decision
     assert decision is not None
     assert decision.boundary == "halt"
     assert decision.level == "fleet"
-    assert caught.value.reason == "halt"
-    assert caught.value.provider_called is False
     assert caught.value.retryable is False
-    assert caught.value.scope == {"level": "fleet", "key_hash": key_hash("user-9")}
+
+
+def test_a_fleet_halt_refuses_even_a_read_tool_under_stop(plane):
+    start(on_halt="raise")
+    api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="stop"))
+    tool, ran = _read_tool()
+
+    with runbound.session("user-9"):
+        with pytest.raises(GuardrailTripped):
+            tool()
+
+    assert ran == []
+
+
+def test_the_session_door_stays_open_under_a_halt(plane):
+    start(on_halt="raise")
+    api._SHARED.apply_hello(HelloReply(halt=True))
+    ran = False
+
+    with runbound.session("user-9"):
+        ran = True
+
+    assert ran is True
 
 
 def test_a_fleet_halt_only_warns_under_warn(plane, caplog):
-    plane.decision = EntryDecision(halt=True)
     start(on_halt="warn")
-    ran = False
+    api._SHARED.apply_hello(HelloReply(halt=True))
+    tool, ran = _tool({"write"})
 
     with caplog.at_level("WARNING", logger="runbound"):
         with runbound.session("user-9"):
-            ran = True
+            assert tool() == "done"
 
-    assert ran is True
+    assert ran == [True]
     assert "halt" in caplog.text.lower()
 
 
-def test_the_halt_warning_is_not_repeated_for_every_block(plane, caplog):
-    plane.decision = EntryDecision(halt=True)
+def test_the_halt_warning_is_not_repeated_for_every_call(plane, caplog):
     start(on_halt="warn")
+    api._SHARED.apply_hello(HelloReply(halt=True))
+    tool, _ran = _tool({"write"})
 
     with caplog.at_level("WARNING", logger="runbound"):
-        for index in range(3):
-            with runbound.session(f"user-{index}"):
-                pass
+        with runbound.session("user-9"):
+            for _ in range(3):
+                tool()
 
     assert caplog.text.lower().count("halted by the control plane") == 1
 
 
-def test_a_halt_the_heartbeat_reported_refuses_too(plane):
-    plane.decision = EntryDecision()
+def test_a_lifted_halt_lets_the_tool_run_again(plane):
     start(on_halt="raise")
+    tool, ran = _tool({"write"})
     api._SHARED.apply_hello(HelloReply(halt=True))
+    with runbound.session("user-9"):
+        with pytest.raises(GuardrailTripped):
+            tool()
 
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            pass
+    api._SHARED.apply_hello(HelloReply(halt=False))
+    with runbound.session("user-9"):
+        assert tool() == "done"
 
-    assert caught.value.anomaly.detector == "halt"
+    assert ran == [True]
 
 
-# --- Narrow — a posture, never a door refusal -------------------------------
+def test_a_stale_halt_stops_being_enforced(plane):
+    start(on_halt="raise")
+    tool, ran = _tool({"write"})
+    api._SHARED.apply_hello(HelloReply(halt=True))
+    real = api._SHARED._now
+    api._SHARED._now = lambda: real() + shared_module.STALE_HALT_S + 5
+
+    with runbound.session("user-9"):
+        assert tool() == "done"
+
+    assert ran == [True]
+
+
+# --- Narrow no longer exists: a narrow halt is a full halt -------------------
+
+
+@pytest.mark.parametrize("effect", ["read", "write", "financial", "destructive", "external", "privileged"])
+def test_a_narrow_halt_is_treated_as_a_full_halt(effect):
+    start(on_halt="raise")
+    api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
+    tool, ran = _tool({effect})
+
+    with runbound.session("user-9"):
+        with pytest.raises(GuardrailTripped) as caught:
+            tool()
+
+    assert ran == []
+    assert caught.value.reason == "halt"
+    assert caught.value.decision.level == "fleet"
+
+
+def test_a_narrow_halt_says_once_that_it_is_treated_as_full(caplog):
+    start(on_halt="raise")
+    api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
+    tool, _ran = _tool({"read"})
+
+    with caplog.at_level("WARNING", logger="runbound"):
+        for _ in range(3):
+            with pytest.raises(GuardrailTripped):
+                tool()
+
+    assert caplog.text.count("no longer supported") == 1
 
 
 def test_a_narrow_halt_does_not_refuse_the_door():
@@ -325,289 +258,50 @@ def test_a_narrow_halt_does_not_refuse_the_door():
     assert ran is True
 
 
-def test_a_narrow_halt_still_refuses_a_decorated_tool():
-    from runbound.exceptions import SafeModeViolation
-
-    start(on_halt="raise")
-    api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
-    tool, ran = _decorated_write_tool()
-
-    with runbound.session("user-9"):
-        with pytest.raises(SafeModeViolation):
-            tool()
-
-    assert ran == []
-
-
-def test_a_narrow_halt_leaves_model_calls_serving():
-    """``restricted`` still admits model calls -- posture
-    denies only decorated *tools*. ``admit`` with the default
-    ``kind="model_call"`` is exercised directly, one level below the
-    provider wrapper, against the session's real registered state."""
-    start(on_halt="raise")
-    api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
-
-    with runbound.session("user-9"):
-        api._ENGINE.admit(api._REGISTRY["user-9"])  # no raise
-
-
 def test_a_narrow_halt_is_not_applied_under_on_halt_warn(caplog):
     start(on_halt="warn")
     api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
-    tool, ran = _decorated_write_tool()
+    tool, ran = _tool({"financial"})
 
     with caplog.at_level("WARNING", logger="runbound"):
         with runbound.session("user-9"):
-            tool()  # does not raise -- on_halt="warn" never installs it
+            tool()  # does not raise: on_halt="warn" applies no halt at all
 
     assert ran == [True]
-    assert "narrow" in caplog.text.lower()
+    assert "halted" in caplog.text.lower()
 
 
-def test_the_narrow_warning_is_not_repeated_for_every_block(caplog):
-    start(on_halt="warn")
-    api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
-
-    with caplog.at_level("WARNING", logger="runbound"):
-        for index in range(3):
-            with runbound.session(f"user-{index}"):
-                pass
-
-    assert caplog.text.lower().count("fleet narrowed") == 1
+# --- a plane that is down, slow or broken -----------------------------------
 
 
-# --- the plane's safe-mode directive -----------------------------------------
-
-
-def _decorated_write_tool():
-    ran = []
-
-    @runbound.tool(name="issue_refund", effects={"financial"}, max_calls=99)
-    def issue_refund():
-        ran.append(True)
-        return "done"
-
-    return issue_refund, ran
-
-
-def test_the_planes_posture_enters_within_one_heartbeat(plane):
-    from runbound.exceptions import SafeModeViolation
-
-    plane.decision = EntryDecision()
-    start()
-    act, ran = _decorated_write_tool()
-    assert runbound.safe_mode() is False
-
-    api._SHARED.apply_hello(HelloReply(posture="restricted"))
-
-    assert runbound.safe_mode() is True
-    assert runbound.posture() == "restricted"
-    with runbound.session("user-9"):
-        with pytest.raises(SafeModeViolation) as caught:
-            act()
-    assert caught.value.anomaly.details["source"] == "plane"
-    assert ran == []
-    assert runbound.coverage()["safe_mode"]["plane"] is True
-
-
-def test_a_heartbeat_lifts_the_planes_posture_and_never_a_manual_one(plane):
-    from runbound.exceptions import SafeModeViolation
-
-    plane.decision = EntryDecision()
-    start()
-    act, _ = _decorated_write_tool()
-
-    api._SHARED.apply_hello(HelloReply(posture="restricted"))
-    api._SHARED.apply_hello(HelloReply(posture=None))
-    assert runbound.safe_mode() is False  # the plane's own entry is lifted
-
-    # ``Engine.enter_safe_mode`` (internal, also used by circuit_posture's
-    # own automatic narrowing) accepts an explicit ``source=`` and is what
-    # this test uses to put a manual entry in place, to prove the plane
-    # still cannot lift it.
-    with api._LOCK:
-        engine = api._ENGINE
-    engine.enter_safe_mode("the operator said so", "restricted", source="manual")
-    api._SHARED.apply_hello(HelloReply(posture="read_only"))
-    assert runbound.posture() == "read_only"  # the plane tightens a manual posture
-    api._SHARED.apply_hello(HelloReply(posture=None))
-    assert runbound.posture() == "restricted"  # ...and lifting its own leaves the manual one
-    assert runbound.safe_mode() is True  # tighten-only: the plane cannot exit it
-    with pytest.raises(SafeModeViolation) as caught:
-        act()
-    assert caught.value.anomaly.details["source"] == "manual"
-
-
-def test_a_plane_gone_quiet_stops_narrowing_like_a_stale_halt(plane, monkeypatch):
-    plane.decision = EntryDecision()
-    start()
-    api._SHARED.apply_hello(HelloReply(posture="restricted"))
-    assert api._SHARED.posture_directive() is not None
-
-    later = api._SHARED._now() + 3600
-    monkeypatch.setattr(api._SHARED, "_now", lambda: later)
-    assert api._SHARED.posture_directive() is None
-
-
-# --- a plane that is slow, broken, or rejecting us --------------------------
-
-
-def test_a_slow_plane_costs_the_entry_its_timeout_and_no_more(plane):
-    plane.delay_s = 1.0
-    plane.decision = EntryDecision(fleet_spend_usd=99.0)
-    start(budget_usd=5.0, control_plane_timeout_s=0.15)
-
-    started = time.monotonic()
-    with runbound.session("user-9") as state:
-        elapsed = time.monotonic() - started
-
-    # Bounded by the timeout, not by the second the plane took to answer.
-    assert elapsed <= 0.20
-    # Served locally: the plane's answer never arrived, so no offset applied.
-    assert state.spend_offset_usd == 0.0
-
-
-def test_a_rejected_key_degrades_the_link_and_stops_calling(plane):
-    def reject(payload):
-        plane.key_state = "invalid"
-        return None
-
-    plane.enter = reject  # a 401 as PlaneClient reports it
-    start(budget_usd=5.0, on_anomaly="raise", custom_prices={"test": (0.0, 300.0)})
-
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            runbound.record_call("test", tokens_in=0, tokens_out=20000)
-
-    assert caught.value.anomaly.detector == "budget"
-    assert runbound.plane_status().mode == "degraded"
-
-
-def test_every_detector_still_fires_while_the_plane_is_down(plane):
+def test_a_plane_that_is_down_never_stops_a_tool(plane):
     plane.ok = False
-    start(max_steps=2, on_anomaly="raise", loop_threshold=2)
+    start(on_halt="raise")
+    tool, ran = _tool({"write"})
 
-    with pytest.raises(GuardrailTripped) as caught:
-        with runbound.session("user-9"):
-            for _ in range(4):
-                runbound.record_call("test", tokens_in=1, tokens_out=1)
+    with runbound.session("user-9"):
+        assert tool() == "done"
 
-    assert caught.value.anomaly.detector == "steps"
+    assert ran == [True]
 
 
 def test_a_plane_that_explodes_never_reaches_the_host(plane):
     plane.explodes = True
     start()
-
-    with runbound.session("user-9") as state:
-        assert state is not None
-
-
-# --- exits ------------------------------------------------------------------
-
-
-def test_exits_are_deltas_with_a_rising_sequence(plane):
-    plane.decision = EntryDecision()
-    start(export_events=True, custom_prices={"test": (0.0, 300.0)})
+    tool, _ran = _tool({"write"})
 
     with runbound.session("user-9"):
-        runbound.record_call("test", tokens_in=0, tokens_out=1000)
-    with runbound.session("user-9"):
-        runbound.record_call("test", tokens_in=0, tokens_out=2000)
-
-    exits = exported(plane, "exits")
-    assert [delta["seq"] for delta in exits] == [1, 2]
-    assert exits[0]["spend_delta_usd"] == pytest.approx(0.30)
-    assert exits[1]["spend_delta_usd"] == pytest.approx(0.60)
-    assert exits[1]["tokens_delta"] == 2000
-
-
-def test_an_exit_reports_the_tools_that_ran_inside_the_block(plane):
-    plane.decision = EntryDecision()
-    start(export_events=True)
-
-    @runbound.tool
-    def search(query: str) -> str:
-        return "ok"
-
-    with runbound.session("user-9"):
-        search("a")
-        search("b")
-
-    assert exported(plane, "exits")[0]["tool_calls"] == {"search": 2}
-
-
-def test_a_block_that_did_nothing_still_reports_its_exit(plane):
-    plane.decision = EntryDecision()
-    start(export_events=True)
-
-    with runbound.session("user-9"):
-        pass
-
-    exits = exported(plane, "exits")
-    assert len(exits) == 1
-    assert exits[0]["spend_delta_usd"] == 0.0
-
-
-def test_an_exception_inside_the_block_still_reports_the_exit(plane):
-    plane.decision = EntryDecision()
-    start(export_events=True)
-
-    with pytest.raises(ValueError):
-        with runbound.session("user-9"):
-            raise ValueError("the app blew up")
-
-    assert len(exported(plane, "exits")) == 1
-
-
-# --- trips reach the plane synchronously ------------------------------------
-
-
-def test_a_trip_is_reported_to_the_plane_at_once(plane):
-    plane.decision = EntryDecision()
-    start(budget_usd=0.10, on_anomaly="raise", custom_prices={"test": (0.0, 300.0)})
-
-    with pytest.raises(GuardrailTripped):
-        with runbound.session("user-9"):
-            runbound.record_call("test", tokens_in=0, tokens_out=1000)
-
-    reports = plane.payloads("trip")
-    assert len(reports) == 1
-    assert reports[0].key_hash == key_hash("user-9")
-    assert reports[0].anomaly["detector"] == "budget"
-    assert reports[0].anomaly["reacted"] == "raise"
-    assert reports[0].refused_at_door is False
-
-
-# --- clear ------------------------------------------------------------------
-
-
-def test_clear_forwards_to_the_plane(plane):
-    plane.decision = EntryDecision()
-    start()
-
-    with runbound.session("user-9"):
-        pass
-    runbound.clear("user-9")
-
-    assert plane.payloads("clear") == [key_hash("user-9")]
-
-
-def test_clear_before_init_touches_nothing(plane):
-    runbound.clear("user-9")
-
-    assert plane.calls == []
+        assert tool() == "done"
 
 
 # --- what the heartbeat changes while the process runs ----------------------
 
 
 def test_an_org_policy_arrives_without_an_init(plane):
-    plane.decision = EntryDecision()
     plane.policy_body = {"version": 1, "policy": {"deny": ["wire_transfer"]}}
     start()
 
-    @runbound.tool
+    @runbound.tool(effects={"write"})
     def wire_transfer(amount: int) -> str:
         return "sent"
 
@@ -622,7 +316,6 @@ def test_an_org_policy_arrives_without_an_init(plane):
 
 
 def test_an_org_dry_run_policy_lets_the_tool_run(plane):
-    plane.decision = EntryDecision()
     plane.policy_body = {
         "version": 1,
         "dry_run": True,
@@ -640,54 +333,13 @@ def test_an_org_dry_run_policy_lets_the_tool_run(plane):
         assert wire_transfer(10) == "sent"
 
 
-def test_a_fleet_circuit_refuses_calls_under_open(plane):
-    plane.decision = EntryDecision()
-    # circuit_fleet is a real, local init() keyword, defaulting True --
-    # no plane directive needed to fold in.
-    start(on_provider_failure="open")
-
-    api._SHARED.apply_hello(
-        HelloReply(circuits={"openai@api": {"state": "open", "until_s": 30}})
-    )
-
-    assert runbound.circuit_state("openai@api") == "open"
-    with pytest.raises(CircuitOpen):
-        api._HOOKS.before("openai@api")
-
-
-def test_a_fleet_circuit_only_notifies_under_notify(plane):
-    plane.decision = EntryDecision()
-    start(on_provider_failure="notify")
-    plane.controls_body = {"version": 1, "controls": {"circuit_fleet": True}}
-    api._SHARED.apply_hello(HelloReply(controls_version=1))
-
-    api._SHARED.apply_hello(HelloReply(circuits={"openai@api": "open"}))
-
-    assert runbound.circuit_state("openai@api") == "open"
-    api._HOOKS.before("openai@api")  # counted and reported; never refused
-
-
-def test_the_plane_can_close_a_circuit_again(plane):
-    plane.decision = EntryDecision()
-    start(on_provider_failure="open")
-    api._SHARED.apply_hello(HelloReply(circuits={"openai@api": "open"}))
-
-    api._SHARED.apply_hello(HelloReply(circuits={"openai@api": "closed"}))
-
-    assert runbound.circuit_state("openai@api") == "closed"
-    api._HOOKS.before("openai@api")
-    api._HOOKS.release("openai@api")
-
-
 # --- the public reporting surface -------------------------------------------
 
 
 def test_plane_status_reports_a_connected_link(plane):
-    plane.decision = EntryDecision()
     start()
 
-    with runbound.session("user-9"):
-        pass
+    api._SHARED.apply_hello(HelloReply())
     status = runbound.plane_status()
 
     assert status.mode == "connected"
@@ -699,35 +351,27 @@ def test_plane_status_before_init_is_local():
     assert runbound.plane_status().mode == "local"
 
 
-def test_fleet_status_reports_what_the_plane_said(plane):
-    plane.decision = EntryDecision(
-        fleet_spend_usd=4.5, fleet_tokens=900, strikes=1, generation=3
-    )
+def test_plane_status_reports_the_applied_policy_version(plane):
+    plane.policy_body = {"version": 3, "policy": {"deny": ["x"]}}
     start()
 
-    with runbound.session("user-9"):
-        pass
-    status = runbound.fleet_status("user-9")
+    api._SHARED.apply_hello(HelloReply(policy_version=3))
 
-    assert status["fleet_spend_usd"] == 4.5
-    assert status["fleet_tokens"] == 900
-    assert status["strikes"] == 1
-    assert status["generation"] == 3
-    assert status["halt"] is False
-    assert status["latched"] is False
-    assert status["age_s"] >= 0.0
+    assert runbound.plane_status().applied_policy_version == 3
 
 
-def test_fleet_status_is_none_for_a_key_the_plane_has_not_seen(plane):
-    plane.decision = EntryDecision()
-    start()
-
-    assert runbound.fleet_status("nobody") is None
+# --- the heartbeat's interval -------------------------------------------------
 
 
-def test_key_hash_is_the_public_digest():
-    assert runbound.key_hash("user-9") == key_hash("user-9")
-    assert "user-9" not in runbound.key_hash("user-9")
+def test_the_planes_poll_interval_reaches_the_live_poller(plane):
+    plane.reply = HelloReply(poll_s=42.0)
+    start(control_plane_poll_s=0.01)
+
+    deadline = time.monotonic() + 3.0
+    while api._SHARED._poller._poll_s != 42.0 and time.monotonic() < deadline:
+        time.sleep(0.01)
+
+    assert api._SHARED._poller._poll_s == 42.0
 
 
 # --- threads ----------------------------------------------------------------
@@ -743,8 +387,6 @@ def runbound_threads() -> list[str]:
 
 
 def test_three_inits_leak_no_threads(plane):
-    plane.decision = EntryDecision()
-
     for _ in range(3):
         start(export_events=True)
         with runbound.session("user-9"):

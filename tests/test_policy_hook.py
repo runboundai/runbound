@@ -4,7 +4,7 @@ The core (``runbound.policy``) decides whether one call breaks one rule;
 these tests pin the thing customers actually rely on — that the decision
 reaches the place where the tool would have run. A refused call must not run,
 in a sync tool, an async tool, or a LangChain chain, and must be refused
-whatever ``on_anomaly`` says, because the rule is the customer's own.
+whatever ``on_halt`` says, because the rule is the customer's own.
 """
 
 import asyncio
@@ -59,7 +59,7 @@ def handler(monkeypatch):
     core.callbacks = callbacks
     monkeypatch.setitem(sys.modules, "langchain_core", core)
     monkeypatch.setitem(sys.modules, "langchain_core.callbacks", callbacks)
-    return lc.GuardrailCallbackHandler()
+    return lc.RunboundCallbackHandler()
 
 
 def observer() -> RecordingObserver:
@@ -290,30 +290,23 @@ def test_block_and_latch_stops_the_whole_session():
     def delete_record(record_id):
         return "ran"
 
-    with runbound.session("user-a"):
-        with pytest.raises(PolicyViolation):
-            delete_record(1)
-
-    latched = runbound.is_tripped("user-a")
-    assert latched is not None
-    assert latched.detector == "policy"
-
-
-def test_block_and_latch_under_on_trip_once_stops_only_that_call():
-    runbound.init(
-        on_trip="once",
-        tool_policy={"deny": ["delete_record"], "on_violation": "block_and_latch"},
-    )
-
     @runbound.tool
-    def delete_record(record_id):
+    def read_record(record_id):
         return "ran"
 
-    with runbound.session("user-a"):
+    with runbound.session("user-a") as state:
         with pytest.raises(PolicyViolation):
             delete_record(1)
+        # Every later tool is refused too, with the latched anomaly.
+        with pytest.raises(GuardrailTripped) as later:
+            read_record(1)
 
-    assert runbound.is_tripped("user-a") is None
+    assert state.tripped_by is not None
+    assert state.tripped_by.detector == "policy"
+    assert later.value.anomaly is state.tripped_by
+    # Another key is unaffected.
+    with runbound.session("user-b"):
+        assert read_record(1) == "ran"
 
 
 def test_block_leaves_the_session_running():
@@ -327,16 +320,16 @@ def test_block_leaves_the_session_running():
     def read_record(record_id):
         return "ran"
 
-    with runbound.session("user-a"):
+    with runbound.session("user-a") as state:
         with pytest.raises(PolicyViolation):
             delete_record(1)
         assert read_record(1) == "ran"
 
-    assert runbound.is_tripped("user-a") is None
+    assert state.tripped_by is None
 
 
-def test_policy_is_enforced_whatever_on_anomaly_says():
-    runbound.init(on_anomaly="warn", tool_policy={"deny": ["delete_record"]})
+def test_policy_is_enforced_even_when_on_halt_is_warn():
+    runbound.init(on_halt="warn", tool_policy={"deny": ["delete_record"]})
     deleted = Counter()
 
     @runbound.tool
@@ -448,7 +441,7 @@ def test_tool_calls_reports_copies_and_never_creates_a_session():
     counts["search"] = 99
     assert runbound.tool_calls("user-a") == {"search": 1}
     assert runbound.tool_calls("nobody") == {}
-    assert runbound.session_status("nobody") is None
+    assert "nobody" not in api._REGISTRY
 
 
 def test_raw_arguments_never_reach_the_exception_or_the_anomaly():

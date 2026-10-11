@@ -17,7 +17,7 @@ import pytest
 
 from runbound import plane as plane_module
 from runbound.plane import Poller, PlaneClient
-from runbound.plane_types import EntryDecision, HelloReply, TripReport
+from runbound.plane_types import HelloReply
 
 URL = "https://plane.example.com"
 
@@ -135,38 +135,6 @@ def test_a_trailing_slash_on_the_url_does_not_double_up():
     assert sent(mock)[0].full_url == f"{URL}/v1/hello"
 
 
-def test_enter_posts_the_payload_with_the_configured_timeout():
-    mock = urlopen_mock({"allow": True, "fleet_spend_usd": 3.5, "strikes": 2})
-    with patch.object(plane_module, "urlopen", mock):
-        decision = client(timeout_s=0.05).enter({"key_hash": "abc", "seq": 1})
-
-    request, _, kwargs = sent(mock)
-    assert request.full_url == f"{URL}/v1/enter"
-    assert body_of(request) == {"key_hash": "abc", "seq": 1}
-    assert kwargs["timeout"] == 0.05
-    assert isinstance(decision, EntryDecision)
-    assert decision.allow is True
-    assert decision.strikes == 2
-
-
-def test_trip_posts_the_wire_report_and_returns_true():
-    report = TripReport(
-        key_hash="abc",
-        anomaly={"detector": "budget", "severity": "critical"},
-        latch_ttl_s=300.0,
-        strikes=3,
-        generation=1,
-        refused_at_door=False,
-    )
-    mock = urlopen_mock({})
-    with patch.object(plane_module, "urlopen", mock):
-        assert client(timeout_s=0.2).trip(report) is True
-
-    request, _, kwargs = sent(mock)
-    assert request.full_url == f"{URL}/v1/trip"
-    assert body_of(request)["key_hash"] == "abc"
-    assert body_of(request)["anomaly"] == {"detector": "budget", "severity": "critical"}
-    assert kwargs["timeout"] == 0.2
 
 
 def test_events_posts_the_batch_with_a_five_second_timeout():
@@ -194,20 +162,6 @@ def test_policy_is_a_get_with_the_service_in_the_query():
     assert policy == {"deny": ["wire_transfer"]}
 
 
-def test_clear_posts_the_key_hash_and_returns_the_count():
-    mock = urlopen_mock({"cleared": 4})
-    with patch.object(plane_module, "urlopen", mock):
-        assert client().clear("abc123") == 4
-
-    request, _, kwargs = sent(mock)
-    assert request.full_url == f"{URL}/v1/clear"
-    assert body_of(request) == {"key_hash": "abc123"}
-    assert kwargs["timeout"] == 0.5
-
-
-def test_clear_reports_zero_when_the_plane_says_nothing():
-    with patch.object(plane_module, "urlopen", urlopen_mock({})):
-        assert client().clear("abc123") == 0
 
 
 # --- failure handling ------------------------------------------------------
@@ -217,9 +171,7 @@ def test_clear_reports_zero_when_the_plane_says_nothing():
     "call",
     [
         lambda c: c.hello({}),
-        lambda c: c.enter({}),
         lambda c: c.policy("s"),
-        lambda c: c.clear("h"),
     ],
 )
 def test_a_transport_failure_returns_none_and_counts(call):
@@ -235,16 +187,6 @@ def test_a_transport_failure_returns_none_and_counts(call):
     "call",
     [
         lambda c: c.events({"events": []}),
-        lambda c: c.trip(
-            TripReport(
-                key_hash=None,
-                anomaly={},
-                latch_ttl_s=None,
-                strikes=0,
-                generation=0,
-                refused_at_door=False,
-            )
-        ),
     ],
 )
 def test_a_transport_failure_returns_false_and_counts(call):
@@ -290,7 +232,7 @@ def test_an_unserializable_payload_is_reported_not_raised():
     mock = urlopen_mock({})
     with patch.object(plane_module, "urlopen", mock):
         agent = client()
-        assert agent.enter({"bad": object()}) is None
+        assert agent.hello({"bad": object()}) is None
     assert mock.call_count == 0
     assert agent.consecutive_failures == 1
 
@@ -320,7 +262,7 @@ def test_two_failures_inside_a_minute_log_one_warning(caplog):
         with caplog.at_level(logging.WARNING, logger="runbound"):
             agent.hello({})
             clock.advance(59.0)
-            agent.enter({})
+            agent.hello({})
     assert len(warnings_matching(caplog, "control plane")) == 1
 
 
@@ -348,10 +290,9 @@ def test_a_rejected_key_stops_every_further_call(code, caplog):
         assert agent.key_state == "invalid"
 
         calls_so_far = mock.call_count
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
         assert agent.events({}) is False
         assert agent.policy("s") is None
-        assert agent.clear("h") is None
         assert mock.call_count == calls_so_far
 
     assert len(warnings_matching(caplog, "rejected the token", "local-only")) == 1
@@ -409,7 +350,7 @@ def test_a_store_down_503_is_classified_as_plane_loss():
     )
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "plane_loss"
 
 
@@ -424,7 +365,7 @@ def test_a_plain_plane_unavailable_503_is_not_plane_loss():
     error = http_error_with_body(503, {"error": "plane_unavailable"})
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "plane_unavailable"
     assert agent.last_failure_kind != "plane_loss"
 
@@ -437,7 +378,7 @@ def test_a_plane_unavailable_503_with_an_unrecognized_cause_is_not_plane_loss():
     )
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "plane_unavailable"
 
 
@@ -445,28 +386,28 @@ def test_a_503_with_an_unrelated_body_is_a_plain_error():
     error = http_error_with_body(503, {"error": "something_else"})
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "error"
 
 
 def test_a_503_with_no_readable_body_is_a_plain_error():
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=http_error(503))):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "error"
 
 
 def test_a_500_is_a_plain_error_not_plane_loss():
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=http_error(500))):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "error"
 
 
 def test_a_socket_timeout_is_classified_as_timeout():
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=TimeoutError("slow"))):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "timeout"
 
 
@@ -474,7 +415,7 @@ def test_a_urlerror_wrapping_a_timeout_is_classified_as_timeout():
     error = urllib.error.URLError(TimeoutError("slow"))
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "timeout"
 
 
@@ -482,7 +423,7 @@ def test_a_connection_refused_is_a_plain_error_not_a_timeout():
     error = urllib.error.URLError(ConnectionRefusedError("nope"))
     with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
         agent = client()
-        assert agent.enter({}) is None
+        assert agent.hello({}) is None
     assert agent.last_failure_kind == "error"
 
 
@@ -497,71 +438,6 @@ def test_last_failure_kind_starts_none_and_clears_on_success():
     with patch.object(plane_module, "urlopen", urlopen_mock({"org_id": "o"})):
         agent.hello({})
     assert agent.last_failure_kind is None
-
-
-# --- enter_with_kind: this call's own outcome, not the shared "last" one ----
-#
-# ``last_failure_kind`` is whole-client state (the test above proves it: a
-# ``hello`` clears what an ``enter`` set). A caller with concurrent traffic on
-# one client -- an entry call racing the background heartbeat, in practice --
-# cannot read it back afterward and trust it still describes *that* call: a
-# concurrent success on the same client can clear or overwrite it first.
-# ``enter_with_kind`` hands the caller its own call's classification directly,
-# at the moment this call decides it, so there is nothing to race.
-
-
-def test_enter_with_kind_reports_plane_loss_for_a_store_down_503():
-    error = http_error_with_body(
-        503, {"error": "plane_unavailable", "cause": "fleet_state_unavailable"}
-    )
-    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
-        decision, kind = client().enter_with_kind({})
-    assert decision is None
-    assert kind == "plane_loss"
-
-
-def test_enter_with_kind_reports_plane_unavailable_for_the_generic_503():
-    error = http_error_with_body(503, {"error": "plane_unavailable"})
-    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
-        decision, kind = client().enter_with_kind({})
-    assert decision is None
-    assert kind == "plane_unavailable"
-
-
-def test_enter_with_kind_reports_error_for_an_unrelated_503_body():
-    error = http_error_with_body(503, {"error": "something_else"})
-    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
-        decision, kind = client().enter_with_kind({})
-    assert decision is None
-    assert kind == "error"
-
-
-def test_enter_with_kind_reports_timeout_for_a_socket_timeout():
-    with patch.object(plane_module, "urlopen", MagicMock(side_effect=TimeoutError("slow"))):
-        decision, kind = client().enter_with_kind({})
-    assert decision is None
-    assert kind == "timeout"
-
-
-def test_enter_with_kind_reports_none_on_success():
-    mock = urlopen_mock({"allow": True})
-    with patch.object(plane_module, "urlopen", mock):
-        decision, kind = client().enter_with_kind({"key_hash": "abc"})
-    assert isinstance(decision, EntryDecision)
-    assert kind is None
-
-
-def test_enter_still_returns_only_the_decision_and_still_sets_last_failure_kind():
-    """``enter`` itself is unchanged: same return value, same whole-client
-    bookkeeping as before -- ``enter_with_kind`` is additive, not a
-    replacement other callers must migrate to."""
-    error = http_error_with_body(
-        503, {"error": "plane_unavailable", "cause": "fleet_state_unavailable"}
-    )
-    with patch.object(plane_module, "urlopen", MagicMock(side_effect=error)):
-        agent = client()
-        assert agent.enter({}) is None
-    assert agent.last_failure_kind == "plane_loss"
 
 
 # --- the poller ------------------------------------------------------------
@@ -594,7 +470,6 @@ def reply(**kwargs) -> HelloReply:
         "entitlements": {},
         "halt": False,
         "policy_version": 3,
-        "circuits": {},
         "poll_s": 5.0,
         "notice": None,
     }
@@ -693,4 +568,17 @@ def test_stopping_a_poller_twice_is_harmless():
 def test_a_poller_that_was_never_started_stops_cleanly():
     poller = Poller(FakeClient(), poll_s=1.0, on_reply=lambda _: None, payload_fn=dict)
     poller.stop()
+    assert not poller.is_alive()
+
+
+def test_set_interval_changes_the_wait_between_heartbeats():
+    fake = FakeClient(reply())
+    poller = Poller(fake, poll_s=30.0, on_reply=lambda _: None, payload_fn=dict)
+    poller.set_interval(0.001)
+    poller.start()
+    try:
+        for _ in range(3):
+            assert fake.calls.acquire(timeout=5), "the new interval was not used"
+    finally:
+        poller.stop()
     assert not poller.is_alive()

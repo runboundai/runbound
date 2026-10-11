@@ -7,26 +7,8 @@ from runbound.events import Event
 from runbound.state import SessionState
 
 
-def llm_event(step: int, tokens_in: int = 10, tokens_out: int = 5, cost: float = 0.01) -> Event:
-    return Event(
-        kind="llm_call",
-        ts=time.monotonic(),
-        step=step,
-        tokens_in=tokens_in,
-        tokens_out=tokens_out,
-        cost_usd=cost,
-        model="gpt-4o",
-    )
-
-
-def tool_event(step: int, args_hash: str | None = "abc") -> Event:
-    return Event(
-        kind="tool_call",
-        ts=time.monotonic(),
-        step=step,
-        tool_name="search",
-        args_hash=args_hash,
-    )
+def tool_event(step: int, name: str = "search", kind: str = "tool_call") -> Event:
+    return Event(kind=kind, ts=time.monotonic(), step=step, tool_name=name, args_hash="abc")
 
 
 def test_initial_state_is_empty():
@@ -35,151 +17,127 @@ def test_initial_state_is_empty():
     after = time.monotonic()
 
     assert state.session_id == "sess-1"
-    assert state.step_count == 0
-    assert state.total_tokens == 0
-    assert state.total_cost_usd == 0.0
+    assert state.key is None
+    assert state.tags == {}
+    assert state.event_count == 0
+    assert state.requested_actions == 0
+    assert (state.admitted_actions, state.executed_actions, state.refused_actions) == (0, 0, 0)
+    assert state.tool_calls == {}
+    assert state.total_errors == 0
+    assert state.tripped_by is None and state.tripped_at is None
     assert before <= state.started_at <= after
-    assert list(state.recent_hashes) == []
-    assert list(state.token_timestamps) == []
     assert isinstance(state.lock, type(threading.RLock()))
 
 
-def test_recent_hashes_maxlen_defaults_to_loop_window():
-    assert SessionState("s").recent_hashes.maxlen == 20
-    assert SessionState("s", loop_window=5).recent_hashes.maxlen == 5
+def test_key_and_tags_identify_a_keyed_session_and_tags_are_copied():
+    tags = {"plan": "free"}
+    state = SessionState("s", key="user-1", tags=tags)
+    tags["plan"] = "pro"
+
+    assert state.key == "user-1"
+    assert state.tags == {"plan": "free"}
 
 
-def test_record_llm_call_updates_tokens_and_cost():
+def test_record_tool_call_counts_per_tool_name():
     state = SessionState("s")
-    state.record(llm_event(step=1, tokens_in=100, tokens_out=50, cost=0.25))
+    state.record(tool_event(1, "search"))
+    state.record(tool_event(2, "search"))
+    state.record(tool_event(3, "lookup"))
 
-    assert state.total_tokens == 150
-    assert state.total_cost_usd == 0.25
-    assert state.step_count == 1
-    assert list(state.recent_hashes) == []
+    assert state.tool_calls == {"search": 2, "lookup": 1}
+    assert state.event_count == 3
 
 
-def test_record_accumulates_across_events():
+def test_a_tool_call_without_a_name_is_not_tallied():
     state = SessionState("s")
-    state.record(llm_event(step=1, tokens_in=10, tokens_out=5, cost=0.01))
-    state.record(llm_event(step=2, tokens_in=20, tokens_out=1, cost=0.02))
+    state.record(Event(kind="tool_call", ts=time.monotonic(), step=1))
 
-    assert state.total_tokens == 36
-    assert abs(state.total_cost_usd - 0.03) < 1e-9
-    assert state.step_count == 2
+    assert state.tool_calls == {}
+    assert state.event_count == 1
 
 
-def test_record_tool_call_appends_hash():
+def test_tool_request_counts_requested_actions_not_tool_calls():
     state = SessionState("s")
-    state.record(tool_event(step=1, args_hash="deadbeef"))
+    state.record(tool_event(1, "search", kind="tool_request"))
+    state.record(tool_event(2, "search", kind="tool_request"))
 
-    assert list(state.recent_hashes) == ["deadbeef"]
-    assert state.total_tokens == 0
-    assert state.total_cost_usd == 0.0
+    assert state.requested_actions == 2
+    assert state.tool_calls == {}
 
 
-def test_tool_call_without_hash_appends_nothing():
+def test_tool_error_counts_errors_and_not_calls():
     state = SessionState("s")
-    state.record(tool_event(step=1, args_hash=None))
-    state.record(tool_event(step=2, args_hash=""))
+    state.record(tool_event(1, kind="tool_error"))
 
-    assert list(state.recent_hashes) == []
+    assert state.total_errors == 1
+    assert state.tool_calls == {}
 
 
-def test_non_tool_call_events_never_contribute_hashes():
+def test_event_count_tracks_max_step_seen():
     state = SessionState("s")
-    state.record(
-        Event(kind="llm_call", ts=time.monotonic(), step=1, args_hash="h1")
-    )
-    state.record(
-        Event(kind="tool_error", ts=time.monotonic(), step=2, args_hash="h2")
-    )
+    state.record(tool_event(5))
+    assert state.event_count == 5
 
-    assert list(state.recent_hashes) == []
+    state.record(tool_event(3))
+    assert state.event_count == 5
 
-
-def test_recent_hashes_evicts_oldest_beyond_window():
-    state = SessionState("s", loop_window=3)
-    for i in range(5):
-        state.record(tool_event(step=i + 1, args_hash=f"h{i}"))
-
-    assert list(state.recent_hashes) == ["h2", "h3", "h4"]
+    state.record(tool_event(9))
+    assert state.event_count == 9
 
 
-def test_token_timestamps_record_ts_and_total_tokens():
+def test_repeated_events_on_same_step_do_not_inflate_event_count():
     state = SessionState("s")
-    event = llm_event(step=1, tokens_in=7, tokens_out=3)
-    state.record(event)
+    state.record(tool_event(1))
+    state.record(tool_event(1, kind="tool_error"))
+    state.record(tool_event(1, kind="tool_request"))
 
-    assert list(state.token_timestamps) == [(event.ts, 10)]
+    assert state.event_count == 1
 
 
-def test_zero_token_events_are_not_timestamped():
+def test_next_step_is_one_based_and_increasing():
     state = SessionState("s")
-    state.record(llm_event(step=1, tokens_in=0, tokens_out=0, cost=0.0))
-    state.record(tool_event(step=2))
 
-    assert list(state.token_timestamps) == []
+    assert [state.next_step() for _ in range(3)] == [1, 2, 3]
 
 
-def test_step_count_tracks_max_step_seen():
+def test_admitted_and_refused_actions_are_counted_separately():
     state = SessionState("s")
-    state.record(llm_event(step=5))
-    assert state.step_count == 5
+    state.mark_action_admitted()
+    state.mark_action_admitted()
+    state.mark_action_refused()
 
-    state.record(llm_event(step=3))
-    assert state.step_count == 5
-
-    state.record(llm_event(step=9))
-    assert state.step_count == 9
-
-
-def test_repeated_events_on_same_step_do_not_inflate_step_count():
-    state = SessionState("s")
-    state.record(llm_event(step=1))
-    state.record(tool_event(step=1))
-    state.record(llm_event(step=1))
-
-    assert state.step_count == 1
+    assert (state.admitted_actions, state.executed_actions, state.refused_actions) == (2, 2, 1)
 
 
 def test_record_is_thread_safe_under_concurrency():
     threads_count, per_thread = 8, 100
-    state = SessionState("s", loop_window=threads_count * per_thread)
+    state = SessionState("s")
 
-    def worker(thread_index: int) -> None:
-        for i in range(per_thread):
-            step = thread_index * per_thread + i + 1
-            state.record(
-                Event(
-                    kind="llm_call",
-                    ts=time.monotonic(),
-                    step=step,
-                    tokens_in=2,
-                    tokens_out=3,
-                    cost_usd=0.001,
-                )
-            )
-            state.record(tool_event(step=step, args_hash=f"h{step}"))
+    def worker() -> None:
+        for _ in range(per_thread):
+            step = state.next_step()
+            state.record(tool_event(step))
+            state.record(tool_event(step, kind="tool_error"))
+            state.mark_action_admitted()
+            state.mark_action_refused()
 
-    threads = [threading.Thread(target=worker, args=(t,)) for t in range(threads_count)]
+    threads = [threading.Thread(target=worker) for _ in range(threads_count)]
     for thread in threads:
         thread.start()
     for thread in threads:
         thread.join()
 
-    total_events = threads_count * per_thread
-    assert state.total_tokens == total_events * 5
-    assert abs(state.total_cost_usd - total_events * 0.001) < 1e-6
-    assert state.step_count == total_events
-    assert len(state.recent_hashes) == total_events
-    assert len(set(state.recent_hashes)) == total_events
-    assert len(state.token_timestamps) == total_events
+    total = threads_count * per_thread
+    assert state.tool_calls == {"search": total}
+    assert state.total_errors == total
+    assert state.event_count == total
+    assert state.executed_actions == total
+    assert state.refused_actions == total
 
 
 def test_lock_is_reentrant():
     state = SessionState("s")
     with state.lock:
-        state.record(llm_event(step=1))
+        state.record(tool_event(1))
 
-    assert state.step_count == 1
+    assert state.event_count == 1

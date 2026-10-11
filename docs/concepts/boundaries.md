@@ -2,132 +2,93 @@
 
 [← Docs](../README.md)
 
-runbound decides what an agent may consume, how far it may run, and what it
-may do — never what the agent says, or what a model answered. That is not an
-oversight. It is the one constraint everything else in this SDK is built on:
+runbound is a boundary in front of tool calls. It decides whether one call of one decorated tool
+may run, with these arguments, now; it shapes what the call returns; and it records what happened.
+Everything below is outside that boundary on purpose. Each item says what to use instead.
 
-> **Every core runtime decision is made from non-content signals** — counts,
-> hashes, timings, prices, and the capability classes a tool declares. No
-> prompt, reply, or tool result is ever read to decide anything; the only
-> thing taken from the text is its length. See
-> [Content independence](../../INVARIANTS.md#content-independence).
+## It does not read prompts or replies
 
-Below is what that constraint rules out, on purpose, and what each exclusion
-costs you and buys you in return.
+There are no provider wrappers. runbound never sees a model request, a completion, a token count
+or a price, and the LangChain handler listens to tool callbacks only. What a model is told and
+what it answers is out of scope.
 
-## No prompt or reply inspection
+Instead: put prompt and reply controls where the model is called (your provider's own settings,
+or a gateway in front of it). runbound sees the consequence: the tool call the model asks for.
 
-runbound never reads what an agent said or what a model answered, and never
-stores, logs or sends it on. A detector sees counts, timings and prices; it has
-no field to put message text in even if it wanted one — see
-[What the SDK actually sees](what-it-sees.md). The one thing that touches the
-text is a character count: the SDK's own door (when it estimates tokens), the
-gateway and the action door count the body's characters in transit (to
-estimate tokens and size) and keep none of it.
+## It does not watch call patterns
 
-**Costs you:** runbound will not catch a hallucination, a bad or unsafe
-answer, or an attempt to manipulate the model through its input. "The agent
-said something wrong" is not a question this SDK answers.
+The SDK keeps counts, not models of behaviour. There is no detection of loops, repeated calls,
+bursts or error storms, and no spend or token limit. The counts it does enforce are ones you
+state: `max_calls` per tool per session, the row's `max_calls_per_session`, `max_actions_per_run`
+per session, and a row's `quota` per fixed window.
 
-**Buys you:** a control that cannot be argued with. A budget, a step count or
-a declared capability class means the same thing in every language, in every
-prompt format, and under every attempt to phrase around it — there is no
-wording that makes a dollar not a dollar. It also means the control has no
-reading step to get wrong: there is nothing to read. (Connected to a control
-plane, a session entry waits at most `control_plane_timeout_s` for its answer,
-and fails open.)
+Instead: cap what matters with those counts, and analyse the spans (one per tool call, see
+[OpenTelemetry](../guides/opentelemetry.md)) in your tracing backend. Spend limits belong with
+your model provider.
 
-**Use instead:** a content-safety or output-evaluation tool, run alongside
-runbound, for the "was this answer any good" question — a different question
-from "is this run inside its bounds."
+## It guards only what is decorated
 
-## No response rewriting
+A function without `@runbound.tool` is invisible to it: called directly, through another name or
+from a code path the decorator does not cover, it runs unchecked and unrecorded. A decorated
+function called before `runbound.init()` also runs straight through. A framework tool is seen only
+while the [LangChain handler](../guides/langchain.md) is attached. It declares no capability
+class, so class rules never refuse it and it counts as unclassified when the plane is away, and
+its output cannot be redacted or truncated: a callback cannot replace a tool's output.
 
-runbound never edits, retries with a different prompt, or substitutes an
-answer. A refusal stops execution and raises; it never quietly hands the
-agent something else instead.
+To find what is not guarded:
 
-**Costs you:** a refused call is a stop, not a fix. Nothing here "cleans up"
-a bad response for you.
+```python
+import runbound
 
-**Buys you:** what your agent decided stays exactly what it decided. A
-silently rewritten answer is a bug report waiting to happen — the log says
-one thing, the response the caller received says another. Every response
-either came from the provider untouched or was refused before it went out;
-the cases that are both are the post-call walls (a budget the call itself
-crossed, and under `on_anomaly="raise"` a loop, spike, error-storm, steps or
-timeout trip), which refuse after the provider ran and say so
-(`provider_called=True`).
+report = runbound.coverage()
+print(report["decorated_tools"], report["decorated_tool_names"], report["tools_by_class"])
 
-**Use instead:** your own application code, deciding on its own terms what to
-do with a response it doesn't like.
+seen_but_undecorated = [t["name"] for t in runbound.tools() if not t["decorated"]]
 
-## No routing, fallback or model swapping
+runbound.check()          # prints the tools, their classes, the plane link and the last events
+runbound.assert_guarded()  # RuntimeError when nothing is decorated
+```
 
-runbound opens a circuit and can narrow a run's posture. It never decides
-which provider, endpoint or model handles a call.
+From a shell, `python -m runbound check agent.py` loads the file (its `__main__` block does not
+run) and prints the same report; it exits 0 when at least one tool is decorated and 1 when none
+is. `init(require_rules=True)` makes every decorated tool state a rule or `reviewed=True`, and a
+tool carrying a consequential class state a rule that can refuse it; otherwise `init()` (for tools
+already imported) or the decorator raises `ValueError`. None of
+these can list a function the SDK never saw: an undecorated function is not in any report.
 
-**Costs you:** runbound will not fail a request over to a cheaper or faster
-model, and will not retry a failed call against a different endpoint for you.
+## It does not sandbox the body
 
-**Buys you:** your code stays the one place that decides where traffic goes.
-A circuit breaker that also rerouted traffic would be making a business
-decision — which provider, at what price, with what latency — that belongs
-to the caller, not to a safety layer sitting in front of it. Keeping the two
-separate means adding runbound to an agent never changes what provider a
-request actually reaches.
+Once a call is admitted, the body runs in your process with your process's permissions,
+credentials and network. runbound does not limit how long it runs, what it touches, or what it
+does with its arguments. A hook that times out is abandoned, not killed: its thread keeps running.
 
-**Use instead:** a gateway, load balancer or router in your own stack,
-downstream of runbound's circuit state if you want it informed by that
-signal.
+Instead: give the tool's credentials only what the tool needs, and run a body that must be
+contained in a container or a separate process. Use `constraint=` and hooks to keep the arguments
+inside the range the body can safely handle.
 
-## No LLM judge on the blocking path
+## The scan tags, it does not block
 
-No model call ever decides whether another call, or an action, is admitted.
-Every admission check is a comparison over plain numbers, run before the call
-it gates — see [Authorization before
-reservation](../../INVARIANTS.md#authorization-before-reservation).
+The prompt-injection scan in the post chain sets `flags`, `flag_score` and `flagged` on the
+`tool_result` record and on the span. It never refuses or changes the result by itself.
 
-**Costs you:** runbound cannot make a semantic judgment call — "does this
-refund request look reasonable" is outside what it will ever decide.
+Instead: a post hook that returns `hooks.withhold(reason)` when the scan or your own check says
+so. Redaction covers values of secret-named dict keys only; plain strings are not searched.
 
-**Buys you:** an admission check that is fast, deterministic and never itself
-the reason a call fails. A judge model on the blocking path adds its own
-latency, its own cost, its own outage, and its own non-determinism to the
-exact moment you need a control to be reliable — the same call could be
-allowed one run and refused the next, for a reason nobody can reproduce.
-Runbound's checks give the same answer every time, from the same numbers.
+## A compromised plane can approve
 
-**Use instead:** an evaluation or review process that runs off the blocking
-path — asynchronously, on a sample, or in a human queue — for judgment calls
-that genuinely need one.
+The plane can add restrictions (rows, an org policy merged in, a halt) and it can never loosen a
+rule written in code. Approvals are different: the plane is where a person says yes, so a plane
+that is compromised can approve a real pending request. With `approval_secret` set, the seal
+stops it from changing a deferred request's tool or arguments, or having it run past its expiry: a
+worker verifies the seal before any hook runs, and on a mismatch nothing runs and the plane is
+told `tampered`. The secret is never sent to the plane.
 
-## No policy files
+Instead: for an action no one system should be able to approve alone, keep a code rule that
+refuses it (`constraint=`, `max_calls=`, `blocked=True`) or a gate hook that checks a second
+source; neither can be loosened from the plane.
 
-There is no YAML, no DSL and no CLI for expressing what an agent may do.
-Class rules and tool policy are written where the agent's other logic
-already lives: in code, on `init()` and `@runbound.tool` — see [Action
-policy](../guides/policy.md).
+## Related
 
-**Costs you:** no declarative rules language to hand a non-engineer, and no
-local policy-editing UI.
-
-**Buys you:** a policy that is type-checked, testable and reviewed the same
-way the rest of the agent's code is — a typo in a YAML key fails silently at
-3am; a typo in a Python keyword argument fails at import time, in your own
-tests. It also means there is no second file format, and no second parser, to
-secure and keep in sync with the code it is supposed to govern. A connected
-control plane can still deliver policy centrally, but it arrives the same
-way local policy does — merged, never replacing what the code already
-states, and only ever tightening it.
-
-**Use instead:** write the rule where the tool is declared. If policy needs
-to be authored outside the codebase, keep that authoring tool's output data
-your own code merges in — never a file runbound itself parses and trusts.
-
----
-
-None of the above is missing. Each is a boundary this SDK holds on purpose,
-because holding it is what makes the rest of what runbound does —
-deterministic, explainable, and safe to run on the same thread as the agent
-it guards — true.
+- [How it works](how-it-works.md): the chain, slot by slot.
+- [Free SDK, connected plane](free-and-connected.md): what needs an account.
+- [Guarantees and limitations](../reference/guarantees.md).

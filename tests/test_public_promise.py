@@ -21,8 +21,8 @@ _GETTING_STARTED = _ROOT / "docs" / "getting-started.md"
 #: changes" anywhere in the public tree — both read as a stronger claim than
 #: this SDK makes (a tool still needs `@runbound.tool` to be governed).
 PROMISE_SENTENCE = (
-    "Add one initialization line. No agent rewrites, decorators, or policy "
-    "code required."
+    "Add one initialization line and one decorator per tool. No agent rewrites "
+    "or policy code required."
 )
 
 #: Overclaiming phrasing the promise must never be reworded into.
@@ -64,20 +64,3 @@ def test_forbidden_overclaims_never_appear_in_the_public_tree():
             if phrase in text:
                 offenders.append(f"{path.relative_to(_ROOT)}: {phrase!r}")
     assert not offenders, "overclaiming phrase(s) found:\n" + "\n".join(offenders)
-
-
-def test_the_two_honest_limits_sit_within_twelve_lines_of_the_level_one_list():
-    lines = _lines(_README)
-
-    list_end = next(
-        i for i, line in enumerate(lines) if line.strip() == "- local enforcement"
-    )
-    honest_limits = next(
-        i for i, line in enumerate(lines) if line.startswith("Two honest limits")
-    )
-
-    assert honest_limits > list_end, "the honest limits must follow the Level 1 list"
-    assert honest_limits - list_end <= 12, (
-        f"the two honest limits sit {honest_limits - list_end} lines after the "
-        "Level 1 list (must be within 12)"
-    )

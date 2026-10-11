@@ -10,7 +10,7 @@ import logging
 
 import pytest
 
-from runbound.config import GuardrailConfig
+from runbound.config import RunboundConfig
 from runbound.engine import Engine
 from runbound.events import Anomaly, Event
 from runbound.exceptions import GuardrailTripped, PolicyViolation
@@ -52,8 +52,8 @@ class RecordingObserver:
 
 
 def engine(policy=None, observers=None, **config_kwargs) -> Engine:
-    config = GuardrailConfig(tool_policy=policy, **config_kwargs)
-    return Engine(config, detectors=[], observers=observers if observers is not None else [])
+    config = RunboundConfig(tool_policy=policy, **config_kwargs)
+    return Engine(config, observers=observers if observers is not None else [])
 
 
 # --- validation -------------------------------------------------------------
@@ -140,26 +140,26 @@ def test_coerce_rejects_something_that_is_not_a_policy():
 
 
 def test_config_defaults_to_no_policy():
-    assert GuardrailConfig().tool_policy is None
-    GuardrailConfig().validate()
+    assert RunboundConfig().tool_policy is None
+    RunboundConfig().validate()
 
 
 def test_config_validate_coerces_a_dict_policy_in_place():
-    config = GuardrailConfig(tool_policy={"deny": ["shell"]})
+    config = RunboundConfig(tool_policy={"deny": ["shell"]})
     config.validate()
     assert isinstance(config.tool_policy, ToolPolicy)
     assert config.tool_policy.deny == ["shell"]
 
 
 def test_config_validate_rejects_an_invalid_policy():
-    config = GuardrailConfig(tool_policy={"require_approval": ["refund"]})
+    config = RunboundConfig(tool_policy={"require_approval": ["refund"]})
     with pytest.raises(ValueError, match="approval_callback"):
         config.validate()
 
 
 def test_config_validate_rejects_an_unknown_policy_key():
     with pytest.raises(ValueError, match="tool_policy"):
-        GuardrailConfig(tool_policy={"nope": 1}).validate()
+        RunboundConfig(tool_policy={"nope": 1}).validate()
 
 
 # --- evaluation order -------------------------------------------------------
@@ -385,14 +385,15 @@ def test_policy_anomaly_carries_session_identity_and_the_rule():
     assert "user-9" in excinfo.value.anomaly.message
 
 
-def test_max_calls_is_enforced_from_the_recorded_session_counters():
+def test_max_calls_is_enforced_from_the_calls_that_cleared_the_chain():
     eng = engine(ToolPolicy(max_calls={"refund": 1}))
     state = session()
 
-    state.record(tool_event("refund", 1))
-    eng.enforce_policy(state, call("refund"))  # first attempt: at the limit
+    state.enter_chain("refund")
+    eng.enforce_policy(state, call("refund"))  # first call: at the limit
+    state.leave_chain("refund", cleared=True)
 
-    state.record(tool_event("refund", 2))
+    state.enter_chain("refund")
     with pytest.raises(PolicyViolation) as excinfo:
         eng.enforce_policy(state, call("refund"))
     assert excinfo.value.violation.details == {
@@ -430,21 +431,8 @@ def test_block_and_latch_latches_the_session():
     assert state.tripped_at is not None
 
 
-def test_block_and_latch_honors_on_trip_once():
-    eng = engine(
-        ToolPolicy(deny=["shell"], on_violation="block_and_latch"), on_trip="once"
-    )
-    state = session()
-    with pytest.raises(PolicyViolation):
-        eng.enforce_policy(state, call("shell"))
-    assert state.tripped_by is None
-
-
 def test_dry_run_never_latches():
-    eng = engine(
-        ToolPolicy(deny=["shell"], on_violation="dry_run"),
-        on_trip="latch",
-    )
+    eng = engine(ToolPolicy(deny=["shell"], on_violation="dry_run"))
     state = session()
     eng.enforce_policy(state, call("shell"))
     assert state.tripped_by is None
@@ -478,24 +466,24 @@ def test_a_different_rule_on_the_same_tool_is_recorded_as_that_rule():
     policy = ToolPolicy(max_calls={"refund": 1}, constraints={"refund": lambda c: False})
     eng = engine(policy, observers=[observer])
     state = session()
-    state.record(tool_event("refund", 1))
+    state.enter_chain("refund")
     with pytest.raises(PolicyViolation):
         eng.enforce_policy(state, call("refund"))  # constraint: 1 is within the limit
     with pytest.raises(PolicyViolation):
         eng.enforce_policy(state, call("refund"))  # still the constraint: recorded again
     assert [a.details["rule"] for a in observer.sent] == ["constraint", "constraint"]
 
-    state.record(tool_event("refund", 2))
+    state.enter_chain("refund")  # a second call in the chain at once
     with pytest.raises(PolicyViolation):
         eng.enforce_policy(state, call("refund"))  # now over the limit
     assert [a.details["rule"] for a in observer.sent] == ["constraint", "constraint", "max_calls"]
 
 
-def test_detector_alerts_are_deduped_exactly_as_before():
+def test_non_refusal_notices_are_still_deduped_per_session_and_rule():
     observer = RecordingObserver()
     eng = engine(observers=[observer])
     state = session()
-    anomaly = Anomaly("budget", "critical", "out of money", {"session_id": "s1"})
+    anomaly = Anomaly("policy", "warn", "would block shell", {"session_id": "s1"})
     eng._alert(anomaly, state)
     eng._alert(anomaly, state)
     assert len(observer.sent) == 1
@@ -504,8 +492,8 @@ def test_detector_alerts_are_deduped_exactly_as_before():
 # --- reaction independence and privacy --------------------------------------
 
 
-def test_policy_is_enforced_regardless_of_on_anomaly():
-    eng = engine(ToolPolicy(deny=["shell"]), on_anomaly="warn")
+def test_policy_is_enforced_even_when_the_fleet_halt_is_only_a_warning():
+    eng = engine(ToolPolicy(deny=["shell"]), on_halt="warn")
     with pytest.raises(PolicyViolation):
         eng.enforce_policy(session(), call("shell"))
 
@@ -527,7 +515,7 @@ def test_raw_arguments_never_reach_the_anomaly():
 # --- fail-open on our own bugs ---------------------------------------------
 
 
-def test_a_policy_the_engine_cannot_evaluate_lets_the_call_through(caplog):
+def test_a_policy_the_engine_cannot_evaluate_refuses_the_call(caplog):
     class Hostile:
         def __contains__(self, item):
             raise RuntimeError("policy is broken")
@@ -536,7 +524,9 @@ def test_a_policy_the_engine_cannot_evaluate_lets_the_call_through(caplog):
     policy = ToolPolicy()
     policy.deny = Hostile()
     eng = engine(policy)
-    assert eng.enforce_policy(session(), call("shell")) is None
+    with pytest.raises(GuardrailTripped) as caught:
+        eng.enforce_policy(session(), call("shell"))
+    assert caught.value.reason == "hook_error"
     assert "policy" in caplog.text
 
 

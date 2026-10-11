@@ -12,11 +12,9 @@ import time
 
 import pytest
 
-from runbound import alerts
 from runbound import export as export_module
 from runbound.events import Anomaly, Event
 from runbound.export import Exporter
-from runbound.plane_types import ExitDelta
 from runbound.state import SessionState
 
 
@@ -75,15 +73,15 @@ def anomaly(detector: str = "budget") -> Anomaly:
     return Anomaly(detector=detector, severity="critical", message="over", details={"spend": 3})
 
 
-def delta(seq: int = 1) -> ExitDelta:
-    return ExitDelta(
-        key_hash="abc",
-        seq=seq,
-        spend_delta_usd=0.25,
-        tokens_delta=100,
-        steps_delta=3,
-        tool_calls={"search": 2},
-    )
+def change(to: int = 1) -> dict:
+    """A runtime-change record, as :mod:`runbound.local_events` hands it to sinks."""
+    return {
+        "kind": "runtime_change",
+        "at": 1_700_000_000.0,
+        "what": "policy_version",
+        "from": to - 1,
+        "to": to,
+    }
 
 
 def exporter(client: FakeClient, **kwargs) -> Exporter:
@@ -117,7 +115,8 @@ def test_an_event_is_hashed_stamped_and_batched(wall):
     assert batch["service"] == "checkout"
     assert batch["worker_id"] == "host-1:42"
     assert batch["dropped"] == 0
-    assert batch["anomalies"] == batch["exits"] == batch["circuits"] == []
+    assert batch["anomalies"] == batch["exits"] == []
+    assert "circuits" not in batch
 
     (wire,) = batch["events"]
     assert wire["step"] == 4
@@ -148,22 +147,30 @@ def test_an_anomaly_carries_the_reaction(wall):
     assert wire["ts_wall"].endswith("Z")
 
 
-def test_an_exit_and_a_circuit_ride_the_priority_lane(wall):
+def test_a_runtime_change_rides_the_priority_lane(wall):
     client = FakeClient()
     sink = exporter(client)
-    sink.on_exit(delta(seq=7))
-    sink.on_circuit("openai", "open", 5, 30.0)
+    sink.on_change(change(7))
     sink.flush()
 
     batch = client.batches[0]
-    assert batch["exits"][0]["seq"] == 7
-    assert batch["exits"][0]["key_hash"] == "abc"
-    circuit = batch["circuits"][0]
-    assert circuit["label"] == "openai"
-    assert circuit["state"] == "open"
-    assert circuit["failures"] == 5
-    assert circuit["cooldown_s"] == 30.0
-    assert circuit["ts_wall"].endswith("Z")
+    (wire,) = batch["changes"]
+    assert wire["kind"] == "runtime_change"
+    assert wire["what"] == "policy_version"
+    assert wire["from"] == 6
+    assert wire["to"] == 7
+    assert wire["ts_wall"].endswith("Z")
+
+
+def test_a_record_that_is_not_a_runtime_change_is_ignored(wall):
+    client = FakeClient()
+    sink = exporter(client)
+    sink.on_change({"kind": "anomaly", "at": 1.0})
+    sink.on_change("nope")
+    sink.flush()
+
+    assert client.batches == []
+    assert sink.dropped == 0
 
 
 def test_nothing_is_posted_when_there_is_nothing_to_say(wall):
@@ -191,13 +198,12 @@ def test_the_priority_lane_goes_out_before_queued_events(wall):
     sink = exporter(client, batch_size=2)
     for step in range(5):
         sink.on_event(session(), event(step=step))
-    sink.on_exit(delta())
-    sink.on_circuit("openai", "open", 1, 5.0)
+    sink.on_change(change(1))
+    sink.on_change(change(2))
     sink.flush()
 
     first = client.batches[0]
-    assert len(first["exits"]) == 1
-    assert len(first["circuits"]) == 1
+    assert [wire["to"] for wire in first["changes"]] == [1, 2]
     assert first["events"] == []
 
 
@@ -264,11 +270,11 @@ def test_the_drop_count_is_cumulative_across_batches(wall):
 def test_each_lane_is_bounded_on_its_own(wall):
     client = FakeClient()
     sink = exporter(client, maxlen=2, batch_size=100)
-    for seq in range(4):
-        sink.on_exit(delta(seq=seq))
+    for to in range(4):
+        sink.on_change(change(to))
     sink.flush()
 
-    assert [wire["seq"] for wire in client.batches[0]["exits"]] == [2, 3]
+    assert [wire["to"] for wire in client.batches[0]["changes"]] == [2, 3]
     assert sink.dropped == 2
 
 
@@ -282,12 +288,11 @@ def test_an_invalid_key_drops_silently_without_touching_the_network(wall):
 
     sink.on_event(session(), event())
     sink.on_anomaly(session(), anomaly(), "warn")
-    sink.on_exit(delta())
-    sink.on_circuit("openai", "open", 1, 5.0)
+    sink.on_change(change())
     sink.flush()
 
     assert client.batches == []
-    assert sink.dropped == 4
+    assert sink.dropped == 3
     assert sink.pending == 0
 
 
@@ -309,8 +314,7 @@ def test_no_observer_method_raises_when_the_client_explodes(wall, caplog):
     with caplog.at_level(logging.WARNING, logger="runbound"):
         sink.on_event(session(), event())
         sink.on_anomaly(session(), anomaly(), "raise")
-        sink.on_exit(delta())
-        sink.on_circuit("openai", "open", 1, 5.0)
+        sink.on_change(change())
         sink.flush()
     assert sink.pending == 0
 
@@ -320,8 +324,7 @@ def test_no_observer_method_raises_when_the_client_explodes(wall, caplog):
     [
         lambda s: s.on_event(object(), object()),
         lambda s: s.on_anomaly(object(), object(), "raise"),
-        lambda s: s.on_exit(object()),
-        lambda s: s.on_circuit(object(), object(), "nope", None),
+        lambda s: s.on_change({"kind": "runtime_change"}),
     ],
 )
 def test_garbage_handed_to_an_observer_is_logged_not_raised(call, wall, caplog):
@@ -418,18 +421,6 @@ def test_starting_twice_runs_one_flusher(wall):
     sink.start()
     try:
         assert sink._thread is first
-    finally:
-        sink.stop()
-
-
-def test_the_flusher_thread_is_tracked_for_the_alert_drain(wall):
-    client = FakeClient()
-    sink = Exporter(client, maxlen=100, flush_every_s=30.0, batch_size=200)
-    sink.start()
-    try:
-        with alerts._THREADS_LOCK:
-            tracked = list(alerts._ALERT_THREADS)
-        assert sink._thread in tracked
     finally:
         sink.stop()
 

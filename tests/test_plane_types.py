@@ -16,11 +16,8 @@ from runbound.plane_types import (
     DETAIL_STRING_MAX,
     TAG_KEYS_MAX,
     TAG_VALUE_MAX,
-    EntryDecision,
-    ExitDelta,
     HelloReply,
     PlaneStatus,
-    TripReport,
     WireAnomaly,
     WireEvent,
     anomaly_to_wire,
@@ -93,21 +90,13 @@ def test_key_hash_of_empty_string():
 ROUND_TRIPS = [
     WireEvent(
         ts_wall=TS,
-        kind="llm_call",
+        kind="tool_call",
         key_hash="abc",
         step=2,
-        tokens_in=10,
-        tokens_out=20,
-        tokens_reasoning=5,
-        cost_usd=0.25,
-        model="gpt-4o",
         tool_name=None,
         args_hash=None,
         duration_s=1.5,
         error_class=None,
-        priced="estimated",
-        partial=True,
-        tokens_estimated=True,
     ),
     WireAnomaly(
         ts_wall=TS,
@@ -118,46 +107,12 @@ ROUND_TRIPS = [
         details={"total_cost_usd": 1.25},
         reacted="raise",
     ),
-    EntryDecision(
-        allow=False,
-        refusal={"reason": "halted"},
-        fleet_spend_usd=4.8,
-        fleet_tokens=1000,
-        strikes=2,
-        generation=7,
-        latch={"detector": "budget"},
-        halt=True,
-        policy_version=3,
-    ),
-    ExitDelta(
-        key_hash="abc",
-        seq=4,
-        spend_delta_usd=0.75,
-        tokens_delta=120,
-        steps_delta=3,
-        tool_calls={"search": 2},
-        events_delta=10,
-        errors_delta=1,
-        tokens_cached_delta=40,
-        last_detector="budget",
-        trigger_message="Budget exceeded: $5.10 of $5.00",
-        trigger_age_s=2.5,
-    ),
-    TripReport(
-        key_hash="abc",
-        anomaly={"detector": "budget"},
-        latch_ttl_s=60.0,
-        strikes=1,
-        generation=2,
-        refused_at_door=True,
-    ),
     HelloReply(
         org_id="org_1",
         plan="pro",
         entitlements={"fleet": True},
         halt=False,
         policy_version=5,
-        circuits={"openai": "open"},
         poll_s=10.0,
         notice="upgrade soon",
     ),
@@ -194,13 +149,13 @@ def test_wire_types_are_frozen(cls):
 
 
 def test_from_wire_fills_missing_keys_with_defaults():
-    decision = from_wire(EntryDecision, {"fleet_spend_usd": 2.0})
+    reply = from_wire(HelloReply, {"poll_s": 2.0})
 
-    assert decision.fleet_spend_usd == 2.0
-    assert decision.allow is True
-    assert decision.refusal is None
-    assert decision.halt is False
-    assert decision.strikes == 0
+    assert reply.poll_s == 2.0
+    assert reply.halt is False
+    assert reply.notice is None
+    assert reply.policy_version == 0
+    assert reply.tools_known is True
 
 
 def test_from_wire_ignores_extra_keys():
@@ -213,35 +168,35 @@ def test_from_wire_ignores_extra_keys():
 
 
 def test_from_wire_falls_back_to_defaults_on_wrong_types():
-    decision = from_wire(
-        EntryDecision,
+    reply = from_wire(
+        HelloReply,
         {
-            "allow": "yes",  # not a bool
-            "fleet_spend_usd": "lots",  # not a number
-            "strikes": 1.5,  # not an int
-            "latch": [1, 2],  # not a dict/None
-            "generation": 9,  # good, survives
+            "halt": "yes",  # not a bool
+            "poll_s": "lots",  # not a number
+            "policy_version": 1.5,  # not an int
+            "entitlements": [1, 2],  # not a dict
+            "plan": "pro",  # good, survives
         },
     )
 
-    assert decision.allow is True  # the default, not "yes"
-    assert decision.fleet_spend_usd == 0.0
-    assert decision.strikes == 0
-    assert decision.latch is None
-    assert decision.generation == 9
+    assert reply.halt is False  # the default, not "yes"
+    assert reply.poll_s == 0.0
+    assert reply.policy_version == 0
+    assert reply.entitlements == {}
+    assert reply.plan == "pro"
 
 
 def test_from_wire_accepts_an_int_for_a_float_field():
-    decision = from_wire(EntryDecision, {"fleet_spend_usd": 3})
+    reply = from_wire(HelloReply, {"poll_s": 3})
 
-    assert decision.fleet_spend_usd == 3.0
-    assert isinstance(decision.fleet_spend_usd, float)
+    assert reply.poll_s == 3.0
+    assert isinstance(reply.poll_s, float)
 
 
 def test_from_wire_rejects_a_bool_for_an_int_field():
-    delta = from_wire(ExitDelta, {"seq": True})
+    reply = from_wire(HelloReply, {"policy_version": True})
 
-    assert delta.seq == 0
+    assert reply.policy_version == 0
 
 
 def test_from_wire_accepts_none_for_optional_fields():
@@ -268,36 +223,6 @@ def test_from_wire_tolerates_a_non_dict_payload():
     assert from_wire(PlaneStatus, ["mode"]) == PlaneStatus()
 
 
-def test_exit_delta_from_wire_accepts_an_older_narrower_shape():
-    """An old SDK's exit never sent events_delta/errors_delta/tokens_cached_delta/
-    last_detector/trigger_message/trigger_age_s -- a genuinely old-shaped
-    payload, not today's shape with keys deleted, since a real old worker never
-    had those keys to omit in the first place."""
-    old_shape = {
-        "key_hash": "abc123",
-        "seq": 4,
-        "spend_delta_usd": 0.75,
-        "tokens_delta": 120,
-        "steps_delta": 3,
-        "tool_calls": {"search": 2},
-    }
-
-    delta = from_wire(ExitDelta, old_shape)
-
-    assert delta.key_hash == "abc123"
-    assert delta.seq == 4
-    assert delta.spend_delta_usd == 0.75
-    assert delta.tokens_delta == 120
-    assert delta.steps_delta == 3
-    assert delta.tool_calls == {"search": 2}
-    assert delta.events_delta == 0
-    assert delta.errors_delta == 0
-    assert delta.tokens_cached_delta == 0
-    assert delta.last_detector is None
-    assert delta.trigger_message is None
-    assert delta.trigger_age_s is None
-
-
 def test_from_wire_copies_dicts_so_the_payload_cannot_be_mutated_later():
     payload = {"details": {"a": 1}}
     anomaly = from_wire(WireAnomaly, payload)
@@ -316,11 +241,6 @@ def test_event_to_wire_copies_the_numbers():
     assert wire.kind == "llm_call"
     assert wire.key_hash == "kh"
     assert wire.step == 3
-    assert wire.tokens_in == 10
-    assert wire.tokens_out == 20
-    assert wire.tokens_reasoning == 4
-    assert wire.cost_usd == 0.5
-    assert wire.model == "gpt-4o"
     assert wire.duration_s == 1.5
 
 
@@ -385,36 +305,11 @@ def test_event_to_wire_reports_no_class_when_none_is_derivable(error):
     assert event_to_wire(event, None, TS).error_class is None
 
 
-def test_event_to_wire_carries_priced_partial_and_tokens_estimated():
-    event = llm_event(priced="estimated", partial=True, tokens_estimated=True)
-    wire = event_to_wire(event, key_hash="kh", ts_wall=TS)
-
-    assert wire.priced == "estimated"
-    assert wire.partial is True
-    assert wire.tokens_estimated is True
-
-
-def test_event_to_wire_defaults_priced_partial_and_tokens_estimated():
-    wire = event_to_wire(llm_event(), key_hash="kh", ts_wall=TS)
-
-    assert wire.priced is None
-    assert wire.partial is False
-    assert wire.tokens_estimated is False
-
-
-def test_event_to_wire_carries_the_provider():
-    event = Event(kind="llm_call", ts=1.0, step=1, model="gpt-4o", provider="openai@api.openai.com")
-    wire = event_to_wire(event, key_hash=None, ts_wall=TS)
-
-    assert wire.provider == "openai@api.openai.com"
-
-
-def test_an_event_and_its_wire_form_have_no_provider_by_default():
-    event = Event(kind="tool_call", ts=1.0, step=1, tool_name="search")
-
-    assert event.provider is None
-    assert event_to_wire(event, key_hash=None, ts_wall=TS).provider is None
-    assert WireEvent().provider is None
+def test_a_wire_event_has_exactly_the_tool_call_fields():
+    """The plane reads these and nothing else; model-call fields (tokens, cost, model, provider) are gone."""
+    assert {f.name for f in dataclasses.fields(WireEvent)} == {
+        "ts_wall", "kind", "key_hash", "step", "tool_name", "args_hash", "duration_s", "error_class",
+    }
 
 
 def test_wire_event_never_carries_loop_exempt():
@@ -684,3 +579,11 @@ def test_scrub_details_caps_list_length():
 
 def test_scrub_details_converts_a_tuple_to_a_list():
     assert scrub_details({"pair": (1, 2)}) == {"pair": [1, 2]}
+
+
+def test_a_hello_reply_has_no_circuits_field_and_ignores_one_on_the_wire():
+    from runbound.plane_types import from_wire
+
+    assert "circuits" not in {f.name for f in dataclasses.fields(HelloReply)}
+    got = from_wire(HelloReply, {"policy_version": 4, "circuits": {"openai": "open"}})
+    assert got.policy_version == 4 and not hasattr(got, "circuits")

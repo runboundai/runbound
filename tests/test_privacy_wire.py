@@ -7,7 +7,7 @@ decision: every place a record leaves the process, the key is replaced by a
 short digest of itself unless the customer opted into ``send_session_keys``.
 
 The redaction lives in :mod:`runbound.plane_types` and is applied by
-``anomaly_to_wire``, the exporter and ``RemoteState.trip``, so the detectors
+``anomaly_to_wire`` and the exporter, so the detectors
 themselves are never touched. The generic webhook alerter that used to apply
 it too left the SDK — delivery, and the redaction its body needs,
 is the control plane's job now, and its adapter is byte-compatible with what
@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from runbound.config import GuardrailConfig
+from runbound.config import RunboundConfig
 from runbound.engine import _policy_anomaly
 from runbound.events import Anomaly
 from runbound.export import Exporter
@@ -36,7 +36,6 @@ from runbound.plane_types import (
     to_wire,
 )
 from runbound.policy import Violation
-from runbound.shared import RemoteState
 from runbound.state import SessionState
 
 KEY = "user:leaky-9999"
@@ -290,14 +289,6 @@ def test_an_exported_anomaly_carries_no_raw_key():
     assert STAND_IN in blob
 
 
-def test_an_exported_trip_carries_no_raw_key():
-    client = Spy()
-    exporter = Exporter(client)
-    exporter.on_trip(session(), policy_anomaly(session()), "door")
-
-    assert_clean(drained(exporter, client))
-
-
 def test_the_exporter_sends_raw_keys_only_when_told_to():
     client = Spy()
     exporter = Exporter(client, send_session_keys=True)
@@ -310,10 +301,10 @@ def test_build_gives_the_exporter_the_customers_setting():
     from runbound.shared import build
 
     default = build(
-        GuardrailConfig(control_plane_url="https://plane.test", token="k")
+        RunboundConfig(control_plane_url="https://plane.test", token="k")
     )
     opted_in = build(
-        GuardrailConfig(
+        RunboundConfig(
             control_plane_url="https://plane.test", token="k", send_session_keys=True
         )
     )
@@ -322,48 +313,10 @@ def test_build_gives_the_exporter_the_customers_setting():
     assert opted_in._exporter.send_session_keys is True
 
 
-# --- the synchronous trip report ---------------------------------------------
-
-
-class TripSpy:
-    """Just enough of a plane client for ``RemoteState.trip``."""
-
-    key_state = "ok"
-    consecutive_failures = 0
-
-    def __init__(self) -> None:
-        self.reports: list = []
-
-    def trip(self, report) -> bool:
-        self.reports.append(report)
-        return True
-
-
-def config(**kwargs) -> GuardrailConfig:
+def config(**kwargs) -> RunboundConfig:
     fields = {"control_plane_url": "https://plane.test", "token": "k"}
     fields.update(kwargs)
-    return GuardrailConfig(**fields)
-
-
-def test_the_trip_report_carries_no_raw_key():
-    client = TripSpy()
-    state = session()
-    shared = RemoteState(client, None, config())
-
-    shared.trip(KEY, state, policy_anomaly(state), None, door=False)
-
-    assert_clean(json.dumps(to_wire(client.reports[0])))
-    assert client.reports[0].key_hash == DIGEST
-
-
-def test_the_trip_report_carries_the_key_when_the_customer_opted_in():
-    client = TripSpy()
-    state = session()
-    shared = RemoteState(client, None, config(send_session_keys=True))
-
-    shared.trip(KEY, state, policy_anomaly(state), None, door=False)
-
-    assert client.reports[0].anomaly["details"]["key"] == KEY
+    return RunboundConfig(**fields)
 
 
 def test_a_broken_details_dict_does_not_cost_the_export():
@@ -400,40 +353,39 @@ def teardown_module(module) -> None:
 # --- the changes lane --------------------------------------------------------
 
 
-def _posture_record(**overrides) -> dict:
+def _change_record(**overrides) -> dict:
+    """A runtime change that, against the grain, names a session key and quotes it."""
     record = {
-        "kind": "posture",
+        "kind": "runtime_change",
         "at": 1_790_000_000.0,
         "session_id": "sess-1",
-        "source": "manual",
-        "posture": "restricted",
-        "from": "full",
-        "scope": "session",
-        "level": None,
+        "what": "policy_version",
+        "from": 1,
+        "to": 2,
         "key": KEY,
-        "reason": f"support narrowed {KEY} by hand",
+        "reason": f"support re-pinned {KEY} by hand",
     }
     record.update(overrides)
     return record
 
 
-def test_an_exported_posture_change_carries_the_key_hash_and_never_the_key():
+def test_an_exported_change_carries_the_key_hash_and_never_the_key():
     client = Spy()
     exporter = Exporter(client)
-    exporter.on_change(_posture_record())
+    exporter.on_change(_change_record())
 
     blob = drained(exporter, client)
     assert_clean(blob)
     (change,) = client.batches[0]["changes"]
     assert change["key_hash"] == DIGEST
-    assert change["kind"] == "posture_change"
+    assert change["kind"] == "runtime_change"
     assert "session_id" not in change
 
 
-def test_the_key_is_redacted_out_of_a_posture_changes_reason():
+def test_the_key_is_redacted_out_of_a_changes_reason():
     client = Spy()
     exporter = Exporter(client)
-    exporter.on_change(_posture_record())
+    exporter.on_change(_change_record())
 
     exporter.flush()
     (change,) = client.batches[0]["changes"]
@@ -443,20 +395,20 @@ def test_the_key_is_redacted_out_of_a_posture_changes_reason():
 def test_a_runtime_change_carries_no_key_at_all():
     client = Spy()
     exporter = Exporter(client)
-    exporter.on_change({"kind": "runtime_change", "at": 1_790_000_000.0, "what": "model", "from": "a", "to": "b"})
+    exporter.on_change({"kind": "runtime_change", "at": 1_790_000_000.0, "what": "policy_version", "from": 1, "to": 2})
 
     exporter.flush()
     (change,) = client.batches[0]["changes"]
     assert "key_hash" not in change
-    assert (change["what"], change["from"], change["to"]) == ("model", "a", "b")
+    assert (change["what"], change["from"], change["to"]) == ("policy_version", 1, 2)
 
 
 def test_the_changes_lane_never_carries_a_raw_key_even_when_keys_are_opted_in():
-    """``send_session_keys`` is about anomaly messages; a posture change is
+    """``send_session_keys`` is about anomaly messages; a change is
     identified by the hash alone, whatever that setting says."""
     client = Spy()
     exporter = Exporter(client, send_session_keys=True)
-    exporter.on_change(_posture_record(reason="no key in this one"))
+    exporter.on_change(_change_record(reason="no key in this one"))
 
     blob = drained(exporter, client)
     assert_clean(blob)

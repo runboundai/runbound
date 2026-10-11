@@ -11,16 +11,18 @@ from runbound.exceptions import GuardrailTripped
 
 
 class EventRecorder:
-    """A detector that records every event the engine hands it."""
-
-    name = "recorder"
+    """An observer that records every event the engine hands it."""
 
     def __init__(self) -> None:
         self.events: list[Event] = []
 
-    def check(self, state, event, config):
+    def on_event(self, session, event) -> None:
+        if event.kind == "tool_result":  # the call-side events are what these tests are about
+            return
         self.events.append(event)
-        return None
+
+    def on_anomaly(self, session, anomaly, reacted) -> None:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -34,7 +36,7 @@ def _uninitialized():
 def recorder() -> EventRecorder:
     """Attach an event recorder to the engine built by the last init()."""
     spy = EventRecorder()
-    api._ENGINE.detectors.insert(0, spy)
+    api._ENGINE.observers.append(spy)
     return spy
 
 
@@ -43,34 +45,34 @@ def recorder() -> EventRecorder:
 
 def test_init_validates_config_loudly():
     with pytest.raises(ValueError):
-        runbound.init(on_anomaly="explode")
+        runbound.init(on_halt="explode")
     with pytest.raises(ValueError):
-        runbound.init(budget_usd=-1)
+        runbound.init(max_actions_per_run=-1)
 
     assert runbound.current_session() is None
 
 
 def test_init_rejects_unknown_options():
     with pytest.raises(TypeError):
-        runbound.init(budget_in_dollars=5)
+        runbound.init(budget_usd=5)
 
 
 def test_init_creates_a_session_and_reconfigures_on_second_call():
-    runbound.init(max_steps=10)
+    runbound.init(max_actions_per_run=10)
     first = runbound.current_session()
     assert first is not None
     assert first.session_id
 
-    runbound.init(max_steps=20)
+    runbound.init(max_actions_per_run=20)
     second = runbound.current_session()
 
     assert second is not first
     assert second.session_id != first.session_id
-    assert api._ENGINE.config.max_steps == 20
+    assert api._ENGINE.config.max_actions_per_run == 20
 
 
 def test_reset_starts_a_fresh_session_but_keeps_the_engine():
-    runbound.init(max_steps=10)
+    runbound.init(max_actions_per_run=10)
     engine = api._ENGINE
     old = runbound.current_session()
 
@@ -79,14 +81,14 @@ def test_reset_starts_a_fresh_session_but_keeps_the_engine():
         return "pong"
 
     ping()
-    assert old.step_count == 1
+    assert old.event_count == 1
 
     runbound.reset()
     new = runbound.current_session()
 
     assert api._ENGINE is engine
     assert new.session_id != old.session_id
-    assert (new.step_count, new.total_tokens, new.total_cost_usd) == (0, 0, 0.0)
+    assert (new.event_count, new.tool_calls, new.executed_actions) == (0, {}, 0)
 
 
 def test_reset_before_init_is_a_no_op():
@@ -230,11 +232,11 @@ def test_tool_error_message_is_truncated():
     assert len(spy.events[1].error) == api.ERROR_MAX_CHARS
 
 
-def test_loop_trips_before_the_tool_body_runs():
-    runbound.init(loop_threshold=3, on_anomaly="raise", on_loop="break")
+def test_a_refused_call_never_runs_the_tool_body():
+    runbound.init()
     calls: list[str] = []
 
-    @runbound.tool
+    @runbound.tool(max_calls=2)
     def search(query):
         calls.append(query)
         return "ok"
@@ -245,16 +247,12 @@ def test_loop_trips_before_the_tool_body_runs():
     with pytest.raises(GuardrailTripped) as excinfo:
         search("cats")
 
-    assert excinfo.value.anomaly.detector == "loop"
-    assert calls == ["cats", "cats"]  # the tripping call never ran the tool
+    assert excinfo.value.anomaly.detector == "policy"
+    assert calls == ["cats", "cats"]  # the refused call never ran the tool
 
 
-def test_event_limit_trips_through_the_decorator():
-    """Steps are model turns, so tool calls (what @runbound.tool
-    records) trip max_events, not max_steps — this test used to pin the old
-    "steps = every event" meaning with max_steps; it now exercises max_events
-    instead, which is what that meaning became."""
-    runbound.init(max_events=2, on_anomaly="raise")
+def test_the_action_cap_trips_through_the_decorator():
+    runbound.init(max_actions_per_run=2)
 
     @runbound.tool
     def ping(n):
@@ -266,21 +264,7 @@ def test_event_limit_trips_through_the_decorator():
     with pytest.raises(GuardrailTripped) as excinfo:
         ping(3)
 
-    assert excinfo.value.anomaly.detector == "events"
-
-
-def test_step_limit_trips_through_a_model_call():
-    """max_steps counts model turns, which the tool decorator does
-    not produce — this exercises the redefined meaning directly."""
-    runbound.init(max_steps=2, on_anomaly="raise")
-
-    runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)
-    runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)
-
-    with pytest.raises(GuardrailTripped) as excinfo:
-        runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)
-
-    assert excinfo.value.anomaly.detector == "steps"
+    assert excinfo.value.anomaly.detector == "fanout"
 
 
 # --- fail-open --------------------------------------------------------------
@@ -317,7 +301,7 @@ def test_unhashable_arguments_do_not_break_the_call(caplog):
         return "pong"
 
     assert ping(Hostile()) == "pong"
-    assert spy.events[0].args_hash is None  # unhashable => no loop signal, no crash
+    assert spy.events[0].args_hash is None  # unhashable => no hash, no crash
 
 
 def test_concurrent_tool_calls_get_unique_steps():
@@ -341,7 +325,7 @@ def test_concurrent_tool_calls_get_unique_steps():
 
     steps = [event.step for event in spy.events]
     assert sorted(steps) == list(range(1, 81))
-    assert runbound.current_session().step_count == 80
+    assert runbound.current_session().event_count == 80
 
 
 def test_exports():
@@ -349,12 +333,13 @@ def test_exports():
         "init",
         "reset",
         "tool",
-        "wrap",
         "current_session",
         "GuardrailTripped",
+        "ExecutionRefused",
+        "ToolPolicy",
         "Anomaly",
         "Event",
-        "GuardrailConfig",
+        "RunboundConfig",
         "SessionState",
         "__version__",
     ):

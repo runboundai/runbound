@@ -1,16 +1,10 @@
-"""What runbound can actually see, counted.
+"""What runbound can actually see, counted, and the tool report.
 
-``init()`` configures detectors; it does not observe anything. The sensors are
-:func:`runbound.wrap` (and :mod:`runbound.autowrap`), ``@runbound.tool``,
-:func:`runbound.session` and :func:`runbound.record_call` — and a process
-that installed runbound but wired up none of them is *blind while reporting
-green*. This module is the honest answer to "is anything actually being
-watched?": a handful of counters, one snapshot, and one warning that fires when
-a provider SDK is imported and yet no guarded call has ever been seen.
-
-It also builds the **tool report** — which tools this process has, taken from
-the ``@runbound.tool`` decorators at import time and from the names the model
-asks for, sent on the heartbeat and shown by :func:`runbound.tools`.
+``init()`` configures rules; it does not observe anything. The sensors are
+``@runbound.tool`` and :func:`runbound.session`. This module keeps a handful of
+counters, one snapshot, and the **tool report** — which tools this process has,
+taken from the ``@runbound.tool`` decorators at import time and from the names a
+framework adapter sees, sent on the heartbeat and shown by :func:`runbound.tools`.
 
 Private on purpose — the public surface is ``runbound.coverage()``, a
 function. A submodule named ``coverage`` would be bound onto the package by any
@@ -18,8 +12,7 @@ function. A submodule named ``coverage`` would be bound onto the package by any
 
 Everything here is best-effort: a counter that cannot be bumped costs a number
 in a report, never a call. Counters are process-lifetime — ``init()`` and
-``reset()`` leave them alone, because "has this process ever seen traffic?" is
-not a question a new session re-asks.
+``reset()`` leave them alone.
 """
 
 import hashlib
@@ -27,39 +20,12 @@ import inspect
 import types
 import json
 import logging
-import sys
 import threading
 
 from .policy import CAPABILITIES
-import time
-from typing import Any, Callable, Sequence
+from typing import Any, Callable
 
 _LOG = logging.getLogger("runbound")
-
-#: Modules whose presence in ``sys.modules`` means this process talks to an LLM.
-#: The first two runbound can guard; the rest it cannot, which is exactly why
-#: they are listed — an imported ``boto3`` is an honest blind spot, not a gap in
-#: the report.
-PROVIDER_MODULES = (
-    "openai",
-    "anthropic",
-    "google.generativeai",
-    "google.genai",
-    "boto3",
-    "mistralai",
-    "cohere",
-)
-
-#: Provider module -> the wrapper shape whose guarded calls cover it. A module
-#: absent from this map has no wrapper at all, so importing it is always a
-#: blind spot however much other traffic is guarded.
-_GUARDABLE = {"openai": "openai", "anthropic": "anthropic"}
-
-#: The name every silence timer runs under, so a leak is countable.
-TIMER_NAME = "runbound-coverage"
-
-#: How long the warning quotes when nobody configured a window.
-DEFAULT_CHECK_SECONDS = 60.0
 
 #: How many distinct decorated-tool names :func:`snapshot` ever reports. A
 #: fleet dashboard wants real names to tell its story, not an unbounded list
@@ -70,28 +36,16 @@ DECORATED_TOOL_NAMES_MAX = 32
 #: (sorted by name) and a debug line is logged once.
 TOOL_REPORT_MAX = 500
 
-#: What ``coverage()["safe_mode"]["applies_to"]`` says: safe mode can
-#: only refuse a tool runbound was told about.
-SAFE_MODE_APPLIES_TO = (
-    "decorated tools only: a @runbound.tool is refused when the posture denies one of "
-    "the capability classes it declares; an undecorated tool is never refused by a posture"
-)
-
 #: The buckets ``tools_by_class`` always reports, zero or not: every capability
 #: class, plus the tools that declared none.
 CLASS_BUCKETS = CAPABILITIES + ("unclassified",)
 
 _LOCK = threading.Lock()
 
-_WRAPPED_CLIENTS = 0
 _DECORATED_TOOLS = 0
 _TOOL_CALLS = 0
 _KEYED_SESSIONS = 0
-_GUARDED_CALLS = 0
-_LAST_GUARDED_AT: float | None = None
-_SHAPES_SEEN: set[str] = set()
 _DECORATED_TOOL_NAMES: set[str] = set()
-_TIMER: threading.Timer | None = None
 
 #: name -> report entry. A second, richer store beside ``_DECORATED_TOOL_NAMES``
 #: — that one answers "how many, and which names" for the coverage snapshot and
@@ -113,21 +67,6 @@ _TRUNCATION_LOGGED = False
 #: caches on :data:`_TOOL_RULES_VERSION`, which every write below bumps.
 _TOOL_RULES: dict = {}
 _TOOL_RULES_VERSION = 0
-
-#: Has this process already been told, once, that it cannot stop itself
-#: (``can_stop``)? See :func:`warn_if_cannot_stop`.
-_CAN_STOP_WARNED = False
-
-
-def client_wrapped() -> None:
-    """One more client guarded by :func:`runbound.wrap`."""
-    global _WRAPPED_CLIENTS
-    try:
-        with _LOCK:
-            _WRAPPED_CLIENTS += 1
-    except Exception:  # pragma: no cover - a counter never costs a call
-        pass
-
 
 def tool_decorated(name: str | None = None) -> None:
     """One more function guarded by ``@runbound.tool``.
@@ -171,59 +110,6 @@ def session_started() -> None:
             _KEYED_SESSIONS += 1
     except Exception:  # pragma: no cover
         pass
-
-
-def guarded_call() -> None:
-    """One more model call runbound saw, however it turned out.
-
-    A failed call counts: the question this answers is whether the sensors are
-    wired, and a call that reached the provider and came back an error is proof
-    that they are.
-    """
-    global _GUARDED_CALLS, _LAST_GUARDED_AT
-    try:
-        with _LOCK:
-            _GUARDED_CALLS += 1
-            _LAST_GUARDED_AT = time.monotonic()
-    except Exception:  # pragma: no cover
-        pass
-
-
-def provider_seen(provider: str) -> None:
-    """Note the shape of an endpoint a guarded call reached.
-
-    ``provider`` is an endpoint label — ``"openai@localhost:11434"`` — and only
-    the shape before the ``@`` says which SDK was covered.
-    """
-    try:
-        shape = str(provider).split("@", 1)[0].strip()
-        if shape:
-            with _LOCK:
-                _SHAPES_SEEN.add(shape)
-    except Exception:  # pragma: no cover
-        pass
-
-
-def providers_imported() -> list[str]:
-    """Every known provider SDK this process has imported, in listed order."""
-    try:
-        return [name for name in PROVIDER_MODULES if name in sys.modules]
-    except Exception:  # pragma: no cover
-        return []
-
-
-def providers_unguarded(imported: Sequence[str] | None = None) -> list[str]:
-    """Imported provider SDKs that no guarded call has ever covered.
-
-    A provider runbound has no wrapper for — Gemini, Bedrock, Mistral, Cohere
-    — is listed the moment it is imported and never leaves the list, because
-    importing it is the blind spot. ``openai`` and ``anthropic`` leave it as
-    soon as one guarded call reaches an endpoint of that shape.
-    """
-    names = providers_imported() if imported is None else list(imported)
-    with _LOCK:
-        seen = set(_SHAPES_SEEN)
-    return [name for name in names if _GUARDABLE.get(name) not in seen]
 
 
 # --- the tool report --------------------------------------------------------
@@ -548,176 +434,41 @@ def _module(func: Callable | None) -> str | None:
     return module if isinstance(module, str) and module else None
 
 
-def snapshot(
-    auto_wrapped: Sequence[str] = (),
-    *,
-    auto_wrap: bool = True,
-    seconds: float = DEFAULT_CHECK_SECONDS,
-) -> dict:
+def snapshot() -> dict:
     """Everything the counters know, in one dict — see ``runbound.coverage``."""
-    imported = providers_imported()
     with _LOCK:
-        last = _LAST_GUARDED_AT
         report = {
-            "auto_wrapped": list(auto_wrapped),
-            "wrapped_clients": _WRAPPED_CLIENTS,
             "decorated_tools": _DECORATED_TOOLS,
             "decorated_tool_names": sorted(_DECORATED_TOOL_NAMES),
-            "guarded_calls": _GUARDED_CALLS,
             "tool_calls_seen": _TOOL_CALLS,
             "keyed_sessions_seen": _KEYED_SESSIONS,
-            "providers_imported": imported,
         }
     report["tools_by_class"] = tools_by_class()
-    report["providers_unguarded"] = providers_unguarded(imported)
-    report["last_guarded_call_age_s"] = (
-        None if last is None else max(time.monotonic() - last, 0.0)
-    )
-    warning = silence_warning(auto_wrapped, auto_wrap=auto_wrap, seconds=seconds)
-    report["warnings"] = [] if warning is None else [warning]
     return report
 
 
 def zeros() -> dict:
     """The shape of a snapshot with nothing in it. What a failure reports."""
     return {
-        "auto_wrapped": [],
-        "wrapped_clients": 0,
         "decorated_tools": 0,
         "decorated_tool_names": [],
-        "guarded_calls": 0,
         "tool_calls_seen": 0,
         "keyed_sessions_seen": 0,
-        "providers_imported": [],
-        "providers_unguarded": [],
-        "last_guarded_call_age_s": None,
-        "warnings": [],
         "tools_by_class": {bucket: 0 for bucket in CLASS_BUCKETS},
-        "posture": "full",
-        "safe_mode": {"process": None, "plane": False, "sessions": 0,
-                      "applies_to": SAFE_MODE_APPLIES_TO},
-        "can_stop": None,
-        "fleet": "local protection active; fleet coordination: not connected",
     }
 
 
-def silence_warning(
-    auto_wrapped: Sequence[str] = (),
-    *,
-    auto_wrap: bool = True,
-    seconds: float = DEFAULT_CHECK_SECONDS,
-) -> str | None:
-    """The "nothing is guarded" text, or ``None`` when something is.
-
-    One string with three consumers — the timer logs it at WARNING,
-    :func:`runbound.assert_guarded` raises it, and
-    :func:`runbound.coverage` reports it — so a customer who meets this
-    problem in a log, in a test and in a dashboard meets one sentence.
-
-    ``None`` when a guarded call has been seen (the sensors work) or when no
-    provider SDK is imported at all (there is no traffic to miss).
-    """
-    try:
-        with _LOCK:
-            calls = _GUARDED_CALLS
-        if calls:
-            return None
-        imported = providers_imported()
-        if not imported:
-            return None
-        names = ", ".join(repr(name) for name in imported)
-        verb = "is" if len(imported) == 1 else "are"
-        return (
-            f"runbound sees no LLM traffic after {seconds:.0f}s although {names} "
-            f"{verb} imported — nothing is guarded. Did you call "
-            f"runbound.wrap(client)? ({_auto_wrap_state(auto_wrap, auto_wrapped)})"
-        )
-    except Exception:  # pragma: no cover - a report never breaks a host
-        _LOG.debug("runbound: could not work out the coverage warning", exc_info=True)
-        return None
-
-
-def warn_if_cannot_stop(can_stop: bool) -> None:
-    """Once per process: say so when ``on_anomaly`` cannot actually stop a run.
-
-    ``can_stop`` is ``on_anomaly in ("raise", "callback")`` — called
-    from :func:`runbound.init` with the config it just validated. Warn
-    mode is a legitimate choice (observe without ever stopping anything),
-    so this is one WARNING at startup, not a rejection, and it fires at
-    most once per process: a test suite or a long-lived worker calling
-    :func:`runbound.init` repeatedly with ``on_anomaly="warn"`` does not
-    get the line every time.
-    """
-    global _CAN_STOP_WARNED
-    if can_stop:
-        return
-    with _LOCK:
-        if _CAN_STOP_WARNED:
-            return
-        _CAN_STOP_WARNED = True
-    _LOG.warning("runbound is in warn mode: nothing will be stopped")
-
-
-def _auto_wrap_state(auto_wrap: bool, auto_wrapped: Sequence[str]) -> str:
-    """Why auto-instrumentation did not save them, in three honest words."""
-    if not auto_wrap:
-        return "auto_wrap: off"
-    labels = list(auto_wrapped)
-    if not labels:
-        return "auto_wrap: on, but no provider SDK was patched"
-    return "auto_wrap: on, patched " + ", ".join(labels)
-
-
-def start_silence_timer(seconds: float, warn: Callable[[], None]) -> None:
-    """Arm the one-shot silent-zero check, replacing any timer already armed.
-
-    A daemon thread: a check that has not fired yet must never be the reason a
-    process will not exit.
-    """
-    global _TIMER
-    cancel_silence_timer()
-    try:
-        timer = threading.Timer(seconds, warn)
-        timer.name = TIMER_NAME
-        timer.daemon = True
-        with _LOCK:
-            _TIMER = timer
-        timer.start()
-    except Exception:
-        _LOG.warning("runbound could not start the coverage check", exc_info=True)
-
-
-def cancel_silence_timer() -> None:
-    """Stop the armed silent-zero check, if there is one. Never raises."""
-    global _TIMER
-    try:
-        with _LOCK:
-            timer, _TIMER = _TIMER, None
-        if timer is not None:
-            timer.cancel()
-            timer.join(timeout=1.0)
-    except Exception:  # pragma: no cover
-        _LOG.debug("runbound: could not cancel the coverage check", exc_info=True)
-
-
 def reset_for_tests() -> None:
-    """Put every counter back to zero and disarm the timer. Test-only."""
-    global _WRAPPED_CLIENTS, _DECORATED_TOOLS, _TOOL_CALLS, _KEYED_SESSIONS
-    global _GUARDED_CALLS, _LAST_GUARDED_AT, _TRUNCATION_LOGGED, _TOOL_RULES_VERSION
-    global _CAN_STOP_WARNED
-    cancel_silence_timer()
+    """Put every counter back to zero. Test-only."""
+    global _DECORATED_TOOLS, _TOOL_CALLS, _KEYED_SESSIONS
+    global _TRUNCATION_LOGGED, _TOOL_RULES_VERSION
     with _LOCK:
-        _WRAPPED_CLIENTS = 0
         _DECORATED_TOOLS = 0
         _TOOL_CALLS = 0
         _KEYED_SESSIONS = 0
-        _GUARDED_CALLS = 0
-        _LAST_GUARDED_AT = None
-        _SHAPES_SEEN.clear()
         _DECORATED_TOOL_NAMES.clear()
         _TOOLS.clear()
         _TOOL_RULES.clear()
-        _CAN_STOP_WARNED = False
         # Bumped, never zeroed: an engine that outlives this call must not
         # find its cache key matching a registry that has just been emptied.
         _TOOL_RULES_VERSION += 1

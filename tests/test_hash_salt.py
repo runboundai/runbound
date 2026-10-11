@@ -3,7 +3,7 @@
 ``_args_hash`` mixes a per-process random salt into every digest, generated
 once at import (``secrets.token_bytes(16)``) and kept across :func:`reset`.
 The digest stays an equality token good for spotting a repeat *inside this
-process* — the loop detector's whole job — and stops being a stable
+process* — and stops being a stable
 fingerprint of the arguments across processes: two processes salt
 differently, and nobody who only sees a digest can compute or recognize it
 from the raw arguments.
@@ -83,7 +83,7 @@ def test_init_keeps_the_same_salt_too():
 
     salt_before = api._HASH_SALT
     runbound.init()
-    runbound.init(max_steps=5)
+    runbound.init(max_actions_per_run=5)
 
     assert api._HASH_SALT is salt_before
 

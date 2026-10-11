@@ -15,9 +15,8 @@ have not heard from it in a while":
 ``consecutive_failures`` / ``last_success``
     What a caller degrades on. Reset on every success.
 
-Timeouts are per call and deliberately uneven: the entry decision sits in the
-hot path of a session and gets ``timeout_s`` (150 ms by default), while the
-background calls — hello, event batches, policy — can afford to wait.
+Timeouts are per call: hello, event batches and policy are all background
+calls, none on a tool's hot path.
 
 Only the standard library is used: ``urllib.request`` for the transport and
 one daemon :class:`Poller` thread for the heartbeat.
@@ -25,6 +24,7 @@ one daemon :class:`Poller` thread for the heartbeat.
 
 import json
 import logging
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -34,22 +34,17 @@ from urllib.request import Request, urlopen
 
 from .plane_types import (
     FLEET_STATE_UNAVAILABLE_CAUSE,
-    EntryDecision,
     HelloReply,
     PlaneUnavailable,
-    TripReport,
     from_wire,
-    to_wire,
 )
 
 _LOG = logging.getLogger("runbound")
 
-#: Per-call timeouts, in seconds. ``enter`` uses the instance's ``timeout_s``.
+#: Per-call timeouts, in seconds.
 HELLO_TIMEOUT_S = 2.0
 EVENTS_TIMEOUT_S = 5.0
 POLICY_TIMEOUT_S = 2.0
-CONTROLS_TIMEOUT_S = 2.0
-CLEAR_TIMEOUT_S = 0.5
 
 #: At most one warning per this many seconds, per client, per kind of problem.
 WARN_INTERVAL_S = 60.0
@@ -126,7 +121,6 @@ class PlaneClient:
         api_key: str | None,
         service: str,
         worker_id: str,
-        timeout_s: float = 0.15,
         now: Callable[[], float] = time.monotonic,
         sdk_version: str | None = None,
     ) -> None:
@@ -134,7 +128,6 @@ class PlaneClient:
         self.api_key = api_key or ""
         self.service = service
         self.worker_id = worker_id
-        self.timeout_s = timeout_s
         self.key_state = "unknown"
         self.consecutive_failures = 0
         self.last_success: float | None = None
@@ -165,49 +158,6 @@ class PlaneClient:
         data, _kind = self._call("POST", "/v1/hello", payload, HELLO_TIMEOUT_S)
         return self._parse(HelloReply, data)
 
-    def enter(self, payload: dict) -> EntryDecision | None:
-        """Ask whether a session may start. ``None`` means "decide locally".
-
-        See :meth:`enter_with_kind` for a caller that also needs to know
-        *why*, without racing :attr:`last_failure_kind`.
-        """
-        decision, _kind = self.enter_with_kind(payload)
-        return decision
-
-    def enter_with_kind(self, payload: dict) -> tuple[EntryDecision | None, str | None]:
-        """Like :meth:`enter`, but also returns *this call's own* failure
-        kind -- ``None`` on success, else one of :attr:`last_failure_kind`'s
-        values.
-
-        :attr:`last_failure_kind` is whole-client state: any call on this
-        client can set or clear it, including one running concurrently on
-        another thread (the heartbeat, in practice). Reading it back after
-        this call returns is a race a concurrent success can win, clearing
-        it (or overwriting it with an unrelated kind) before the read -- a
-        real state outage's own run surfaced exactly this, misreading a
-        plane-loss 503 as a timeout about one call in thirty. This method
-        captures the kind synchronously, in this call's own stack, so
-        :meth:`~runbound.shared.RemoteState.enter` (its only caller that
-        needs the specific reason) never has to read it back at all.
-        """
-        data, kind = self._call("POST", "/v1/enter", payload, self.timeout_s)
-        if data is None:
-            return None, kind
-        decision = self._parse(EntryDecision, data)
-        if decision is None:
-            return None, "error"
-        return decision, None
-
-    def trip(self, report: TripReport) -> bool:
-        """Report a trip to the fleet. ``False`` if it did not get through."""
-        try:
-            body = to_wire(report)
-        except Exception:
-            self._failed("/v1/trip", exc_info=True)
-            return False
-        data, _kind = self._call("POST", "/v1/trip", body, self.timeout_s)
-        return data is not None
-
     def events(self, batch: dict) -> bool:
         """Ship one batch of telemetry. ``False`` if it did not get through."""
         data, _kind = self._call("POST", "/v1/events", batch, EVENTS_TIMEOUT_S)
@@ -219,21 +169,31 @@ class PlaneClient:
         data, _kind = self._call("GET", path, None, POLICY_TIMEOUT_S)
         return data
 
-    def controls(self, service: str) -> dict | None:
-        """Fetch the Controls envelope for ``service``. ``None`` on
-        failure. The reply is ``{"version", "dry_run", "controls"}``,
-        exactly :meth:`policy`'s own shape."""
-        path = "/v1/controls?" + urlencode({"service": service})
-        data, _kind = self._call("GET", path, None, CONTROLS_TIMEOUT_S)
-        return data
+    def approvals(self, method: str, path: str, body: dict | None = None, timeout: float = 5.0) -> tuple:
+        """One call to the approval routes: ``(HTTP status, decoded body)``.
 
-    def clear(self, key_hash: str) -> int | None:
-        """Clear a key's fleet state; returns how many latches were cleared."""
-        data, _kind = self._call("POST", "/v1/clear", {"key_hash": key_hash}, CLEAR_TIMEOUT_S)
-        if data is None:
-            return None
-        cleared = data.get("cleared", 0)
-        return cleared if isinstance(cleared, int) else 0
+        ``(None, None)`` for a transport failure or a rejected key (the caller retries until
+        its own deadline and never reads that as a denial). Unlike the heartbeat's calls, an
+        HTTP error status is returned, not swallowed: 409 and 403 mean something here.
+        """
+        if self.key_state == "invalid":
+            return None, None
+        try:
+            request = self._request(method, path, body)
+            with urlopen(request, timeout=timeout) as response:
+                raw = response.read()
+            self._succeeded()
+            return response.status, (json.loads(raw) if raw and raw.strip() else {})
+        except HTTPError as error:
+            if getattr(error, "code", None) in REJECTED_STATUSES:
+                self._rejected()
+                return error.code, None
+            try:
+                return error.code, json.loads(error.read() or b"{}")
+            except Exception:
+                return error.code, None
+        except Exception:
+            return None, None
 
     def reset_key(self) -> None:
         """Forget a rejection so the next call tries the network again."""
@@ -425,8 +385,10 @@ class Poller(threading.Thread):
         poll_s: float,
         on_reply: Callable[[HelloReply], None],
         payload_fn: Callable[[], dict],
+        on_miss: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(daemon=True, name="runbound-plane-poller")
+        self._on_miss = on_miss
         self._client = client
         self._poll_s = max(float(poll_s), 0.0)
         self._on_reply = on_reply
@@ -434,10 +396,16 @@ class Poller(threading.Thread):
         self._stopped = threading.Event()
         self._warning = _PeriodicWarning(WARN_INTERVAL_S, time.monotonic)
 
+    def set_interval(self, poll_s: float) -> None:
+        """Honor the plane's ``HelloReply.poll_s``: the next wait uses it."""
+        self._poll_s = max(float(poll_s), 0.0)
+
     def run(self) -> None:
         while not self._stopped.is_set():
             self._tick()
-            if self._stopped.wait(self._poll_s):
+            # ±10% jitter on every wait, so a fleet does not say hello in lockstep after a plane restart;
+            # hellos go on at the same pace whatever state the link is in (no separate probe).
+            if self._stopped.wait(self._poll_s * random.uniform(0.9, 1.1)):
                 return
 
     def _tick(self) -> None:
@@ -446,7 +414,11 @@ class Poller(threading.Thread):
             reply = self._client.hello(self._payload_fn())
             if reply is not None:
                 self._on_reply(reply)
+            elif self._on_miss is not None:
+                self._on_miss()
         except Exception:
+            if self._on_miss is not None:
+                self._on_miss()
             warn_periodically(
                 self._warning, "runbound: control plane poll failed", exc_info=True
             )

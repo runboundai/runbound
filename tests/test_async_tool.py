@@ -13,24 +13,26 @@ import pytest
 
 import runbound
 from runbound import api
-from runbound.events import Event
+from runbound.events import Anomaly, Event
 from runbound.exceptions import GuardrailTripped
 
 
 class EventRecorder:
-    """A detector that records every event the engine hands it."""
-
-    name = "recorder"
+    """An observer that records every event the engine hands it."""
 
     def __init__(self, order: list | None = None) -> None:
         self.events: list[Event] = []
         self.order = order
 
-    def check(self, state, event, config):
+    def on_event(self, session, event) -> None:
+        if event.kind == "tool_result":  # the call-side events are what these tests are about
+            return
         self.events.append(event)
         if self.order is not None:
             self.order.append(f"event:{event.kind}")
-        return None
+
+    def on_anomaly(self, session, anomaly, reacted) -> None:
+        pass
 
 
 @pytest.fixture(autouse=True)
@@ -42,7 +44,7 @@ def _uninitialized():
 
 def recorder(order: list | None = None) -> EventRecorder:
     spy = EventRecorder(order)
-    api._ENGINE.detectors.insert(0, spy)
+    api._ENGINE.observers.append(spy)
     return spy
 
 
@@ -57,7 +59,7 @@ def test_decorated_async_function_is_still_a_coroutine_function():
         return url
 
     assert inspect.iscoroutinefunction(fetch)
-    assert asyncio.iscoroutinefunction(fetch)
+    assert inspect.iscoroutinefunction(fetch)
     assert fetch.__name__ == "fetch"
     assert asyncio.run(fetch("https://example.test")) == "https://example.test"
 
@@ -107,11 +109,11 @@ def test_tool_call_event_is_emitted_before_the_body_is_awaited():
     assert order == ["event:tool_call", "body", "body-done"]
 
 
-def test_loop_trips_before_the_third_async_body_runs():
-    runbound.init(loop_threshold=3, on_anomaly="raise", on_loop="break")
+def test_a_refused_async_call_never_runs_its_body():
+    runbound.init()
     calls: list[str] = []
 
-    @runbound.tool
+    @runbound.tool(max_calls=2)
     async def search(query):
         calls.append(query)
         await asyncio.sleep(0)
@@ -126,7 +128,7 @@ def test_loop_trips_before_the_third_async_body_runs():
 
     tripped = asyncio.run(drive())
 
-    assert tripped.anomaly.detector == "loop"
+    assert tripped.anomaly.detector == "policy"
     assert calls == ["cats", "cats"]  # the tripping call never ran the tool
 
 
@@ -177,21 +179,21 @@ def test_a_cancelled_async_tool_is_recorded_and_stays_cancelled():
 
 
 def test_a_trip_while_recording_an_async_failure_keeps_the_tools_exception():
-    """The tool's own error is the one the caller needs, not GuardrailTripped."""
-    runbound.init(max_steps=2, on_anomaly="raise")
+    """The tool's own error is the one the caller needs, not GuardrailTripped.
 
-    @runbound.tool
-    async def ping():
-        return "pong"
+    The tool_error event is recorded after the call was admitted; a latch that
+    appeared in between must not replace the tool's exception.
+    """
+    runbound.init()
 
     @runbound.tool
     async def broken():
+        runbound.current_session().tripped_by = Anomaly("policy", "critical", "latched", {})
         raise ValueError("kaboom")
 
     async def drive():
-        await ping()  # step 1
         with pytest.raises(ValueError, match="kaboom"):
-            await broken()  # tool_call step 2, tool_error step 3 -> over the limit
+            await broken()
 
     asyncio.run(drive())
 
@@ -200,10 +202,10 @@ def test_a_trip_while_recording_an_async_failure_keeps_the_tools_exception():
 
 
 def test_sync_tools_still_trip_before_the_body_runs():
-    runbound.init(loop_threshold=3, on_anomaly="raise", on_loop="break")
+    runbound.init()
     calls: list[str] = []
 
-    @runbound.tool
+    @runbound.tool(max_calls=2)
     def search(query):
         calls.append(query)
         return "ok"

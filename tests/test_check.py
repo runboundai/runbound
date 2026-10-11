@@ -40,7 +40,7 @@ def script(tmp_path, body: str, name: str = "agent.py") -> str:
 
 GUARDED = """
     import runbound
-    runbound.init(budget_usd=5.0, max_steps=50, on_anomaly="raise")
+    runbound.init(max_actions_per_run=50)
 
     @runbound.tool(effects={"financial"})
     def issue_refund(user, amount):
@@ -50,7 +50,7 @@ GUARDED = """
     def lookup_order(order):
         return "o-1"
 
-    runbound.record_call("gpt-4o", 100, 50)
+    lookup_order("o-1")
 """
 NOTHING = "x = 1\n"
 
@@ -115,33 +115,36 @@ def test_main_guarded_code_is_not_run_so_a_server_loop_never_starts(tmp_path):
 # --- what it says -----------------------------------------------------------------------------------------------
 
 
-def test_the_text_report_names_clients_tools_with_classes_plane_posture_budgets_and_events(tmp_path):
+def test_the_text_report_names_tools_with_classes_plane_limits_and_events(tmp_path):
     out = run_cli([script(tmp_path, GUARDED)]).stdout
-    for needle in ("issue_refund", "financial", "lookup_order", "read", "posture", "full", "budget", "$5", "max_steps",
-                   "local", "guarded calls", "Last events"):
+    for needle in ("issue_refund", "financial", "lookup_order", "read", "limits in force", "max_actions_per_run", "50",
+                   "local", "tool calls seen", "Last events"):
         assert needle.lower() in out.lower(), (needle, out)
 
 
 def test_json_has_a_stable_documented_shape(tmp_path):
     report = json.loads(run_cli(["--json", script(tmp_path, GUARDED)]).stdout)
     assert report["schema"] == 1
-    assert set(report) == {"schema", "runbound", "python", "guarded", "initialized", "clients", "tools", "plane", "posture",
-                           "budgets", "guarded_calls", "tool_calls_seen", "events"}
-    assert report["guarded"] is True and report["posture"] == "full" and report["guarded_calls"] == 1
+    assert set(report) == {"schema", "runbound", "python", "guarded", "initialized", "tools", "plane", "limits",
+                           "tool_calls_seen", "events"}
+    assert report["guarded"] is True and report["tool_calls_seen"] == 1
     assert {t["name"]: t["classes"] for t in report["tools"]} == {"issue_refund": ["financial"], "lookup_order": ["read"]}
-    assert set(report["clients"]) == {"wrapped_clients", "auto_wrapped", "providers_imported", "providers_unguarded"}
     assert set(report["plane"]) == {"mode", "url", "detail"} and report["plane"]["mode"] == "local"
-    assert report["budgets"] == {"budget_usd": 5.0, "max_steps": 50}
+    assert report["limits"] == {"max_actions_per_run": 50}
     assert isinstance(report["events"], list)
 
 
 def test_the_last_ten_events_each_with_kind_time_and_a_short_line(tmp_path):
     body = """
         import runbound
-        runbound.init(on_anomaly="raise", budget_usd=0.01)
+        runbound.init(tool_policy=runbound.ToolPolicy(deny=["wire"]))
+
+        @runbound.tool
+        def wire(account): ...
+
         for _ in range(12):
             try:
-                runbound.record_call("gpt-4o", 1_000_000, 1_000_000)
+                wire("acct-1")
             except runbound.ExecutionRefused:
                 pass
     """
@@ -149,7 +152,7 @@ def test_the_last_ten_events_each_with_kind_time_and_a_short_line(tmp_path):
     assert 0 < len(report["events"]) <= 10
     for event in report["events"]:
         assert set(event) == {"kind", "ts", "line"} and event["kind"] and event["line"] and isinstance(event["ts"], (int, float))
-    assert any("budget" in e["line"].lower() for e in report["events"])
+    assert any("policy" in e["line"].lower() for e in report["events"])
 
 
 def test_a_process_with_no_init_says_what_to_do(tmp_path):
@@ -178,7 +181,7 @@ def test_no_network_is_touched_without_a_token(tmp_path, monkeypatch):
 
 def test_the_report_itself_never_calls_the_plane(monkeypatch):
     """Even in a process connected to a plane, building the report only reads status: it never asks the plane."""
-    runbound.init(on_anomaly="raise")
+    runbound.init()
     calls = []
     monkeypatch.setattr(api._SHARED, "pending_events", lambda: calls.append("pending") or 0, raising=False)
     report = _check.build_report()
@@ -193,7 +196,7 @@ def test_the_plane_line_never_prints_a_key(tmp_path, monkeypatch):
     monkeypatch.setattr(socket, "create_connection", blocked)
     target = script(tmp_path, f"""
         import runbound
-        runbound.init(control_plane_url="http://127.0.0.1:9", token="{CANARY}", on_anomaly="raise")
+        runbound.init(control_plane_url="http://127.0.0.1:9", token="{CANARY}")
         @runbound.tool(effects={{"read"}})
         def look(x): ...
     """)
@@ -211,7 +214,7 @@ def test_the_plane_line_never_prints_a_key(tmp_path, monkeypatch):
 
 
 def test_runbound_check_called_in_process_prints_and_returns_the_report(capsys):
-    runbound.init(on_anomaly="raise")
+    runbound.init()
 
     @runbound.tool(effects={"write"})
     def book(slot): ...
@@ -232,7 +235,7 @@ def test_runbound_check_before_init_reports_not_guarded_and_never_raises():
 
 SELF_CHECKING = """
     import runbound
-    runbound.init(budget_usd=5.0, max_steps=50, on_anomaly="raise")
+    runbound.init(max_actions_per_run=50)
 
     @runbound.tool(effects={"read"})  # guarded without any provider SDK installed (CI's test job has none)
     def look(order_id): ...
@@ -261,7 +264,7 @@ def test_text_on_a_target_that_calls_check_itself_prints_the_report_exactly_once
 
 
 def test_the_in_process_call_still_prints_when_no_cli_is_loading_anything(capsys):
-    runbound.init(budget_usd=1.0)
+    runbound.init(max_actions_per_run=5)
     runbound.check()
     assert capsys.readouterr().out != ""
     assert _check._LOADING is False

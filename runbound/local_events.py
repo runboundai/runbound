@@ -1,6 +1,6 @@
 """Local, in-process telemetry ("local telemetry is free"): an
 in-memory ring of this process's own
-anomalies, refusals, posture transitions and Decisions, read back by
+anomalies, refusals and Decisions, read back by
 :func:`runbound.events` and :func:`runbound.decisions`.
 
 Nothing here is written to disk, nothing leaves the process on its own
@@ -13,7 +13,7 @@ event log charges for: durable centralized records, timelines, export.
 
 Two rings, one clock (:func:`time.time`, wall time — these are for a human
 or a dashboard to read, never for rate/window logic): ``_EVENTS`` holds
-anomalies, refusals, posture transitions and runtime changes (a model,
+anomalies, refusals and runtime changes (a model,
 provider, policy version or Controls version this process runs on moving
 from one value to another); ``_DECISIONS`` holds
 :class:`~runbound.events.Decision` bodies. Both are process-lifetime, like
@@ -22,8 +22,8 @@ from one value to another); ``_DECISIONS`` holds
 does (through :func:`clear_for_tests`).
 
 Besides the ``on_event=`` callback, in-process listeners can register as
-*sinks* (:func:`add_sink`): the exporter is one, and it is how a posture
-change or a runtime change reaches a connected control plane. Every sink
+*sinks* (:func:`add_sink`): the exporter is one, and it is how a
+runtime change reaches a connected control plane. Every sink
 is fail-open, exactly like the callback.
 """
 
@@ -70,12 +70,12 @@ class _Ring:
 
 _EVENTS = _Ring()
 _DECISIONS = _Ring()
+#: ``tool_result`` records: one per tool call, so a ring of their own, or they would push every
+#: refusal out of ``_EVENTS``. Read by :func:`tool_results`.
+_RESULTS = _Ring()
 _LOCK = threading.Lock()
 _ON_EVENT: "Callable[[dict], None] | None" = None
 _SINKS: "list[Callable[[dict], None]]" = []
-#: Listeners for :func:`record_call` only. Kept apart from ``_SINKS`` so the records every sink hears stay what they have
-#: always been (anomalies, refusals, posture and runtime changes, Decisions); a call is far more frequent than any of them.
-_CALL_SINKS: "list[Callable[[dict], None]]" = []
 #: The last value seen per runtime ``what`` ("model", "provider",
 #: "policy_version", ...), for :func:`note_runtime_value`.
 _LAST_VALUES: dict = {}
@@ -111,29 +111,15 @@ def remove_sink(sink: "Callable[[dict], None]") -> None:
             _SINKS.remove(sink)
 
 
-def add_call_sink(sink: "Callable[[dict], None]") -> None:
-    """Tell ``sink`` about every guarded model call from now on (see :func:`record_call`). Registering twice registers once."""
-    with _LOCK:
-        if sink not in _CALL_SINKS:
-            _CALL_SINKS.append(sink)
-
-
-def remove_call_sink(sink: "Callable[[dict], None]") -> None:
-    """Stop telling ``sink`` about calls. Removing one that is not registered is a no-op."""
-    with _LOCK:
-        if sink in _CALL_SINKS:
-            _CALL_SINKS.remove(sink)
-
-
 def clear_for_tests() -> None:
     """Wipe both rings, the callback, the sinks and every last runtime
     value. Test isolation only."""
     _EVENTS.clear()
     _DECISIONS.clear()
+    _RESULTS.clear()
     configure(None)
     with _LOCK:
         _SINKS.clear()
-        _CALL_SINKS.clear()
         _LAST_VALUES.clear()
 
 
@@ -171,11 +157,8 @@ def record_anomaly(
     stopped *this* call — ``reacted`` is ``"raise"`` (a wall trip) or
     ``"door"`` (one of the envelope's own door stages), the two
     values :meth:`~runbound.engine.Engine.refuse` ever passes in. A
-    ``"blocked"`` circuit transition is real news but not a refusal of the
-    call that is reporting it (the call already went out); the circuit's
-    own admission refusal (:meth:`~runbound.engine.Engine._admit_circuit`)
-    raises directly and is deliberately outside :meth:`refuse`, per its own
-    docstring."""
+    ``"blocked"`` transition is real news but not a refusal of the
+    call that is reporting it (the call already went out)."""
     details = dict(getattr(anomaly, "details", None) or {})
     record = {
         "kind": "anomaly",
@@ -189,7 +172,7 @@ def record_anomaly(
     }
     _EVENTS.append(record)
     _dispatch(record, key)
-    if reacted in ("raise", "door"):
+    if reacted in ("raise", "door", "blocked"):
         refusal = dict(record)
         refusal["kind"] = "refusal"
         _EVENTS.append(refusal)
@@ -202,71 +185,27 @@ def record_anomaly(
         _dispatch({"kind": "decision", **stamped}, key)
 
 
-def record_posture(
-    source: str,
-    posture: str,
-    reason: object,
-    session_id: "str | None" = None,
-    *,
-    previous: "str | None" = None,
-    scope: str = "process",
-    level: "str | None" = None,
-    key: "str | None" = None,
-) -> None:
-    """Append one posture transition — a manual or automatic narrowing or
-    lift, process- or session-scoped.
-
-    ``previous`` is the posture this one replaced (``"full"`` when nothing
-    was narrowed), ``scope`` is ``"process"`` or ``"session"``, ``level`` is
-    the ladder rung's name when the ladder moved it, and ``key`` the
-    session's key. The key is this process's own and stays raw here; only
-    its hash ever leaves the process (see the exporter).
-    """
+def record_result(session_id: "str | None", key: "str | None", event: Any) -> None:
+    """Append one ``tool_result`` (how a tool call ended) to its own ring, and tell ``on_event``
+    and the sinks. The record says how long, how it ended and what the post chain did; it never
+    carries the result or an argument."""
     record = {
-        "kind": "posture",
+        "kind": "tool_result",
         "at": time.time(),
         "session_id": session_id,
-        "source": source,
-        "posture": posture,
-        "from": previous or "full",
-        "scope": scope,
-        "level": level,
-        "reason": reason if isinstance(reason, str) else str(reason),
+        "tool": event.tool_name,
+        "outcome": event.outcome,
+        "duration_s": event.duration_s,
+        "flags": list(event.flags),
+        "flag_score": event.flag_score,
+        "flagged": event.flagged,
+        "tags": list(event.tags),
+        "truncated": event.truncated,
+        "result_chars": event.result_chars,
+        "result_chars_out": event.result_chars_out,
     }
-    if key is not None:
-        record["key"] = key
-    _EVENTS.append(record)
-    _dispatch(record)
-
-
-def record_call(model: "str | None", provider: "str | None", cost_usd: "float | None", outcome: str,
-                priced: "str | None" = None) -> None:
-    """Tell the call sinks (:func:`add_call_sink`) about one guarded model call, and nothing else.
-
-    A ``"call"`` record goes to call sinks only: not to the rings or ``on_event`` (they hold what happened *to* a call, not the
-    calls: :func:`runbound.events` is unchanged) and not to :func:`add_sink` sinks. It returns at once when none is registered. ``outcome`` is ``"ok"`` or
-    ``"error"``; ``cost_usd`` is the SDK's own estimate for a call it priced (``None`` when it did not, or for a failed call),
-    ``priced`` is ``"estimated"`` when that figure came from a fallback price. A model name and an endpoint label, numbers and
-    names: never a prompt, a reply or an argument.
-    """
-    if not _CALL_SINKS:
-        return
-    with _LOCK:
-        sinks = list(_CALL_SINKS)
-    record = {
-        "kind": "call",
-        "at": time.time(),
-        "model": model,
-        "provider": provider,
-        "cost_usd": cost_usd,
-        "outcome": outcome,
-        "priced": priced,
-    }
-    for sink in sinks:
-        try:
-            sink(dict(record))
-        except Exception:
-            _LOG.warning("runbound: a call sink raised; ignoring", exc_info=True)
+    _RESULTS.append(record)
+    _dispatch(record, key)
 
 
 def record_runtime_change(what: str, previous: object, current: object) -> None:
@@ -282,6 +221,20 @@ def record_runtime_change(what: str, previous: object, current: object) -> None:
         "what": what,
         "from": previous,
         "to": current,
+    }
+    _EVENTS.append(record)
+    _dispatch(record)
+
+
+def record_plane_degraded(previous: "str | None", current: "str | None") -> None:
+    """Append one ``"plane_degraded"``: what the plane says is wrong with itself moved from ``previous`` to ``current``
+    (``None`` is "nothing"; ``current is None`` is the plane saying it recovered). Local only: it is not exported."""
+    record = {
+        "kind": "plane_degraded",
+        "at": time.time(),
+        "from": previous,
+        "to": current,
+        "cleared": current is None,
     }
     _EVENTS.append(record)
     _dispatch(record)
@@ -309,10 +262,15 @@ def note_runtime_value(what: str, value: object) -> bool:
 
 
 def events(n: int = 100) -> list:
-    """The trailing ``n`` anomalies, refusals, posture transitions and
-    runtime changes, in the order they happened (oldest of the ``n``
+    """The trailing ``n`` anomalies, refusals, runtime changes and
+    ``plane_degraded`` transitions, in the order they happened (oldest of the ``n``
     first)."""
     return _EVENTS.tail(n)
+
+
+def tool_results(n: int = 100) -> list:
+    """The trailing ``n`` ``tool_result`` records, oldest of the ``n`` first."""
+    return _RESULTS.tail(n)
 
 
 def decisions(n: int = 100) -> list:

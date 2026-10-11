@@ -1,28 +1,20 @@
 """Tests for keyed sessions: the registry, the context var, and the state and
-config plumbing they rest on (Event timing fields, per-session step counters,
-recent_calls, spike configuration).
+config plumbing they rest on (Event timing fields, per-session step counters).
 """
 
 import asyncio
 import dataclasses
 import logging
 import threading
-import time
 
 import pytest
 
 import runbound
-from runbound import api, controls_merge
-from runbound import shared as shared_module
-from runbound.config import GuardrailConfig
+from runbound import api
+from runbound.config import RunboundConfig
 from runbound.events import Event
-from runbound.exceptions import GuardrailTripped
-from runbound.plane_types import HelloReply
+from runbound.exceptions import GuardrailTripped, PolicyViolation
 from runbound.state import SessionState
-from spike_test_helpers import spike_controls_body
-from test_shared_state import FakePlane
-
-PLANE_URL = "https://plane.example"
 
 
 @pytest.fixture(autouse=True)
@@ -33,121 +25,48 @@ def _uninitialized():
     api._teardown_for_tests()
 
 
-def llm_event(step: int, **fields) -> Event:
-    fields.setdefault("tokens_out", 0)
-    return Event(kind="llm_call", ts=time.monotonic(), step=step, **fields)
+@runbound.tool
+def ping(n=0):
+    return n
 
 
 # --- Event ------------------------------------------------------------------
 
 
 def test_event_timing_fields_default_to_zero():
-    event = Event(kind="llm_call", ts=1.0, step=1)
+    event = Event(kind="tool_call", ts=1.0, step=1)
 
     assert event.duration_s == 0.0
     assert event.tokens_reasoning == 0
 
 
 def test_event_timing_fields_are_carried_and_frozen():
-    event = Event(kind="llm_call", ts=1.0, step=1, duration_s=2.5, tokens_reasoning=7)
+    event = Event(kind="tool_call", ts=1.0, step=1, duration_s=2.5, tokens_reasoning=7)
 
     assert (event.duration_s, event.tokens_reasoning) == (2.5, 7)
     with pytest.raises(dataclasses.FrozenInstanceError):
         event.duration_s = 3.0
 
 
-# --- GuardrailConfig --------------------------------------------------------
+# --- RunboundConfig --------------------------------------------------------
 
 
-def test_spike_config_defaults():
-    """The eleven spike_*/on_spike fields are real, local
-    GuardrailConfig fields, and
-    spike_detection defaults True. controls_merge._parse_spike's own
-    defaults (read off an empty, nothing-stated plane bundle) still agree
-    with them -- see effective_spike's own docstring for why they must.
-    The per-call hard ceilings and max_sessions stay plain, free
-    GuardrailConfig fields, unaffected by any of this."""
-    cfg = GuardrailConfig()
-    bundle = controls_merge._parse_spike({})
-
-    assert cfg.spike_detection is True
-    assert controls_merge.effective_spike_enabled(cfg.spike_detection, None, stated=False)[0] is True
-    assert bundle["warmup_calls"] == 4
-    assert bundle["window"] == 50
-    assert bundle["factor"] == 10.0
-    assert bundle["confirm"] == 2
-    assert cfg.max_call_seconds is None
-    assert cfg.max_tokens_out_per_call is None
-    assert cfg.max_sessions == 10_000
-
-
-def test_spike_defaults_validate():
-    GuardrailConfig().validate()
-
-
-@pytest.mark.parametrize("warmup", [1, 0, -1])
-def test_warmup_below_two_is_rejected(warmup):
-    assert controls_merge._parse_spike({"warmup_calls": warmup, "window": 50}) is None
-
-
-def test_warmup_of_two_is_valid():
-    assert controls_merge._parse_spike({"warmup_calls": 2, "window": 3}) is not None
-
-
-@pytest.mark.parametrize("window", [10, 9])
-def test_window_not_above_warmup_is_rejected(window):
-    assert controls_merge._parse_spike({"warmup_calls": 10, "window": window}) is None
-
-
-def test_window_one_above_warmup_is_valid():
-    assert controls_merge._parse_spike({"warmup_calls": 10, "window": 11}) is not None
-
-
-@pytest.mark.parametrize("factor", [1.0, 0.5, 0.0, -2.0])
-def test_factor_not_above_one_is_rejected(factor):
-    assert controls_merge._parse_spike({"factor": factor}) is None
-
-
-def test_factor_just_above_one_is_valid():
-    assert controls_merge._parse_spike({"factor": 1.01}) is not None
-
-
-@pytest.mark.parametrize("confirm", [0, -1, 6, 50])
-def test_confirm_outside_one_to_five_is_rejected(confirm):
-    assert controls_merge._parse_spike({"confirm": confirm}) is None
-
-
-@pytest.mark.parametrize("confirm", [1, 5])
-def test_confirm_at_the_boundaries_is_valid(confirm):
-    assert controls_merge._parse_spike({"confirm": confirm}) is not None
-
-
-@pytest.mark.parametrize("field", ["max_call_seconds", "max_tokens_out_per_call"])
-@pytest.mark.parametrize("value", [0, -1])
-def test_non_positive_call_caps_raise(field, value):
-    with pytest.raises(ValueError):
-        GuardrailConfig(**{field: value}).validate()
-
-
-@pytest.mark.parametrize("field", ["max_call_seconds", "max_tokens_out_per_call"])
-def test_call_caps_are_optional_and_accept_the_smallest_positive(field):
-    GuardrailConfig(**{field: None}).validate()
-    GuardrailConfig(**{field: 1}).validate()
+def test_max_sessions_defaults_to_ten_thousand():
+    assert RunboundConfig().max_sessions == 10_000
 
 
 @pytest.mark.parametrize("value", [0, -1])
 def test_max_sessions_below_one_raises(value):
     with pytest.raises(ValueError):
-        GuardrailConfig(max_sessions=value).validate()
+        RunboundConfig(max_sessions=value).validate()
 
 
 def test_max_sessions_of_one_is_valid():
-    GuardrailConfig(max_sessions=1).validate()
+    RunboundConfig(max_sessions=1).validate()
 
 
-def test_init_accepts_the_new_options():
-    """``max_sessions`` is a plain, free ``GuardrailConfig`` keyword,
-    independent of the plane."""
+def test_init_accepts_max_sessions():
+    """``max_sessions`` is a plain ``RunboundConfig`` keyword, independent of the plane."""
     runbound.init(max_sessions=5)
 
     assert api._ENGINE.config.max_sessions == 5
@@ -175,46 +94,6 @@ def test_tags_default_is_not_shared_between_instances():
     a.tags["x"] = 1
 
     assert b.tags == {}
-
-
-def test_recent_calls_starts_empty_with_spike_window_maxlen():
-    assert SessionState("s").recent_calls.maxlen == 50
-    assert list(SessionState("s").recent_calls) == []
-    assert SessionState("s", spike_window=5).recent_calls.maxlen == 5
-
-
-def test_record_appends_llm_calls_with_output_work():
-    state = SessionState("s")
-    state.record(
-        llm_event(step=1, duration_s=1.5, tokens_out=100, tokens_reasoning=400, cost_usd=0.25)
-    )
-
-    # tokens_out already includes reasoning per provider semantics; the
-    # separate tokens_reasoning field must not be double-counted here.
-    assert list(state.recent_calls) == [(1.5, 100, 0.25)]
-
-
-def test_record_appends_only_llm_calls():
-    state = SessionState("s")
-    state.record(Event(kind="tool_call", ts=1.0, step=1, tool_name="t", args_hash="h"))
-    state.record(Event(kind="tool_error", ts=1.0, step=2, tool_name="t", error="x"))
-
-    assert list(state.recent_calls) == []
-
-
-def test_recent_calls_evicts_oldest_beyond_the_window():
-    state = SessionState("s", spike_window=3)
-    for i in range(5):
-        state.record(llm_event(step=i + 1, duration_s=float(i), tokens_out=i))
-
-    assert [work for _, work, _ in state.recent_calls] == [2, 3, 4]
-
-
-def test_zero_token_llm_call_is_still_recorded():
-    state = SessionState("s")
-    state.record(llm_event(step=1))
-
-    assert list(state.recent_calls) == [(0.0, 0, 0.0)]
 
 
 def test_next_step_counts_from_one_per_session():
@@ -270,18 +149,35 @@ def test_session_without_tags_gets_an_empty_dict():
         assert state.tags == {}
 
 
+def test_a_keyed_session_id_is_derived_from_the_key():
+    """Every worker running the same code derives the same id for the same key."""
+    runbound.init()
+
+    with api.session("user-42") as first:
+        pass
+    api._REGISTRY.clear()
+    with api.session("user-42") as second:
+        pass
+
+    assert second is not first
+    assert second.session_id == first.session_id
+    assert first.session_id.endswith("-0")
+    with api.session("user-43") as other:
+        pass
+    assert other.session_id != first.session_id
+
+
 def test_same_key_returns_the_same_state_and_accumulates():
     runbound.init()
 
     with api.session("k") as first:
-        api._record_llm_call("m", 10, 5)
+        ping()
     with api.session("k") as second:
-        api._record_llm_call("m", 10, 5)
+        ping()
 
     assert second is first
-    assert first.step_count == 2
-    assert first.total_tokens == 30
-    assert len(first.recent_calls) == 2
+    assert first.event_count == 2
+    assert first.tool_calls == {"ping": 2}
 
 
 def test_reused_key_merges_newly_supplied_tags():
@@ -302,40 +198,39 @@ def test_different_keys_are_isolated():
     runbound.init()
 
     with api.session("a") as a:
-        api._record_llm_call("m", 10, 5)
+        ping()
     with api.session("b") as b:
-        api._record_llm_call("m", 100, 50)
+        ping()
+        ping()
 
     assert a is not b
     assert a.session_id != b.session_id
-    assert (a.step_count, a.total_tokens) == (1, 15)
-    assert (b.step_count, b.total_tokens) == (1, 150)
+    assert (a.event_count, a.tool_calls) == (1, {"ping": 1})
+    assert (b.event_count, b.tool_calls) == (2, {"ping": 2})
 
 
-def test_a_budget_trip_in_one_key_leaves_the_others_running():
-    runbound.init(
-        budget_usd=1.5,
-        on_anomaly="raise",
-        custom_prices={"m": (1000.0, 0.0)},  # $1 per 1000 input tokens
-    )
+def test_a_max_calls_refusal_in_one_key_leaves_the_others_running():
+    runbound.init()
 
-    with api.session("cheap") as cheap:
-        api._record_llm_call("m", 100, 0)  # $0.10
+    @runbound.tool(max_calls=2)
+    def limited():
+        return "ok"
 
     with api.session("greedy"):
-        api._record_llm_call("m", 1000, 0)  # $1.00, under budget
-        with pytest.raises(GuardrailTripped) as caught:
-            api._record_llm_call("m", 1000, 0)  # $2.00 total, trips
+        limited()
+        limited()
+        with pytest.raises(PolicyViolation) as caught:
+            limited()  # the third attempt, over the limit of 2
 
-    assert caught.value.anomaly.detector == "budget"
+    assert caught.value.anomaly.detector == "policy"
+    assert caught.value.anomaly.details["key"] == "greedy"
 
-    with api.session("cheap") as again:  # the untouched session keeps working
-        api._record_llm_call("m", 100, 0)
-        api._record_llm_call("m", 100, 0)
+    with api.session("cheap") as cheap:  # an untouched key keeps its own count
+        limited()
+        limited()
 
-    assert again is cheap
-    assert cheap.step_count == 3
-    assert abs(cheap.total_cost_usd - 0.30) < 1e-9
+    assert cheap.tool_calls == {"limited": 2}
+    assert runbound.tool_calls("greedy") == {"limited": 3}
 
 
 def test_nested_sessions_restore_the_outer_one_on_exit():
@@ -345,11 +240,11 @@ def test_nested_sessions_restore_the_outer_one_on_exit():
         assert api.current_session() is a
         with api.session("b") as b:
             assert api.current_session() is b
-            api._record_llm_call("m", 10, 5)
+            ping()
         assert api.current_session() is a
-        api._record_llm_call("m", 10, 5)
+        ping()
 
-    assert (a.step_count, b.step_count) == (1, 1)
+    assert (a.event_count, b.event_count) == (1, 1)
 
 
 def test_outside_any_block_the_default_session_is_used():
@@ -357,47 +252,49 @@ def test_outside_any_block_the_default_session_is_used():
     default = runbound.current_session()
 
     with api.session("k") as keyed:
-        api._record_llm_call("m", 10, 5)
+        ping()
 
-    api._record_llm_call("m", 10, 5)
+    ping()
 
     assert api.current_session() is default
     assert default is not keyed
     assert default.key is None
-    assert (default.step_count, keyed.step_count) == (1, 1)
+    assert (default.event_count, keyed.event_count) == (1, 1)
 
 
 def test_default_session_step_numbering_is_unchanged():
     runbound.init()
     events: list[Event] = []
-    api._ENGINE.detectors.insert(0, _Recorder(events))
+    api._ENGINE.observers.append(_Recorder(events))
 
-    api._record_llm_call("m", 1, 1)
+    ping()
     with api.session("k"):
-        api._record_llm_call("m", 1, 1)
-    api._record_llm_call("m", 1, 1)
-    api._record_llm_call("m", 1, 1)
+        ping()
+    ping()
+    ping()
 
     assert [event.step for event in events] == [1, 1, 2, 3]
 
 
 class _Recorder:
-    """A detector that records every event the engine hands it."""
-
-    name = "recorder"
+    """An observer that records every event the engine hands it."""
 
     def __init__(self, events: list) -> None:
         self.events = events
 
-    def check(self, state, event, config):
+    def on_event(self, session, event) -> None:
+        if event.kind == "tool_result":  # the call-side events are what these tests are about
+            return
         self.events.append(event)
-        return None
+
+    def on_anomaly(self, session, anomaly, reacted) -> None:
+        pass
 
 
 def test_session_is_inert_before_init():
     with api.session("k", tags={"plan": "free"}) as state:
         assert state is None
-        api._record_llm_call("m", 10, 5)  # still records nothing
+        ping()  # still records nothing
 
     assert runbound.current_session() is None
     assert api._REGISTRY == {}
@@ -418,6 +315,27 @@ def test_session_survives_a_broken_registry(caplog, monkeypatch):
         assert api.current_session() is default
 
     assert "runbound" in caplog.text
+
+
+def test_a_session_block_counts_as_active_until_it_exits():
+    runbound.init()
+
+    assert api._active_count() == 0
+    with api.session("a"):
+        with api.session("b"):
+            assert api._active_count() == 2
+        assert api._active_count() == 1
+    assert api._active_count() == 0
+
+
+def test_the_active_count_is_decremented_when_the_body_raises():
+    runbound.init()
+
+    with pytest.raises(RuntimeError):
+        with api.session("a"):
+            raise RuntimeError("the agent blew up")
+
+    assert api._active_count() == 0
 
 
 # --- session(): the LRU registry --------------------------------------------
@@ -500,7 +418,7 @@ def test_concurrent_threads_keep_their_own_session():
     def worker(key: str) -> None:
         with api.session(key):
             for _ in range(per_thread):
-                api._record_llm_call("m", 10, 5)
+                ping()
 
     threads = [threading.Thread(target=worker, args=(f"k{i}",)) for i in range(4)]
     for thread in threads:
@@ -510,9 +428,9 @@ def test_concurrent_threads_keep_their_own_session():
 
     for i in range(4):
         state = api._REGISTRY[f"k{i}"]
-        assert state.step_count == per_thread
-        assert state.total_tokens == per_thread * 15
-    assert runbound.current_session().step_count == 0  # default untouched
+        assert state.event_count == per_thread
+        assert state.tool_calls == {"ping": per_thread}
+    assert runbound.current_session().event_count == 0  # default untouched
 
 
 def test_asyncio_tasks_keep_their_own_session():
@@ -521,7 +439,7 @@ def test_asyncio_tasks_keep_their_own_session():
     async def worker(key: str, calls: int) -> None:
         with api.session(key) as state:
             for _ in range(calls):
-                api._record_llm_call("m", 10, 5)
+                ping()
                 await asyncio.sleep(0)  # let the other task interleave
                 assert api.current_session() is state
 
@@ -530,228 +448,11 @@ def test_asyncio_tasks_keep_their_own_session():
 
     asyncio.run(main())
 
-    assert api._REGISTRY["a"].step_count == 3
-    assert api._REGISTRY["b"].step_count == 5
-    assert runbound.current_session().step_count == 0
-
-
-# --- _record_llm_call -------------------------------------------------------
-
-
-def test_record_llm_call_keeps_its_three_argument_form():
-    runbound.init()
-    events: list[Event] = []
-    api._ENGINE.detectors.insert(0, _Recorder(events))
-
-    api._record_llm_call("m", 10, 5)
-
-    (event,) = events
-    assert (event.duration_s, event.tokens_reasoning) == (0.0, 0)
-
-
-def test_record_llm_call_carries_duration_and_reasoning_tokens():
-    runbound.init()
-    events: list[Event] = []
-    api._ENGINE.detectors.insert(0, _Recorder(events))
-
-    with api.session("k") as state:
-        api._record_llm_call("m", 10, 5, duration_s=4.25, tokens_reasoning=900)
-
-    (event,) = events
-    assert (event.tokens_out, event.tokens_reasoning) == (5, 900)
-    assert event.duration_s == 4.25
-    # output work is tokens_out alone: reasoning is already inside it.
-    assert list(state.recent_calls) == [(4.25, 5, event.cost_usd)]
-
-
-def test_recent_calls_window_comes_from_the_configured_spike_window(monkeypatch):
-    """``spike_window`` is a real, local ``init()`` field too; this test
-    delivers it through a fake plane's Controls instead, the same harness
-    test_plane_baseline_restore.py uses -- this suite's own coverage of
-    that path. recent_calls' maxlen follows it regardless of
-    spike_enabled (Engine._effective_config sets it unconditionally)."""
-    fake = FakePlane()
-
-    def factory(url, token, service, worker_id, timeout_s=0.15, **kwargs):
-        fake.url = url
-        fake.token = token
-        fake.service = service
-        fake.worker_id = worker_id
-        fake.timeout_s = timeout_s
-        return fake
-
-    monkeypatch.setattr(shared_module, "PlaneClient", factory)
-    runbound.init(
-        control_plane_url=PLANE_URL, token="k", service="checkout",
-        worker_id="host-1:1", control_plane_poll_s=3600.0,
-        export_events=False, auto_wrap=False,
-    )
-    fake.controls_body = {"version": 1, "controls": spike_controls_body(spike_window=3, spike_warmup_calls=2)}
-    api._SHARED.apply_hello(HelloReply(controls_version=1))
-    runbound.reset()  # the default session was already sized before the hello above
-
-    assert runbound.current_session().recent_calls.maxlen == 3
-    with api.session("k") as state:
-        for _ in range(5):
-            api._record_llm_call("m", 10, 5)
-
-    assert state.recent_calls.maxlen == 3
-    assert len(state.recent_calls) == 3
+    assert api._REGISTRY["a"].event_count == 3
+    assert api._REGISTRY["b"].event_count == 5
+    assert runbound.current_session().event_count == 0
 
 
 def test_session_is_exported():
     assert runbound.session is api.session
     assert "session" in runbound.__all__
-
-
-# --- _exit_delta carries model turns, not raw events -----------------------
-
-
-def test_exit_delta_steps_delta_carries_turns_not_events():
-    """3 model calls + 7 tool calls = 3 steps, 10 events; the wire delta's
-    steps_delta reflects the turns count, since "steps" was redefined."""
-    state = SessionState("s1", key="user:1")
-    for i in range(1, 4):
-        state.record(Event(kind="llm_call", ts=float(i), step=i, tokens_out=1))
-    for i in range(4, 11):
-        state.record(Event(kind="tool_call", ts=float(i), step=i, tool_name="search"))
-
-    assert state.turns == 3
-    assert state.event_count == 10
-
-    delta = api._exit_delta("user:1", state)
-
-    assert delta is not None
-    assert delta.steps_delta == 3
-
-
-# --- _exit_delta carries the newer fields ----------------------------------
-
-
-def test_exit_delta_events_delta_carries_the_raw_event_count():
-    """Same 3 model calls + 7 tool calls: events_delta is the 10, steps_delta
-    the 3 -- one field per concept, each named for what it holds."""
-    state = SessionState("s1", key="user:2")
-    for i in range(1, 4):
-        state.record(Event(kind="llm_call", ts=float(i), step=i, tokens_out=1))
-    for i in range(4, 11):
-        state.record(Event(kind="tool_call", ts=float(i), step=i, tool_name="search"))
-
-    delta = api._exit_delta("user:2", state)
-
-    assert delta is not None
-    assert delta.events_delta == 10
-    assert delta.steps_delta == 3
-
-
-def test_exit_delta_errors_delta_diffs_the_running_total_not_the_window():
-    """errors_delta is a lifetime running-total diff, the same shape as
-    tokens_delta -- not the trailing-minute storm window, which does not
-    survive being read twice."""
-    state = SessionState("s1", key="user:3")
-    state.record(Event(kind="llm_error", ts=1.0, step=1, error="RateLimitError: slow down"))
-    state.record(Event(kind="tool_error", ts=2.0, step=2, error="boom"))
-    state.record(Event(kind="llm_call", ts=3.0, step=3, tokens_out=1))
-
-    first = api._exit_delta("user:3", state)
-    assert first is not None
-    assert first.errors_delta == 2
-
-    # A second exit with no new errors reports zero, not the same two again.
-    second = api._exit_delta("user:3", state)
-    assert second.errors_delta == 0
-
-    state.record(Event(kind="llm_error", ts=4.0, step=4, error="boom again"))
-    third = api._exit_delta("user:3", state)
-    assert third.errors_delta == 1
-
-
-def test_exit_delta_tokens_cached_delta_diffs_tokens_cached_in():
-    state = SessionState("s1", key="user:4")
-    state.record(
-        Event(kind="llm_call", ts=1.0, step=1, tokens_in=1200, tokens_cached_in=1000)
-    )
-
-    delta = api._exit_delta("user:4", state)
-
-    assert delta is not None
-    assert delta.tokens_cached_delta == 1000
-
-
-def test_exit_delta_carries_no_trigger_when_the_session_never_tripped():
-    """A warn-mode session never latches, so tripped_by stays None forever --
-    last_detector/trigger_message/trigger_age_s must say so too, not guess."""
-    state = SessionState("s1", key="user:5")
-    state.record(Event(kind="llm_call", ts=1.0, step=1, tokens_out=1))
-
-    delta = api._exit_delta("user:5", state)
-
-    assert delta is not None
-    assert delta.last_detector is None
-    assert delta.trigger_message is None
-    assert delta.trigger_age_s is None
-
-
-def test_exit_delta_carries_the_latched_anomaly_as_the_trigger():
-    from runbound.events import Anomaly
-
-    state = SessionState("s1", key="user:6")
-    state.tripped_by = Anomaly(
-        detector="budget",
-        severity="critical",
-        message="Budget exceeded: $5.10 of $5.00",
-        details={},
-    )
-    state.tripped_at = time.monotonic() - 5.0
-
-    delta = api._exit_delta("user:6", state)
-
-    assert delta is not None
-    assert delta.last_detector == "budget"
-    assert delta.trigger_message == "Budget exceeded: $5.10 of $5.00"
-    assert delta.trigger_age_s == pytest.approx(5.0, abs=0.5)
-
-
-def test_exit_delta_redacts_the_raw_key_out_of_the_trigger_message_by_default():
-    """A detector may quote the raw key in its own message (it is the useful
-    local log); the wire never carries it unless send_session_keys is on."""
-    from runbound.events import Anomaly
-
-    key = "user:secret-email@example.com"
-    state = SessionState("s1", key=key)
-    state.tripped_by = Anomaly(
-        detector="error_storm",
-        severity="critical",
-        message=f"Error storm for session {key!r}: 5 failures in 10s",
-        details={},
-    )
-    state.tripped_at = time.monotonic()
-
-    delta = api._exit_delta(key, state)
-
-    assert delta is not None
-    assert key not in delta.trigger_message
-    assert "Error storm for session" in delta.trigger_message
-
-
-def test_exit_delta_keeps_the_raw_key_in_the_trigger_message_when_opted_in():
-    from runbound.events import Anomaly
-
-    key = "user:secret-email@example.com"
-    runbound.init(send_session_keys=True)
-    try:
-        state = SessionState("s1", key=key)
-        state.tripped_by = Anomaly(
-            detector="error_storm",
-            severity="critical",
-            message=f"Error storm for session {key!r}: 5 failures in 10s",
-            details={},
-        )
-        state.tripped_at = time.monotonic()
-
-        delta = api._exit_delta(key, state)
-    finally:
-        api._teardown_for_tests()
-
-    assert delta is not None
-    assert key in delta.trigger_message

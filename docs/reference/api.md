@@ -2,45 +2,91 @@
 
 [← Docs](../README.md)
 
-The rest of runbound's public API, call by call (`runbound.otel` is on the [OpenTelemetry guide](../guides/opentelemetry.md)).
+The full public API, with the hook chain, the result chain, rows and quotas, plane loss, approvals
+and spans, is [API.md](../../API.md). `tests/test_public_api.py` checks that file against
+`runbound.__all__`. This page is the index: every public name, one line each. The parameters of
+`init()` are on the [configuration reference](configuration.md).
 
-| Call | Does |
+## Set up and guard
+
+| Name | What it is |
 |---|---|
-| `runbound.init(**kwargs)` | Validates config, builds the engine, starts a session. Calling it again reconfigures and starts fresh. |
-| `runbound.wrap(client)` | Guards a client's calls in place and returns the same object. Wrapping twice is a no-op; an unrecognized client raises `ValueError`. |
-| `runbound.tool` / `runbound.tool(name="...", polling=True, idempotent=True, retryable=True)` | Records every call to a function. Usable bare or with an explicit name. `polling=True` marks a tool that is *supposed* to run with the same arguments over and over — polling a job, checking a status — so its calls never feed the loop window (equivalent to listing its name in `loop_ignore_tools`). They still count toward `tool_calls()` and any `max_calls` in your action policy: mark polling, do not tune around a real loop. `idempotent=True` and `retryable=True` are reported in the tool report and the control surface; `retryable=True` also grants the `"retry"` loop shape a grace — its failures only count once they reach twice `loop_threshold`. |
-| `runbound.session(key, tags=None)` | Context manager: accounts everything inside it to `key`'s own session. Yields the `SessionState`, or `None` before `init()`. See [Runs keyed by any id](../guides/runs.md#runs-keyed-by-any-id). |
-| `runbound.reset()` | Starts a fresh session with the same config: counters to zero, every keyed session forgotten, detectors re-armed. No-op before `init()`. |
-| `runbound.budget(key=None)` | What a session's dollar budget looks like right now: spent (this process plus the fleet), remaining, reserved, the soft line. `None` before `init()` or with no budget. |
-| `runbound.posture()` | The posture in force right now, by name — the session's, the process's and the plane's tightened together; `"full"` before `init()`. |
-| `runbound.safe_mode()` | `True` when `posture()` is anything but `"full"`; `False` before `init()`. |
-| `runbound.tools()` | The tool report this worker would send the plane: one entry per `@runbound.tool`, and one per tool name a model asked for that no decorator declared. |
-| `runbound.is_retryable(exc)` | Whether `exc` is a runbound refusal that says a retry may succeed (its `retryable`); `False` for anything else, an exception runbound never raised included. See [Handling refusals](../guides/handling-refusals.md). |
-| `runbound.current_session()` | The `SessionState` work is being accounted to — the enclosing `session()` block's, else the default one — or `None` before `init()`. |
-| `runbound.is_tripped(key=None)` | The `Anomaly` that latched a session (`key=None` = the active one), else `None`. Never creates a session. |
-| `runbound.session_status(key)` | Where a keyed session stands on [the spike ladder](../guides/spike-detection.md#many-callers-behind-one-service-the-abuse-ladder): a dict of `level` (0 quiet, 1 watching, 2 limited, 3 closed — a blocked key reads `level: 0`, since the session behind it is fresh; see `strikes`/`tripped_by` below), `strikes`, `allowance_left`, `cooldown_remaining_s`, `tripped_by` and `generation`. A blocked key is identified by `strikes == spike_max_strikes` with a permanent latch (`tripped_by == "spike"`, `cooldown_remaining_s == 0.0`), not by `level`. `None` before `init()` and for an unknown, cleared or evicted key. Never creates a session. |
-| `runbound.tool_calls(key=None)` | How many times each tool has been *attempted* in a session (`{"send_email": 2}`) — what [`max_calls`](../guides/policy.md#action-policy--rules-for-what-your-agent-may-do) is measured against. A copy; `{}` before `init()` or for an unknown key. Never creates a session. |
-| `runbound.circuit_state(provider="openai")` | Where one provider's circuit stands: `"closed"`, `"open"` or `"half_open"`. Takes a full endpoint label (`"openai@localhost:11434"`) or a bare shape (`"openai"`), which reads the **worst** state among that shape's endpoints. Counted under both `on_provider_failure` modes. Reads `"closed"` before `init()` and whenever it cannot be read. See [Retry storms](circuit-breaker.md#retry-storms-and-the-provider-circuit-breaker). |
-| `runbound.inflight_calls(provider="openai")` | How many guarded calls to that provider are in flight right now. Same label-or-shape resolution as `circuit_state()`, summed across matching endpoints. `0` before `init()` and when no `max_inflight_calls` is set (nothing is counted then). |
-| `runbound.record_call(model, tokens_in, tokens_out, duration_s=0.0, *, provider="custom", error=None)` | Record one model call runbound did not make — in-process inference, your own HTTP client. Same path a wrapped client uses: budgets, spikes and limits all see it. With `error` it records a failed call instead (retry storm + that provider's circuit). See [Self-hosted models](../guides/self-hosted-models.md#self-hosted-models). |
-| `runbound.llm` / `runbound.llm(model=..., provider=..., tokens=...)` | Decorator for a function that performs inference itself: times it, applies the circuit and the in-flight cap before the body runs, records tokens via `tokens(result) -> (in, out)`, and records-and-re-raises whatever it throws. Sync and `async def`. |
-| `runbound.active_sessions()` | How many keyed `session()` blocks are open right now, process-wide — blocks, not keys. The default session is never counted, so this is `0` before `init()` and in a program that uses no keys. |
-| `runbound.coverage()` | What is actually instrumented right now: `auto_wrapped` labels, `wrapped_clients`, `decorated_tools`, `guarded_calls`, `tool_calls_seen`, `keyed_sessions_seen`, `providers_imported`, `providers_unguarded` (imported but never seen guarded), `last_guarded_call_age_s`, `warnings`, and `fleet` — `"connected"` while a control plane is answering, else the honest `"local protection active; fleet coordination: not connected"`. Every control this SDK enforces is already free and already running locally; this key says only whether it is coordinated across a fleet. Read it when you want to know that the guard is on rather than assume it. |
-| `runbound.assert_guarded()` | Raises `RuntimeError` when a provider SDK is imported and no guarded call has been recorded. For a startup check or a CI smoke test, so a forgotten `wrap()` fails loudly. |
-| `runbound.check(file=None, as_json=False)` | Prints what is guarded in this process (wrapped clients, tools with their capability classes, the plane's mode and address but never its key, the posture, the budgets, the last ten events) and returns the same report as a dict. Makes no network call. `python -m runbound check [--json] [TARGET]` is the command form: it loads a script or module and exits `0` when something is guarded, `1` when nothing is, `2` when the target cannot be loaded. |
-| `runbound.unpatch()` | Undoes the class-level patching `auto_wrap` installed. `reset()` does not unpatch; this does. |
-| `runbound.clear(key)` | Explicit forgiveness: un-blocks the key — next entry gets a fresh session, fresh baselines, re-armed detectors. No-op for unknown keys. In [fleet mode](../guides/fleet-mode.md#fleet-mode--one-truth-across-all-your-workers-control-plane) the plane is told too, so the key is let back in on every worker. |
-| `runbound.envelope(key=None)` | The single answer to "what is this agent allowed to do right now": budget, posture, class-rule capabilities and the execution counters (steps/seconds/actions/descendants remaining), composed from the same numbers `budget()`/`posture()`/`session_status()` read. `key=None` reads the current (or default) session; `None` before `init()` or for an unknown key. The same object also rides the heartbeat, so a connected plane can show it without a call of its own. |
-| `runbound.enter_safe_mode(reason="manual", posture="restricted")` | Narrow the whole process to `posture` by hand — free and local. Every `@runbound.tool` whose declared classes that posture denies is refused before its body runs, until `exit_safe_mode()`; model calls go on. Raises `ValueError` for a posture name nothing defines. A no-op before `init()`. For one session only, call `.enter_safe_mode()` on the `SessionState` `session()` yields instead. |
-| `runbound.exit_safe_mode()` | Put the process back to `full`, lifting only its own narrowing — a session's posture and the plane's are their own (`clear()` lifts a session's). |
-| `runbound.events(n=100)` | This process's own anomalies, refusals and posture transitions, most recent last — an in-memory ring, free and local, never written to disk or sent anywhere, and never carrying a call argument, prompt or reply. `[]` before `init()`. See the optional `on_event=` keyword on `init()`. |
-| `runbound.decisions(n=100)` | This process's own admission `Decision` bodies, most recent last — the same guarantees as `events()`. |
-| `runbound.plane_status()` | Where this worker's link to the control plane stands: `PlaneStatus(mode, last_contact_age_s, consecutive_failures, notice, entitlements, halt_stale_s, ..., applied_policy_version)` (`applied_policy_version` is the org policy version this worker has fetched and installed, `None` until one has been). `mode` is `"local"` with no plane configured (and before `init()`), `"connected"` while it answers, `"limited"` when it answers but the org's plan has entry decisions made locally, and `"degraded"` when it does not answer at all — in which case every answer is being made locally. `halt_stale_s` is seconds since the last successful contact while a halt is currently enforced, else `None` — how close a `stale_halt="release"` halt is to lifting itself, or how long a `"hold"` halt has been running on a dead link. Reads cached state; never opens a socket. |
-| `runbound.fleet_status(key)` | What the plane last said about one key: `{"fleet_spend_usd", "fleet_tokens", "strikes", "generation", "halt", "latched", "policy_version", "age_s", "door_refusals"}`. The fleet-wide counterpart of `session_status(key)`. Reads the entry-decision cache only, so it never opens a socket and answers `None` without a plane, or for a key this worker has not opened a block for in the last few seconds. |
-| `runbound.key_hash(key)` | The sha256 hex digest a session key travels as — the only form a key reaches the plane in, unless `send_session_keys=True`. Use it to join your own logs to anything the plane shows you. |
-| `runbound.verify_webhook_signature(secret, timestamp, body_bytes, signature)` | Receiver-side check for a delivery from the control plane's webhook adapter (the same signing string this module used to send, kept for exactly this): constant-time compare of `"sha256=" + HMAC_SHA256(secret, f"{timestamp}.{body}")`, and a ±5-minute replay window. Returns `False` rather than raising for anything malformed. Verify the **raw** body bytes. See [Alerting](reactions.md#alerting). |
+| `runbound.init(**kwargs)` | Configure the SDK for this process and start a session. Bad values raise `ValueError`, unknown names `TypeError`. |
+| `runbound.tool` | Decorator: every call of the function is checked before its body runs and recorded. Takes the rule keywords (`blocked`, `max_calls`, `constraint`, `require_approval`, `reviewed`), `effects`, hooks, `max_result_chars`, and `approval`, `mode`, `timeout_s`. |
+| `runbound.reset()` | Start a fresh session with the same configuration: counters go back to zero and keyed sessions are forgotten. Does nothing before `init()`. |
+| `runbound.session(key, tags=None)` | Context manager: everything inside counts toward `key`'s own session (per-session `max_calls`, traces). |
+| `runbound.current_session()` | The `SessionState` work is counted toward right now, or `None` before `init()`. |
+| `runbound.current_request()` | The request id of the deferred approval being executed right now, else `None`. |
 
-Before `init()` is called, decorated tools and wrapped clients run exactly as if
-runbound were not installed.
+## Check what is guarded
+
+| Name | What it is |
+|---|---|
+| `runbound.tools()` | The tool report: one entry per tool this process knows. |
+| `runbound.tool_calls(key=None)` | How many times each tool was attempted in a session. |
+| `runbound.coverage()` | Which registered tools are guarded, which are not, with the call counters. |
+| `runbound.check(file=None, as_json=False)` | Print and return a local report of what is guarded; makes no plane call. `python -m runbound check` is the command form. |
+| `runbound.assert_guarded()` | Raise `RuntimeError` when nothing is decorated with `@runbound.tool`. |
+| `runbound.plane_status()` | The state of the control-plane link, as a `PlaneStatus`. |
+
+## Read what happened
+
+| Name | What it is |
+|---|---|
+| `runbound.events(n=100)` | Recent anomalies, refusals and runtime changes, in memory. |
+| `runbound.tool_results(n=100)` | Recent `tool_result` records, one per call: outcome, duration, scan flags, sizes, tags; never the result. |
+| `runbound.decisions(n=100)` | Recent `Decision` records. |
+
+## Types
+
+| Name | What it is |
+|---|---|
+| `runbound.RunboundConfig` | The configuration `init()` builds. `GuardrailConfig`, the older name, still imports (it warns once). |
+| `runbound.ToolCall` | One attempted tool call, as policy and hooks see it. |
+| `runbound.ToolPolicy` | Policy over tools: `deny`, `allow`, `max_calls`, `constraints`, `require_approval`, `on_violation`. |
+| `runbound.ToolRules` | The rules one tool states on its decorator. |
+| `runbound.Violation` | A policy finding. |
+| `runbound.Event` | A recorded event. |
+| `runbound.Decision` | A recorded decision. |
+| `runbound.Anomaly` | An anomaly event payload. |
+| `runbound.PlaneStatus` | What `plane_status()` returns. |
+| `runbound.SessionState` | Per-session state: the call counters, the run id and the latch. |
+
+## Exceptions
+
+| Name | What it is |
+|---|---|
+| `runbound.ExecutionRefused` | A call was refused before its body ran. Carries `reason`, `decision`, `retryable`, `retry_after`, `scope`. |
+| `runbound.GuardrailTripped` | The same class as `ExecutionRefused`, under its older name. |
+| `runbound.PolicyViolation` | Refused by tool policy; the rule is on `exc.violation`. |
+| `runbound.CapabilityRefused` | Refused because an `init(capabilities=...)` class rule denies one of the tool's classes. |
+| `runbound.is_retryable(exc)` | Whether `exc` is a refusal a retry may get past. |
+
+See [Handling refusals](../guides/handling-refusals.md).
+
+## Hooks: `runbound.hooks`
+
+| Name | What it is |
+|---|---|
+| `hooks.allow()` | A hook's "carry on". `None` and `True` mean the same. |
+| `hooks.refuse(reason)` | Refuse the call (`reason="hook_refused"`). `False` means the same. |
+| `hooks.rewrite(args=None, kwargs=None)` | Replace the arguments; pre hooks only. |
+| `hooks.ToolResult` | What a post hook receives. |
+| `hooks.replace(result)` | A post hook's replacement result. |
+| `hooks.withhold(reason)` | A post hook's "do not pass this result on". |
+
+## Integrations
+
+| Name | What it is |
+|---|---|
+| `runbound.integrations.langchain.RunboundCallbackHandler` | A LangChain callback handler for tools a framework dispatches. Needs `runbound[langchain]`. See [LangChain](../guides/langchain.md). |
+| `runbound.integrations.langchain.GuardrailCallbackHandler` | Deprecated: the former name of `RunboundCallbackHandler`. The same class; warns once with a `DeprecationWarning`. |
+| `runbound.otel.enable()` / `runbound.otel.disable()` | Send local refusals, anomalies and changes to your OpenTelemetry providers. Needs `runbound[otel]`. See [OpenTelemetry](../guides/opentelemetry.md). |
+
+## Metadata
+
+| Name | What it is |
+|---|---|
+| `runbound.__version__` | `1.0.0a2`. |
 
 ---

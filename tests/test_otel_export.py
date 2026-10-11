@@ -1,6 +1,6 @@
-"""OpenTelemetry export (``runbound[otel]``): refusals, anomalies, posture
-changes and runtime changes as log records, five counters, nothing when the
-packages are absent, and never a raw session key."""
+"""OpenTelemetry export (``runbound[otel]``): refusals, anomalies and runtime
+changes as log records, two counters, nothing when the packages are absent,
+and never a raw session key."""
 
 import builtins
 
@@ -9,7 +9,7 @@ import pytest
 import runbound
 from runbound import api, local_events, otel
 from runbound.events import Anomaly
-from runbound.exceptions import GuardrailTripped
+from runbound.exceptions import ExecutionRefused
 from runbound.plane_types import key_hash
 
 pytest.importorskip("opentelemetry.sdk")
@@ -51,7 +51,7 @@ def counters(reader):
 
 
 def refuse(key="acct-secret-1"):
-    runbound.init(on_anomaly="raise", max_actions_per_run=1)
+    runbound.init(max_actions_per_run=1)
 
     @runbound.tool
     def ping():
@@ -59,7 +59,7 @@ def refuse(key="acct-secret-1"):
 
     with runbound.session(key=key):
         ping()
-        with pytest.raises(GuardrailTripped):
+        with pytest.raises(ExecutionRefused):
             ping()
 
 
@@ -96,37 +96,23 @@ def test_a_raw_session_key_never_leaves_only_its_hash(rig):
     assert dict(by_event(logs, "runbound.refusal")[0].attributes)["runbound.key_hash"] == key_hash("acct-secret-1")
 
 
-def test_a_posture_change_is_a_log_record_and_a_counter(rig):
-    logs, reader = rig
-    runbound.init()
-    runbound.enter_safe_mode(reason="manual test", posture="restricted")
-    runbound.exit_safe_mode()
-    postures = by_event(logs, "runbound.posture")
-    assert [dict(p.attributes)["runbound.posture"] for p in postures] == ["restricted", "full"]
-    assert dict(postures[0].attributes)["runbound.posture.source"] == "manual"
-    assert dict(postures[0].attributes)["runbound.posture.from"] == "full"
-    assert sum(v for _, v in counters(reader)["runbound.posture_changes"]) == 2
-
-
 def test_a_runtime_change_is_a_log_record(rig):
     logs, _ = rig
-    local_events.note_runtime_value("model", "gpt-4o")
-    local_events.note_runtime_value("model", "gpt-4.1")
+    local_events.note_runtime_value("policy_version", 1)
+    local_events.note_runtime_value("policy_version", 2)
     [change] = by_event(logs, "runbound.runtime_change")
     assert dict(change.attributes) == {
-        "runbound.runtime.what": "model", "runbound.runtime.from": "gpt-4o", "runbound.runtime.to": "gpt-4.1"}
+        "runbound.runtime.what": "policy_version", "runbound.runtime.from": 1, "runbound.runtime.to": 2}
 
 
-def test_three_metrics_count_refusals_anomalies_and_posture_changes(rig):
+def test_two_metrics_count_refusals_and_anomalies(rig):
     _, reader = rig
     refuse()
-    runbound.enter_safe_mode(posture="restricted")
     got = counters(reader)
-    assert set(got) == {"runbound.refusals", "runbound.anomalies", "runbound.posture_changes"}
+    assert set(got) == {"runbound.refusals", "runbound.anomalies"}
     [(refusal_attrs, refusals)] = got["runbound.refusals"]
     assert refusals == 1 and refusal_attrs["runbound.detector"] == "fanout"
     assert sum(v for _, v in got["runbound.anomalies"]) == 1
-    assert sum(v for _, v in got["runbound.posture_changes"]) == 1
 
 
 def test_a_decision_is_not_exported_twice(rig):
@@ -160,7 +146,7 @@ def test_a_raising_exporter_never_reaches_the_call(rig):
             raise RuntimeError("collector down")
 
     otel._ACTIVE._logger = Boom()
-    refuse()  # the refusal still raises GuardrailTripped; nothing else escapes
+    refuse()  # the refusal still raises ExecutionRefused; nothing else escapes
 
 
 def test_without_the_packages_enable_is_a_no_op(monkeypatch):
@@ -175,16 +161,21 @@ def test_without_the_packages_enable_is_a_no_op(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", blocked)
     assert otel.enable() is False
     monkeypatch.undo()
-    runbound.init(on_anomaly="raise", max_actions_per_run=1)
-    assert local_events._SINKS == [] and local_events._CALL_SINKS == []
-    runbound.record_call("gpt-4o", tokens_in=1, tokens_out=1)  # counts nowhere, raises nothing
+    runbound.init(max_actions_per_run=1)
+    assert local_events._SINKS == []
+
+    @runbound.tool
+    def ping():
+        return "pong"
+
+    assert ping() == "pong"  # exports nowhere, raises nothing
 
 
 def test_a_key_named_in_a_sentence_is_redacted_out_of_the_body_and_the_reason(rig):
     logs, _ = rig
     anomaly = Anomaly(
-        detector="budget", severity="critical", message="key acct-secret-9 spent 5.01",
-        details={"decision": {"verdict": "deny", "kind": "model_call", "reason": "acct-secret-9 is over",
+        detector="fanout", severity="critical", message="key acct-secret-9 spent 5.01",
+        details={"decision": {"verdict": "deny", "kind": "action", "reason": "acct-secret-9 is over",
                               "evaluation": {"limit": 5.0, "used": 5.01, "note": "acct-secret-9"}}})
     local_events.record_anomaly("s1", anomaly, "raise", "acct-secret-9")
     for record in records(logs):
@@ -202,71 +193,4 @@ def test_the_key_reaches_sinks_only_never_the_ring_or_on_event():
     local_events.record_anomaly("s1", Anomaly("loop", "warn", "m", {}), "warn", "k-1")
     assert seen[0]["key"] == "k-1"
     assert "key" not in heard[0] and "key" not in runbound.events()[0]
-    api._teardown_for_tests()
-
-
-# --- per guarded call: runbound.guarded_calls and runbound.estimated_usd (SDK-4b) ----------------------------------------------
-
-
-def test_each_guarded_call_ticks_the_call_counter_and_adds_its_estimated_cost(rig):
-    _, reader = rig
-    runbound.init()
-    runbound.record_call("gpt-4o", tokens_in=1000, tokens_out=500)
-    runbound.record_call("gpt-4o", tokens_in=1000, tokens_out=500)
-    data = counters(reader)
-    [(attrs, calls)] = data["runbound.guarded_calls"]
-    assert calls == 2 and attrs["runbound.model"] == "gpt-4o" and attrs["runbound.outcome"] == "ok"
-    [(usd_attrs, usd)] = data["runbound.estimated_usd"]
-    assert usd == pytest.approx(2 * (1000 * 2.5 + 500 * 10.0) / 1_000_000) and usd_attrs["runbound.model"] == "gpt-4o"
-
-
-def test_a_call_with_no_price_counts_as_a_call_and_adds_no_cost(rig):
-    _, reader = rig
-    runbound.init()
-    runbound.record_call("a-model-nobody-priced", tokens_in=10, tokens_out=10)
-    data = counters(reader)
-    assert data["runbound.guarded_calls"][0][1] == 1
-    assert sum(value for _, value in data.get("runbound.estimated_usd", [])) == 0 or "runbound.estimated_usd" not in data
-
-
-def test_a_failed_call_is_counted_with_outcome_error_and_costs_nothing(rig):
-    _, reader = rig
-    runbound.init()
-    api._Hooks().error("gpt-4o", RuntimeError("boom"), 0.1, "openai@api.openai.com")
-    data = counters(reader)
-    [(attrs, calls)] = data["runbound.guarded_calls"]
-    assert calls == 1 and attrs["runbound.outcome"] == "error" and attrs["runbound.provider"] == "openai@api.openai.com"
-    assert "runbound.estimated_usd" not in data
-
-
-def test_call_records_reach_sinks_only_never_the_ring_or_on_event(rig):
-    seen = []
-    runbound.init(on_event=seen.append)
-    runbound.record_call("gpt-4o", tokens_in=10, tokens_out=10)
-    assert seen == [] and runbound.events() == []
-
-
-def test_a_plain_sink_never_hears_a_call_record():
-    api._teardown_for_tests()
-    heard = []
-    local_events.add_sink(heard.append)
-    runbound.init()
-    runbound.record_call("gpt-4o", tokens_in=10, tokens_out=10)
-    assert all(r["kind"] != "call" for r in heard)
-    api._teardown_for_tests()
-
-
-def test_the_call_counters_carry_no_session_key_or_content(rig):
-    _, reader = rig
-    runbound.init()
-    with runbound.session(key="acct-secret-7"):
-        runbound.record_call("gpt-4o", tokens_in=10, tokens_out=10)
-    assert "acct-secret-7" not in repr(counters(reader))
-
-
-def test_a_call_with_no_sink_registered_costs_nothing_and_does_nothing():
-    api._teardown_for_tests()
-    runbound.init()
-    runbound.record_call("gpt-4o", tokens_in=10, tokens_out=10)  # no exporter: returns at once, no error
-    assert local_events._CALL_SINKS == []
     api._teardown_for_tests()

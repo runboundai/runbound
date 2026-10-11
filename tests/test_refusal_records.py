@@ -15,8 +15,7 @@ import pytest
 import runbound
 from runbound import api, local_events
 from runbound import engine as engine_module
-from runbound import export as export_module
-from runbound.exceptions import GuardrailTripped
+from runbound.exceptions import PolicyViolation
 
 from test_export import FakeClient, anomaly, event, exporter, session as export_session
 
@@ -36,7 +35,11 @@ class Recorder:
 
 def _declare_tools():
     """Declared after init(), on every test: another test module resetting the
-    registry must not take these away (the tool rules live in it)."""
+    registry must not take these away (the tool rules live in it).
+
+    ``issue_refund`` and ``transfer_call`` are blocked outright; ``lookup_order``
+    allows one call a session, so its refusals come from a different rule.
+    """
 
     def issue_refund():
         return "ran"
@@ -44,24 +47,23 @@ def _declare_tools():
     def transfer_call():
         return "ran"
 
-    def delete_account():
+    def lookup_order():
         return "ran"
 
-    globals()["issue_refund"] = runbound.tool(effects={"financial"})(issue_refund)
-    globals()["transfer_call"] = runbound.tool(effects={"external"})(transfer_call)
-    globals()["delete_account"] = runbound.tool(effects={"write"}, blocked=True)(delete_account)
+    globals()["issue_refund"] = runbound.tool(effects={"financial"}, blocked=True)(issue_refund)
+    globals()["transfer_call"] = runbound.tool(effects={"external"}, blocked=True)(transfer_call)
+    globals()["lookup_order"] = runbound.tool(effects={"read"}, max_calls=1)(lookup_order)
 
 
 @pytest.fixture
 def world():
     logging.disable(logging.CRITICAL)
     local_events.clear_for_tests()
-    runbound.init(on_anomaly="raise", tool_policy={"on_violation": "block"}, loop_threshold=1000, loop_window=1000)
+    runbound.init(tool_policy={"on_violation": "block"})
     _declare_tools()
     recorder = Recorder()
     api._ENGINE.observers.append(recorder)
     yield recorder
-    runbound.exit_safe_mode()
     runbound.reset()
     local_events.clear_for_tests()
     logging.disable(logging.NOTSET)
@@ -71,12 +73,11 @@ def refused(fn) -> bool:
     try:
         fn()
         return False
-    except GuardrailTripped:
+    except PolicyViolation:
         return True
 
 
 def restricted_call(key="call:1"):
-    runbound.enter_safe_mode("test")  # process posture: restricted
     return runbound.session(key)
 
 
@@ -110,7 +111,7 @@ def test_150_identical_refusals_are_100_rows_and_one_summary_of_50(world):
     plain = [row for row in world.rows if row[2] is None]
     summaries = [row for row in world.rows if row[2] is not None]
     assert len(plain) == engine_module.REFUSAL_RECORD_CAP == 100
-    assert summaries == [("safe_mode", "issue_refund", 50, "blocked")]
+    assert summaries == [("policy", "issue_refund", 50, "blocked")]
     assert len(runbound.decisions()) == 100  # a summary carries no Decision of its own
 
 
@@ -127,15 +128,16 @@ def test_two_tools_storming_do_not_hide_each_other(world):
 
 
 def test_two_rules_storming_do_not_hide_each_other(world):
-    """A posture refusal (rule from the posture) and a policy block (rule "blocked")
-    on different tools are counted apart, and so are their summaries."""
+    """A deny-list refusal and a max_calls refusal, on different tools, are
+    counted apart, and so are their summaries."""
     with restricted_call():
+        lookup_order()  # the one call it is allowed
         for _ in range(110):
-            refused(issue_refund)  # posture
-            refused(delete_account)  # blocked=True: a tool rule
+            refused(issue_refund)  # the deny rule
+            refused(lookup_order)  # the max_calls rule
 
     summaries = {(tool, count) for _d, tool, count, _r in world.rows if count is not None}
-    assert summaries == {("issue_refund", 10), ("delete_account", 10)}
+    assert summaries == {("issue_refund", 10), ("lookup_order", 10)}
 
 
 def test_a_summary_is_reported_once_and_then_only_for_new_refusals(world):
@@ -151,7 +153,6 @@ def test_a_summary_is_reported_once_and_then_only_for_new_refusals(world):
 
 
 def test_the_cap_is_per_session_not_shared_between_sessions(world):
-    runbound.enter_safe_mode("test")
     with runbound.session("call:a"):
         for _ in range(100):
             refused(issue_refund)
@@ -163,37 +164,13 @@ def test_the_cap_is_per_session_not_shared_between_sessions(world):
     assert len(world.rows) == 200
 
 
-def test_the_summary_is_queued_before_the_sessions_exit_record(world, monkeypatch):
-    order = []
-    monkeypatch.setattr(api, "_sync_exit", lambda key, state: order.append("exit"))
-    world.on_anomaly = lambda s, a, r: order.append("summary" if a.details.get("suppressed_count") else "refusal")
+def test_the_summary_is_reported_when_the_session_block_exits(world):
     with restricted_call():
         for _ in range(101):
             refused(issue_refund)
+        assert [c for _d, _t, c, _r in world.rows if c is not None] == []  # not yet
 
-    assert order[-2:] == ["summary", "exit"]
-
-
-def test_the_loop_detector_still_notifies_once_per_key_under_throttle(world):
-    """The dedup that stays: a throttled loop is one notification, not a storm."""
-    runbound.init(
-        on_anomaly="raise", on_loop="throttle", loop_threshold=3,
-        throttle_base_seconds=0.001, throttle_max_seconds=0.001,
-    )
-    recorder = Recorder()
-    api._ENGINE.observers.append(recorder)
-    world = recorder
-
-    @runbound.tool(effects={"read"}, reviewed=True)
-    def lookup():
-        return "ran"
-
-    with runbound.session("call:loop"):
-        for _ in range(12):
-            lookup()
-
-    loops = [row for row in world.rows if row[0] == "loop"]
-    assert len(loops) == 1
+    assert [c for _d, _t, c, _r in world.rows if c is not None] == [1]
 
 
 # --- R2(b): a refusal still exports over the telemetry cap ---------------------------------------------

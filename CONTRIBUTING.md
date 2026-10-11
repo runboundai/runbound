@@ -7,8 +7,8 @@ Thanks for taking the time to look at runbound's source.
 Development happens in a private monorepo that also holds Runbound AI's
 control plane and its test suites, which exercise the SDK at the same
 commit. This public repository is a **generated, squashed mirror** of the
-SDK half only, published on each release from an explicit allowlist —
-it is not the repository commits are made against directly.
+SDK half only, published on each release — it is not the repository commits
+are made against directly.
 
 That means a pull request opened here cannot be merged with a normal
 `git merge` or rebase: **we port it by hand** into the private monorepo,
@@ -24,64 +24,101 @@ Bug reports and feature requests are welcome. For a bug, please include:
 
 - the runbound version (`python -c "import runbound; print(runbound.__version__)"`)
 - Python version and OS
-- a minimal reproduction — ideally something that runs offline, the way
-  `examples/runaway_demo.py` does
+- a minimal reproduction, ideally one that runs offline: with no
+  `control_plane_url` (and no `RUNBOUND_PLANE_URL`), `runbound.init()` makes no
+  control-plane call
+
+Security issues go to the address in [SECURITY.md](SECURITY.md), not to an issue.
+
+## Running the tests
+
+The suite runs on Python 3.10, 3.12 and 3.14 (`requires-python = ">=3.10"`):
+
+```bash
+python -m venv .venv
+.venv/bin/pip install -e ".[test]"
+.venv/bin/python -m pytest -q tests
+```
+
+The OpenTelemetry tests skip unless the `otel` extra is installed
+(`pip install -e ".[test,otel]"`); the LangChain tests use a fake
+`langchain_core` and need nothing extra.
+
+Tests marked `plane` start a real control-plane process on a throwaway SQLite
+file (see `tests/integration/test_real_plane.py`). They skip unless three
+variables name it:
+
+```bash
+RUNBOUND_PLANE_PYTHON=/path/to/plane/venv/bin/python \
+RUNBOUND_PLANE_DIR=/path/to/plane/checkout \
+RUNBOUND_PLANE_APP=<module>:<factory> \
+    .venv/bin/python -m pytest -q -m plane tests/integration
+```
+
+`RUNBOUND_PLANE_PYTHON` is an interpreter that can import the plane's app and
+`uvicorn`; it lives in its own environment, not the one under test.
+
+Working in the monorepo, also run the public-tree lint from the repository
+root; it must report 0 violations:
+
+```bash
+python3 scripts/lint_public_tree.py runbound-sdk/
+```
 
 ## Making a change
 
 1. Fork this repository and create a branch off `main`.
-2. Write a failing test first, then the minimum code to make it pass. This
-   project is developed test-first; a change with no test is unlikely to be
-   accepted.
-3. Run the full test suite before opening a pull request:
+2. Write a failing test first, then the minimum code to make it pass. A
+   change with no test is unlikely to be accepted.
+3. **Spot-break each new test**: break the line it protects, watch the test
+   fail, restore the line. A test that cannot fail proves nothing.
+4. Run the full suite, then open the pull request with a description of
+   *why*, not just *what*: the problem it solves, and what you considered and
+   rejected.
 
-   ```bash
-   python -m venv .venv
-   .venv/bin/pip install -e ".[test]"
-   .venv/bin/python -m pytest -q tests
-   ```
+## Rules of the tree
 
-4. Open the pull request with a description of *why*, not just *what* —
-   what problem it solves, and what you considered and rejected, if
-   anything.
+- **Stdlib only at runtime.** `dependencies = []` in `pyproject.toml` stays
+  empty: the SDK runs inside your production agent, and every dependency it
+  added would be yours too. The extras are exactly `otel`, `langchain` and
+  `test`, and the runtime imports `opentelemetry` lazily. A change that needs a
+  new import from PyPI to work will not be merged; open an issue first if you
+  think a case truly needs one.
+- **Observers fail open; built-in checks fail closed.** Anything that only
+  watches a call (the event exporter, the span emitter, the `on_event`
+  callback) catches its own errors and never changes what the call returns.
+  A built-in check that raises (argument validation, tool policy, capability
+  rules) refuses the call for every class, and redaction that raises
+  withholds the output. User hooks follow the tool's class: a failing hook
+  refuses a `financial`, `destructive`, `privileged` or unclassified tool, and
+  is logged and skipped for `read`, `write` and `external`. See
+  [INVARIANTS.md](INVARIANTS.md) and
+  [Guarantees](docs/reference/guarantees.md).
+- **No new global state.** Do not add module-level mutable state; keep it on
+  the engine, the session or the plane link, so `runbound.reset()` still puts
+  the process back where it started.
+- **Every behaviour change updates [API.md](API.md) and
+  [CHANGELOG.md](CHANGELOG.md), and gets a test.** `tests/test_public_api.py`
+  checks API.md against `runbound.__all__`.
+- **The wire protocol needs extra care.** `POST /v1/hello`, `GET /v1/policy`,
+  `POST /v1/events`, the approval routes (`/v1/approvals`,
+  `/v1/approvals/{id}`, `/v1/approvals/{id}/report`) and
+  `POST /v1/quota/take` can be implemented by a third party's server too;
+  changing them silently breaks anyone who did. Nothing new may carry an
+  argument, a result or exception text without a line in
+  [SECURITY.md](SECURITY.md) saying so.
 
-## What we will and will not accept
+## Docs conventions
 
-- **No new runtime dependencies, ever.** This SDK is stdlib-only by design —
-  it runs inside your production agent, and every dependency it could add is
-  a dependency your agent inherits. `pytest` and the optional
-  `langchain-core` extra are the only exceptions, and both are already
-  declared in `pyproject.toml`. A change that needs a new import from PyPI
-  to work will not be merged; if you think a case truly needs one, open an
-  issue to discuss it before writing the code.
-- **Fail-open, always.** Code that guards a customer's agent must never be
-  the reason that agent goes down — see `INVARIANTS.md` and the "Guarantees
-  and limitations" section of the README for what that promise covers today.
-- Changes to the wire protocol between the SDK and a control plane
-  (`POST /v1/hello`, `/v1/enter`, `/v1/trip`, `/v1/events`, `GET /v1/policy`,
-  `POST /v1/clear`) need extra scrutiny, since a third party's server can
-  implement this protocol too — breaking it silently breaks anyone who did.
-
-## Adding a provider
-
-One five-function wrapper module per provider, never a universal parser. The
-five are the ones `runbound/wrappers/anthropic_wrapper.py` exposes —
-`matches`, `is_wrapped`, `install`, `read_usage` and `read_tool_requests` —
-plus the small readers that hang off them (`read_reasoning`, `read_cached`,
-`read_cache_write`, the stream chunk readers). Providers change independently,
-so each gets its own module that knows where *that* provider puts `create` and
-what *that* provider calls its usage fields; a shared parser would make one
-provider's rename everybody's bug. The `openai` and `anthropic` packages are
-never imported — detection is duck-typing alone, and the SDK stays
-dependency-free.
-
-A new provider arrives as a module **plus recorded fixtures**. The fixtures are
-recorded from the real provider SDK and replayed through the wrapper in our
-own conformance suite before any cell in this README's compatibility matrix
-is filled in — a
-checkmark in that table means a test proves it, and "the shape looks right" is
-not a test. Please open an issue before starting a new provider so we can agree
-the surface and get the fixtures recorded.
+- Plain, precise and short. Show the refusal reasons and defaults that really
+  exist; verify each claim against the code or a test, or leave it out.
+- `tests/test_docs_banned_words.py` keeps the vocabulary of the removed 0.x
+  product out of README.md, `docs/` and `examples/`. Only CHANGELOG.md may
+  name what was removed.
+- Every `python` code block in the docs must parse, and use only names that
+  exist: `runbound.<name>` must be in `runbound.__all__` or be a documented
+  submodule attribute.
+- Link only to pages that exist, with relative paths.
 
 ## License
 

@@ -701,3 +701,24 @@ def test_a_registry_that_cannot_be_read_enforces_the_configured_policy(monkeypat
     monkeypatch.setattr("runbound._coverage.tool_rules_version", explode)
     api._ENGINE._local_key = None
     assert local_policy().deny == ["wire_money"]
+
+
+def test_a_code_declared_approval_is_reported_so_the_plane_never_leases_the_tool():
+    assert ToolRules(approval="required", approval_mode="deferred").as_report() == {
+        "approval": "required",
+        "approval_mode": "deferred",
+    }
+    assert ToolRules(approval="required").as_report()["approval_mode"] == "sync"
+    assert not ToolRules(approval="required").stated()  # reported, not a rule the engine folds
+
+
+def test_the_decorator_reports_its_approval_in_the_tool_entry():
+    import runbound
+    from runbound import _coverage
+
+    @runbound.tool(effects={"read"}, reviewed=True, approval="required", mode="deferred")
+    def wire_money(amount: float):
+        return "sent"
+
+    (entry,) = [t for t in _coverage.tool_report() if t["name"] == "wire_money"]
+    assert entry["rules"] == {"approval": "required", "approval_mode": "deferred", "reviewed": True}

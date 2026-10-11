@@ -7,6 +7,218 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0a2] - 2026-10-12
+
+1.0.0a1 was built and tagged but never published; 1.0.0a2 is the first release of the 1.0 line on PyPI, so everything
+listed under it and under 1.0.0a1 below arrives together.
+
+### Added
+
+- **`runbound.session(requested_for=...)`.** An email or user id (at most 128 characters) that rides the approval request of any tool that asks a person inside the block; the plane refuses the same person approving it (409 `self_approval`). A value that is not such an id is ignored with one log line, never raised.
+- **`plane_status().plane_degraded`.** A hello may carry `plane_degraded` (`"ledger_unreachable"`: the plane answers but cannot reach its own database); the SDK surfaces it as `PlaneStatus.plane_degraded` (`None` when absent or empty) and records ONE `plane_degraded` event per change (`from`, `to`, `cleared`), never one per hello. Informational: no decision changes on it. Unknown keys in a hello are still ignored.
+- **A chaos harness** (`tests/chaos/`): a scripted `FlappingPlane` (503 bursts, slow hellos past the timeout, halts that flip, the same approval offered twice) drives the real link code on a fake clock, and asserts the plane-loss invariants: consequential tools refuse at the grace and read tools never do, the cache is enforced before the first hello, the modes only walk connecting, connected, degraded, unavailable and back.
+
+### Changed
+
+- **`GuardrailConfig` is now `RunboundConfig` (V8).** `runbound.RunboundConfig` is the class `init()` builds; `runbound.GuardrailConfig` (and `runbound.config.GuardrailConfig`) stays as a deprecated alias for the same class and emits one `DeprecationWarning` naming the new name on first use. The docs, README and API.md use the new name.
+- **`GuardrailCallbackHandler` is now `RunboundCallbackHandler` (V6).** `runbound.integrations.langchain.RunboundCallbackHandler` is the handler; `GuardrailCallbackHandler` stays as a deprecated alias for the same class and emits one `DeprecationWarning` naming the new name on first use. The LangChain guide, the example and API.md use the new name.
+- The seal's `not_after` check is documented as what it is, one-sided: a clock more than 300 s past `not_after` fails the seal (`clock_skew`), a clock behind it by any amount still verifies, and the plane's claim TTL bounds replay. The docstrings said "±300 s"; no behaviour changed.
+- **`max_calls` counts admitted calls only (V5a).** A call refused by a constraint, a validator, a capability
+  class, an approval or a gate no longer uses up the tool's allowance: `max_calls=2` allows two calls that
+  clear the chain, however many were refused first. The same holds for a row's `max_calls_per_session`.
+  `tool_calls()` still reports every attempt. Concurrent calls hold their unit while in the chain, so two
+  threads cannot both take the last one.
+- **One refusal reason for a blocked tool (V5c).** `blocked=True`, a `deny` entry and an org policy's `deny` now
+  raise with `reason="tool_blocked"`, as a console row's block already did; they were `"policy"`. The other code
+  rules (`allow`, `max_calls`, `constraint`) keep `"policy"`. `exc.reason` is host-side only: it is not on the wire.
+- **The Python floor is stated (V5b).** `import runbound` on Python 3.9 raises an `ImportError` that says 3.10 or
+  newer is needed, and the README says so; `requires-python` already was `>=3.10`.
+
+### Removed
+
+- **Wire types nothing reads (V5e).** `EntryDecision`, `ExitDelta` and `TripReport` are gone from
+  `runbound.plane_types`, and `WireEvent` loses the model-call fields (`tokens_in`, `tokens_out`, `tokens_reasoning`,
+  `cost_usd`, `model`, `priced`, `partial`, `tokens_estimated`, `provider`): the SDK guards tool calls only, and the
+  plane reads none of them. `WireAnomaly` stays: the exporter still sends it. `API.md` lists none of these.
+- `runbound.shared.RETRY_EVERY_S` (unused since hellos continue every poll period while degraded).
+
+### Fixed
+
+- **Waits imposed by a dashboard row no longer stop the event loop (V1).** An `async def` tool whose policy row adds a
+  sync approval or a quota (the `POST /v1/quota/take` round trip) now runs its pre-chain off the loop, as a
+  code-declared approval was meant to; the declared path also raised `NameError` (`asyncio` was never imported).
+
+## [1.0.0a1] - 2026-10-08
+
+A rewrite. 0.11.x guarded LLM calls (provider wrappers, budgets, circuits, loop and spike detection, postures);
+1.0.0a1 guards **tool calls only**: `@runbound.tool`, a hook chain around each call, per-tool policy from code and
+from the plane, quotas, human approvals, fail-closed behaviour when the plane is lost, and one OpenTelemetry span
+per call. The runtime has no dependencies outside the standard library. `API.md` is the full list of public names.
+
+### Removed
+
+- **Public names (S1).** `wrap`, `unpatch`, `llm`, `record_call`, `budget`, `BudgetView`, `circuit_state`,
+  `inflight_calls`, `active_sessions`, `posture`, `envelope`, `safe_mode`, `enter_safe_mode`, `exit_safe_mode`,
+  `fleet_status`, `is_tripped`, `clear`, `session_status`, `key_hash`, `verify_webhook_signature`, `Refusal`. Each
+  raises `AttributeError` on `runbound`, and none exists in `runbound.api`. Also gone from `runbound.__all__`:
+  `CircuitOpen`, `PostureState`, and `SafeModeViolation` (renamed `CapabilityRefused`, no alias).
+- **Modules (S2).** `runbound.wrappers` (OpenAI and Anthropic wrappers), `autowrap`, `circuit`, the provider
+  rate-limit header parser that was `runbound.quota` (the name now holds the new quota code), `pricing`,
+  `detectors`, `ladder`, `posture`, `responses`, `alerts`, `controls_merge`, `demo` (`python -m runbound.demo`).
+  `import runbound` needs no provider SDK.
+- **Features.** Provider wrappers and auto-wrapping; money and token budgets, soft budgets and admission
+  estimates; the price table and custom prices; provider circuits (local and fleet) and retry-storm handling; loop,
+  spike, error-storm, step, timeout and per-call size detectors; the posture ladder and safe mode; the execution
+  envelope; refusal response profiles; `/v1/enter` fleet entry decisions and their 5 s per-key cache; fleet latches
+  (`PlaneClient.enter`, `trip`, `clear`) and fleet spend offsets; entitlements and plan limits; the `/v1/controls`
+  fetch and merge (`PlaneClient.controls`); webhook signature verification; the LangChain handler's `on_llm_end`
+  and `on_llm_error`. A plane halt with `halt_mode="narrow"` is now a full halt.
+- **`init()` parameters.** Budgets and limits: `budget_usd`, `max_total_tokens`, `budget_window`,
+  `run_budget_usd`, `run_max_total_tokens`, `max_steps`, `max_events`, `tokens_per_minute_limit`,
+  `max_call_seconds`, `max_tokens_out_per_call`, `max_cost_per_call_usd`, `max_session_seconds`,
+  `max_session_lifetime_seconds`, `max_active_sessions`, `max_session_depth`, `max_child_sessions`,
+  `max_inflight_calls`, `estimate_tokens`, `budget_admission`, `admission_output_tokens`, `budget_soft`,
+  `on_budget_soft`. Pricing: `custom_prices`, `on_unpriced_model`, `unpriced_price_per_1m_usd`. Loops and spikes:
+  `loop_threshold`, `loop_window`, `on_loop`, `loop_hard_threshold`, `loop_alert_threshold`,
+  `loop_contain_threshold`, `loop_max_period`, `loop_stall_turns`, `loop_shapes`, `loop_ignore_tools`,
+  `throttle_base_seconds`, `throttle_max_seconds`, `spike_detection`, `on_spike`, `spike_limit_calls`,
+  `spike_cooldown_seconds`, `spike_max_strikes`, `spike_warmup_calls`, `spike_window`, `spike_factor`,
+  `spike_confirm`, `spike_min_duration_s`, `spike_min_output_tokens`, `error_storm_limit`. Providers and circuits:
+  `on_provider_failure`, `circuit_failure_threshold`, `circuit_window_seconds`, `circuit_cooldown_seconds`,
+  `circuit_reads_quota`, `circuit_mode`, `circuit_failure_rate`, `circuit_min_calls`, `circuit_slow_call_seconds`,
+  `circuit_slow_rate`, `circuit_half_open_calls`, `circuit_fleet`, `circuit_posture`, `auto_wrap`,
+  `coverage_check_seconds`. Reactions: `on_trip`, `latch_ttl_seconds`, `on_anomaly`, `callback`, `postures`,
+  `refusals`, `envelope`. Plane: `api_key` (the deprecated alias of `token`), `control_plane_timeout_s`,
+  `control_plane_cache_s`, `stale_halt`, `on_plane_loss`. Passing any of them raises `TypeError`.
+- **Refusal reasons.** `budget`, `tokens`, `steps`, `time`, `posture`, `circuit`, `concurrency`, `loop`,
+  `error_storm`, `spike`.
+- **Wire and status.** `HelloReply.circuits` (an older plane that still sends it is ignored); the `circuits` lane
+  of the `/v1/events` batch; posture-change records. `plane_status().mode` no longer reads `limited`;
+  `PlaneStatus.entitlements`, `entries_window` and `entries_local_share` stay on the type at their defaults.
+- **OpenTelemetry counters.** `runbound.posture_changes`, `runbound.guarded_calls`, `runbound.estimated_usd`
+  (`otel.enable()` keeps `runbound.refusals` and `runbound.anomalies`).
+- **Packaging.** The `dev` extra.
+
+### Added
+
+- **The hook chain (S5).** Every decorated call runs, in a fixed order: user rewrite hooks, validation of the final
+  arguments against the signature and type hints (`reason="invalid_arguments"`, nothing coerced, sync and async),
+  the tool policy rules, the capability class rules and action cap, approval, then user gate hooks, then the body.
+  First refuse wins. `init(pre_hooks=, gate_hooks=, hook_timeout_s=5.0)` and `@tool(pre_hooks=, gate_hooks=)`; a
+  hook returns `hooks.allow()`, `hooks.refuse(reason)` (`reason="hook_refused"`) or, in a pre hook only,
+  `hooks.rewrite(args=, kwargs=)`. A user hook that raises or outlives `hook_timeout_s` refuses
+  (`reason="hook_error"`) for a `financial`, `destructive`, `privileged` or unclassified tool, and is logged and
+  skipped for `read`, `write` and `external`. A built-in that raises refuses every class.
+- **The post chain and `tool_result` (S6).** A result is redacted (37 secret key names, plus
+  `init(redact_keys=)`), truncated with JSON kept valid (`init(result_limits=)`, `@tool(max_result_chars=)`),
+  scanned for 15 prompt-injection patterns (tags, never blocks), then passed to `init(post_hooks=)` /
+  `@tool(post_hooks=)` (`hooks.replace`, `hooks.withhold`). Every call ends in a `tool_result` record (`duration_s`,
+  `outcome` of `ok` / `error` / `refused` / `withheld` / `pending_approval`, scan flags, sizes, tags; never the result)
+  delivered to `on_event` and `runbound.tool_results()`, a ring of its own apart from `events()`. The LangChain
+  handler gains `on_tool_end`.
+- **Approvals (A5).** `@runbound.tool(approval="required", mode="sync" | "deferred", timeout_s=600)`, slot 5 of
+  the chain. Sync waits on the plane's answer; deferred returns `{"status": "pending_approval", "request_id": ...}`
+  and a worker of the service executes the approved call from `hello.approved[]` through the full chain, then calls
+  `init(on_deferred_result=)`. Deferred arguments are sealed with HMAC-SHA256 under a per-service secret
+  (`init(approval_secret=)` or `RUNBOUND_APPROVAL_SECRET`, never sent to the plane); a bad or expired seal runs
+  nothing and reports `tampered`. Claims on executing requests are renewed on each hello (`renew_claims`,
+  `claims_lost`). A report the plane cannot take is queued to `<service>.reports.jsonl` beside the policy cache and
+  sent once on the next connected hello. A policy that tightens after approval stops the deferred execution.
+  `runbound.current_request()`. Reasons `approval_denied`, `approval_timeout`, `approval_tampered`,
+  `approval_unavailable`; a full quota on create is `quota_exceeded` with `retry_after`.
+- **Per-tool policy rows and quotas (T1).** `GET /v1/policy` serves `rows` (state `dry_run` or `enforced`) and
+  `rows_hash`. Rows fold with code rules field by field, most restrictive wins, and never loosen a code rule
+  (blocked, session cap, approval, approval timeout, risk class, fail mode). A `dry_run` row refuses nothing and
+  records `would_refuse` (a Decision and a `would_refuse:<rule>` tag). A row's `quota` is
+  `{"limit", "window": "minute" | "hour" | "day", "per": "service" | "key"}` in a fixed, calendar-aligned UTC
+  window, leased on the heartbeat (`quota_held`, `quota_leases`) and taken with `POST /v1/quota/take`. Reasons
+  `tool_blocked`, `session_max_calls`, `quota_exceeded`, `quota_plane_unavailable`. A refused call takes no quota.
+- **A code-declared approval is reported.** The tool report's `rules` carry `approval` and `approval_mode` for a
+  `@tool(approval="required")` tool, so the plane never leases it quota (its approval create takes the unit).
+- **Plane loss and the policy cache (S7).** The last policy served is written atomically to disk
+  (`init(cache_dir=)` / `RUNBOUND_CACHE_DIR`, else the platform cache dir; `0700` / `0600`, with a MAC keyed from
+  the token) and enforced on restart before the first heartbeat. `plane_status().mode` is `local`, `connecting`,
+  `connected`, `degraded` (3 missed hellos, or the plane could not read its own state) or `unavailable` (60 s since
+  the last answered hello). Hellos continue every `poll_s` (±10%) in every state. `read`, `write` and `external`
+  tools keep running on the cache; `financial`, `destructive`, `privileged` and unclassified tools refuse with
+  `reason="plane_unavailable"` (retryable) once `init(consequential_grace_s=60)` (15 to 60) has passed since the
+  last answered hello. `PlaneStatus.cache_age_s` and `stale`.
+- **Spans (S8).** One INTERNAL span `execute_tool {tool}` per decorated call and per LangChain tool, scope
+  `runbound`. It goes to the global OpenTelemetry `TracerProvider` when one is configured (imported lazily, never
+  installed), otherwise to `init(otel_endpoint=)` as OTLP/JSON over the standard library with `token` as the Bearer
+  key. With `otel_endpoint` set, per-call events leave `/v1/events`, which keeps refusals and changes. Attributes
+  are pinned in `runbound/otel_names.py` and never carry an argument, a result or an exception message.
+- **Public names.** `tool_results`, `current_request`, `ToolRules`, `CapabilityRefused`; the `runbound.hooks`
+  module. New `init()` parameters: `pre_hooks`, `gate_hooks`, `hook_timeout_s`, `post_hooks`, `redact_keys`,
+  `result_limits`, `otel_endpoint`, `cache_dir`, `consequential_grace_s`, `approval_secret`,
+  `on_deferred_result`. New `@tool()` parameters: `pre_hooks`, `gate_hooks`, `post_hooks`, `max_result_chars`,
+  `approval`, `mode`, `timeout_s`.
+- **Refusal reasons.** `capability`, `invalid_arguments`, `hook_refused`, `hook_error`, `approval_denied`,
+  `approval_timeout`, `approval_tampered`, `approval_unavailable`, `quota_exceeded`, `quota_plane_unavailable`,
+  `plane_unavailable`, `tool_blocked`, `session_max_calls`. `exc.retry_after` is set for `quota_exceeded`.
+
+### Changed
+
+- **Breaking: the SDK guards tool calls only.** It no longer sees, prices or counts model calls.
+- **Breaking: a capability refusal's `exc.reason` is `capability`** (it was `policy`), and its class is
+  `CapabilityRefused` (was `SafeModeViolation`).
+- **Breaking: retryable reasons** are `plane`, `plane_unavailable`, `quota_exceeded` and `quota_plane_unavailable` (were `circuit`, `concurrency`, `plane`). The two quota reasons carry `retry_after`: the rest of the window, or the plane poll interval.
+- **Breaking: `plane_status().mode`.** The 0.11 `degraded` (three failed calls, after which the SDK stopped
+  calling the plane) is now `unavailable`; `degraded` is the earlier state in which everything still runs on the
+  cache. Missed hellos count, not failed policy fetches.
+- **`assert_guarded()`** raises when no tool is decorated (it used to look at provider SDKs and wrapped clients).
+  `check()` reports decorated tools; it has no wrapped-client section.
+- **`@tool(polling=, idempotent=, retryable=)`** are reported facts only; with no loop detector they change nothing.
+- **`init(capabilities=)`** is a static class rule; nothing in the process or the plane narrows it at run time.
+- **The events batch** sends no posture changes and no `circuits` lane; `exits` and `changes` stay.
+
+### Migrating from 0.11.x
+
+| 0.11.x | 1.0.0a1 |
+| --- | --- |
+| `runbound.wrap(client)`, `auto_wrap`, `runbound.llm`, `record_call`, `unpatch` | Gone. Decorate the functions the agent calls with `@runbound.tool`; leave the model client unwrapped. |
+| `budget_usd`, `max_total_tokens`, `run_budget_usd`, `budget_window`, `budget()`, `BudgetView`, pricing | Gone. Bound call counts instead: a row `quota` per clock minute / hour / day (per service or per key), `@tool(max_calls=n)` per session, `init(max_actions_per_run=n)`. |
+| Provider circuits, `CircuitOpen`, `circuit_state()`, `on_provider_failure` | Gone. Handle provider errors in your own client code. |
+| Loop / spike / error-storm detectors, `on_loop`, `on_spike` | Gone from the SDK. `max_calls`, `max_actions_per_run` and quotas cap repetition. |
+| `posture()`, `safe_mode()`, `enter_safe_mode()`, `exit_safe_mode()`, `postures=` | `init(capabilities={"destructive": "deny", ...})` for a standing rule; a plane halt (`on_halt`) to stop the fleet; consequential classes fail closed on plane loss. |
+| `SafeModeViolation` | `CapabilityRefused` (still a `PolicyViolation`). |
+| `envelope()`, `envelope=`, `max_steps`, `max_session_seconds` | `init(max_actions_per_run=)`, `@tool(max_calls=)`. |
+| `is_tripped()`, `clear()`, `on_trip`, `latch_ttl_seconds` | A session still latches on `ToolPolicy(on_violation="block_and_latch")`: read `runbound.current_session().tripped_by`; `runbound.reset()` or a new `session(key)` starts clean. |
+| `session_status(key)`, `fleet_status()`, `inflight_calls()`, `active_sessions()` | `runbound.tool_calls(key)`, `runbound.plane_status()`; the rest is gone. |
+| `on_anomaly=`, `callback=` | `init(on_event=fn)`; `runbound.events()`, `runbound.decisions()`. |
+| `refusals=`, `Refusal` | Gone. Switch on the fixed `exc.reason` codes. |
+| `api_key=` | `token=` (or `RUNBOUND_TOKEN`). |
+| `on_plane_loss=`, `stale_halt=`, `control_plane_timeout_s=`, `control_plane_cache_s=` | Gone. Plane loss follows the capability classes; tune with `consequential_grace_s=` and `cache_dir=`. |
+| `key_hash()`, `verify_webhook_signature()` | Gone from the SDK. A refusal still carries `exc.scope["key_hash"]`. |
+| `exc.reason in ("budget", "circuit", "loop", ...)` | Those codes are never produced. Handle `quota_exceeded` (`exc.retry_after`), `plane_unavailable` and the `approval_*` codes. |
+| `require_approval=predicate` | Still works (a local check, `reason="approval"`). For a person in the loop use `@tool(approval="required", mode=...)`. |
+
+A minimal 0.11.x setup and its 1.0.0a1 form:
+
+```python
+# 0.11.x
+import runbound
+runbound.init(budget_usd=5.0, auto_wrap=True)
+client = runbound.wrap(OpenAI())
+
+# 1.0.0a1
+import runbound
+
+@runbound.tool(effects={"financial"}, max_calls=1, approval="required")
+def issue_refund(order_id: str, amount: float) -> dict: ...
+
+runbound.init(token="...", control_plane_url="https://plane.internal.example.com", service="refunds")
+```
+
+### Notes
+
+- `1.0.0a1` is an alpha: names and wire fields may still change before 1.0.0.
+- Python `>=3.10`. No runtime dependencies. Extras: `otel` (the OpenTelemetry provider path and `otel.enable()`),
+  `langchain` (`GuardrailCallbackHandler`), `test`.
+- **Decorate before `init()` is fine.** Tools are usually decorated at import, before `init()` runs. They are
+  registered then, run unguarded until `init()`, and are enforced from their first call after it.
+  `init(require_rules=True)` names every already-decorated tool without a rule in a `ValueError`.
+
 ## [0.11.2] - 2026-10-05
 
 ### Fixed
@@ -405,7 +617,7 @@ happens.
   field on the heartbeat reply, tighten-only) is narrowed, a tool is refused
   before its body runs whenever the posture denies **any one** of its classes —
   and an unclassified tool is refused by every posture but `full`. The refusal
-  is `SafeModeViolation`, a `PolicyViolation` with detector `safe_mode` and a
+  is `CapabilityRefused`, a `PolicyViolation` with detector `safe_mode` and a
   built-in 403 "That action isn't available right now."; it names the posture
   and the class it denied, and it latches nothing. `init(capabilities={class:
   verdict})` states a class rule that holds whatever the posture is, and
@@ -563,7 +775,7 @@ happens.
   fleet-wide halt now carries a `mode`: `"stop"` (unchanged — refuses every
   guarded session at the door) or `"narrow"` (states posture `restricted`
   fleet-wide — model calls keep serving, every non-read decorated tool
-  refuses `SafeModeViolation`). `HelloReply.halt_mode` (new field, both
+  refuses `CapabilityRefused`). `HelloReply.halt_mode` (new field, both
   sides of the wire, default `"stop"` so an older plane's halt keeps its
   old meaning exactly) carries it; `Engine.halt_posture()` reads it,
   tightened into `effective_posture()` from its own source, `"halt"` (new
@@ -572,7 +784,7 @@ happens.
   clear the other. `on_halt` (`"raise"`/`"warn"`) now gates Narrow the same
   way it always gated Stop: `"warn"` never installs the posture at all
   (logged once a minute instead — "Fleet narrowed by the control plane...")
-  rather than force a `SafeModeViolation` into code that asked never to be
+  rather than force a `CapabilityRefused` into code that asked never to be
   stopped by the kill switch. Every worker acks a halt it has seen and
   applied on its next heartbeat (`halt_ack`, staleness-aware — a worker
   that gave up enforcing a stale halt under `stale_halt="release"` stops

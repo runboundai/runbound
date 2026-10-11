@@ -1,17 +1,16 @@
 """A LangChain / LangGraph callback handler.
 
-For agents whose LLM and tool calls are made by a framework rather than by
-your own code, so there is no client to :func:`runbound.wrap` and no function
-to decorate with :func:`runbound.tool`::
+For agents whose tool calls are dispatched by a framework rather than your own
+code, so there is no function to decorate with :func:`runbound.tool`::
 
     import runbound
-    from runbound.integrations.langchain import GuardrailCallbackHandler
+    from runbound.integrations.langchain import RunboundCallbackHandler
 
-    runbound.init(budget_usd=5.00, loop_threshold=3, on_anomaly="raise")
+    runbound.init(tool_policy=runbound.ToolPolicy(...))
 
     agent.invoke(
         {"input": "research the market"},
-        config={"callbacks": [GuardrailCallbackHandler()]},
+        config={"callbacks": [RunboundCallbackHandler()]},
     )
 
 The handler sets ``raise_error = True`` so that LangChain lets
@@ -22,15 +21,13 @@ everything else itself. A bug in runbound can cost you observability; it can
 never take down the chain.
 
 ``langchain_core`` is imported lazily, on first access to
-``GuardrailCallbackHandler``, so this module imports cleanly without it.
-
-Limitations: LangChain reports token usage on ``on_llm_end`` only, so streamed
-responses whose provider omits usage are recorded as zero-token steps, and
-budget checks land after a call rather than before it.
+``RunboundCallbackHandler``, so this module imports cleanly without it.
 """
 
 import functools
 import logging
+import time
+import warnings
 from collections.abc import Callable
 from typing import Any
 
@@ -42,19 +39,14 @@ _LOG = logging.getLogger("runbound")
 _INSTALL_HINT = "runbound's LangChain integration requires langchain-core: pip install langchain-core"
 _UNKNOWN_TOOL = "<tool>"
 
-#: Built on first access to ``GuardrailCallbackHandler``; see ``__getattr__``.
+#: Built on first access to ``RunboundCallbackHandler``; see ``__getattr__``.
 _HANDLER_CLASS: type | None = None
+
+#: The old name warns on its first use in a process, not on every access.
+_ALIAS_WARNED = False
 
 
 # --- reading what LangChain hands us ----------------------------------------
-
-
-def _as_int(value: Any) -> int:
-    """A token count from an untyped payload: non-numbers and negatives -> 0."""
-    try:
-        return max(int(value), 0)
-    except (TypeError, ValueError):
-        return 0
 
 
 def _as_model(value: Any) -> str | None:
@@ -71,53 +63,6 @@ def _tool_name(serialized: Any) -> str:
     """
     name = serialized.get("name") if hasattr(serialized, "get") else None
     return _as_model(name) or _UNKNOWN_TOOL
-
-
-def _safe(read: Callable[[Any], Any], response: Any, default: Any) -> Any:
-    """Run a usage reader over a duck-typed response; on any failure, ``default``."""
-    try:
-        return read(response)
-    except Exception:
-        _LOG.debug("runbound could not read usage via %s", read.__name__, exc_info=True)
-        return default
-
-
-def _usage_from_llm_output(response: Any) -> tuple[str | None, int, int]:
-    """``(model, tokens_in, tokens_out)`` from ``LLMResult.llm_output``."""
-    llm_output = getattr(response, "llm_output", None)
-    if not hasattr(llm_output, "get"):
-        return None, 0, 0
-    model = _as_model(llm_output.get("model_name"))
-    usage = llm_output.get("token_usage")
-    if not hasattr(usage, "get"):
-        return model, 0, 0
-    return model, _as_int(usage.get("prompt_tokens")), _as_int(usage.get("completion_tokens"))
-
-
-def _usage_from_generations(response: Any) -> tuple[int, int]:
-    """``(tokens_in, tokens_out)`` from the first generation's ``usage_metadata``.
-
-    Chat models report usage there rather than in ``llm_output``.
-    """
-    for batch in getattr(response, "generations", None) or ():
-        for generation in batch or ():
-            usage = getattr(getattr(generation, "message", None), "usage_metadata", None)
-            if hasattr(usage, "get"):
-                return _as_int(usage.get("input_tokens")), _as_int(usage.get("output_tokens"))
-    return 0, 0
-
-
-def _extract_usage(response: Any) -> tuple[str | None, int, int]:
-    """Best-effort ``(model, tokens_in, tokens_out)`` from an LLMResult.
-
-    Every lookup is optional: a response that carries no usage — or that
-    misbehaves entirely — yields zeros, so the call is still recorded as a
-    step rather than being lost.
-    """
-    model, tokens_in, tokens_out = _safe(_usage_from_llm_output, response, (None, 0, 0))
-    if not tokens_in and not tokens_out:
-        tokens_in, tokens_out = _safe(_usage_from_generations, response, (0, 0))
-    return model, tokens_in, tokens_out
 
 
 # --- the handler ------------------------------------------------------------
@@ -154,13 +99,13 @@ def _build_handler_class() -> type:
     except Exception as exc:
         raise ImportError(_INSTALL_HINT) from exc
 
-    class GuardrailCallbackHandler(BaseCallbackHandler):  # type: ignore[misc, valid-type]
-        """Feeds a LangChain run's tool and model calls to runbound.
+    class RunboundCallbackHandler(BaseCallbackHandler):  # type: ignore[misc, valid-type]
+        """Feeds a LangChain run's tool calls to runbound.
 
         Pass one per ``invoke``/``stream`` call (or to the constructor of your
-        chain) via ``config={"callbacks": [GuardrailCallbackHandler()]}``. It
+        chain) via ``config={"callbacks": [RunboundCallbackHandler()]}``. It
         holds no state of its own; the session lives in :mod:`runbound.api`,
-        so several handlers share one budget and one step count.
+        so several handlers share one step count and one tally per tool.
 
         Does nothing at all until :func:`runbound.init` has been called.
         """
@@ -168,21 +113,23 @@ def _build_handler_class() -> type:
         #: Let GuardrailTripped out of the callback so the chain stops.
         raise_error = True
 
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            super().__init__(*args, **kwargs)
+            #: run_id -> (tool name, monotonic start), for the ``tool_result`` event's duration.
+            self._started: dict = {}
+
         @_fail_open
         def on_tool_start(self, serialized: Any, input_str: str, **kwargs: Any) -> None:
             """Record and vet a tool call *before* the tool runs.
 
-            LangChain calls this ahead of execution, so with
-            ``on_anomaly="raise"`` a loop is broken on the repeat that would
-            have made it — the tool never runs. An action policy is enforced
-            here for the same reason, on the tool's name and the input string
+            LangChain calls this ahead of execution, so a refused call never
+            runs. The action policy is enforced here, on the tool's name and the input string
             LangChain hands us as its single argument; a
             :class:`~runbound.exceptions.PolicyViolation` is a
             ``GuardrailTripped``, so ``raise_error`` lets it stop the chain.
-            ``max_actions_per_run`` (under ``config.envelope``) is
-            enforced here too — the tool's event already counts towards
-            ``executed_actions`` regardless of framework origin, so the cap
-            applies to it the same way.
+            ``max_actions_per_run`` is enforced here too — the tool's event
+            already counts towards ``executed_actions`` regardless of framework
+            origin, so the cap applies to it the same way.
 
             This is also where a LangChain agent's tools become known: the
             framework owns the dispatch, so there is no ``@runbound.tool`` to
@@ -190,8 +137,8 @@ def _build_handler_class() -> type:
             said. They join the tool report undecorated, which is honest —
             nothing here guards them by name. ``decorated=False`` on the
             admit call below is exactly that: a LangChain tool declares no
-            effects, so posture and capability rules never refuse it here —
-            only the action cap and the policy do.
+            effects, so capability class rules never refuse it here — only the
+            halt, the action cap and the policy do.
             """
             name = _tool_name(serialized)
             _coverage.tool_requested(name)
@@ -200,45 +147,66 @@ def _build_handler_class() -> type:
                 tool_name=name,
                 args_hash=api._args_hash(name, (input_str,), {}),
             )
-            api._admit_action(name, (input_str,), {}, frozenset(), False)
+            started = api._start_run(name, call_id=str(kwargs.get("run_id")) if kwargs.get("run_id") else None)
+            try:
+                api._admit_action(name, (input_str,), {}, frozenset(), False, allow_rewrite=False)
+            except GuardrailTripped as refusal:
+                api._emit_result(name, "refused", started, [], exc=refusal)
+                raise
+            self._started[kwargs.get("run_id")] = (name, started)
 
         @_fail_open
-        def on_llm_end(self, response: Any, **kwargs: Any) -> None:
-            """Record a finished model call, priced from whatever usage it carries."""
-            api._record_llm_call(*_extract_usage(response))
+        def on_tool_end(self, output: Any, **kwargs: Any) -> None:
+            """Record how the tool ended: duration, size, and what the scan found.
+
+            LangChain callbacks observe; they cannot replace a tool's output, so the
+            result reaches the model as the tool returned it. The ``tool_result``
+            event still carries the scan's flags, the truncation that *would* apply
+            and the duration, never the output itself. Decorate the tool with
+            ``@runbound.tool`` to have its output redacted and truncated for real.
+            """
+            name, started = self._started.pop(kwargs.get("run_id"), (_UNKNOWN_TOOL, time.monotonic()))
+            api._finish(name, output, (), {}, started, [], frozenset(), (), None)
 
         @_fail_open
         def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
             """Record a failed tool call. The tool's own error stays the one raised."""
             name = kwargs.get("name") or _tool_name(kwargs.get("serialized"))
             api._record_tool_error(_as_model(name) or _UNKNOWN_TOOL, error)
-
-        @_fail_open
-        def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
-            """Observed only. Model errors are the framework's to retry or raise."""
-            _LOG.debug("runbound saw a LangChain LLM error: %r", error)
+            _name, started = self._started.pop(kwargs.get("run_id"), (None, time.monotonic()))
+            api._emit_result(_as_model(name) or _UNKNOWN_TOOL, "error", started, [], exc=error)
 
         @_fail_open
         def on_chain_error(self, error: BaseException, **kwargs: Any) -> None:
             """Observed only. A chain error is usually a tool error already recorded."""
             _LOG.debug("runbound saw a LangChain chain error: %r", error)
 
-    return GuardrailCallbackHandler
+    return RunboundCallbackHandler
 
 
 def __getattr__(name: str) -> Any:
-    """Build ``GuardrailCallbackHandler`` on first access (PEP 562).
+    """Build ``RunboundCallbackHandler`` on first access (PEP 562).
 
     Deferring it is what keeps ``langchain_core`` optional; the class is cached
     after the first access, and the ImportError is raised fresh every time so
     the install hint is never swallowed by a stale cache.
+
+    ``GuardrailCallbackHandler`` is the deprecated former name: the same class,
+    with one ``DeprecationWarning`` the first time it is used.
     """
-    if name == "GuardrailCallbackHandler":
-        global _HANDLER_CLASS
+    global _HANDLER_CLASS, _ALIAS_WARNED
+    if name in ("RunboundCallbackHandler", "GuardrailCallbackHandler"):
+        if name == "GuardrailCallbackHandler" and not _ALIAS_WARNED:
+            _ALIAS_WARNED = True
+            warnings.warn(
+                "GuardrailCallbackHandler is renamed RunboundCallbackHandler; the old name will be removed in a future release",
+                DeprecationWarning,
+                stacklevel=2,
+            )
         if _HANDLER_CLASS is None:
             _HANDLER_CLASS = _build_handler_class()
         return _HANDLER_CLASS
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
-__all__ = ["GuardrailCallbackHandler"]
+__all__ = ["RunboundCallbackHandler"]
