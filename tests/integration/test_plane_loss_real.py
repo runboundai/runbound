@@ -60,23 +60,27 @@ def test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs(priva
     assert look("t") == "found"  # a read tool keeps running on what it has
 
 
-def test_a_restart_enforces_the_cached_org_policy_before_the_first_hello(private_plane, tmp_path):  # noqa: F811
-    status, _ = private_plane.request("POST", "/v1/admin/policies", {
-        "service": "plane-loss-boot", "body": {"deny": ["look"]}, "state": "enforced"})
-    assert status == 200
+def test_a_restart_enforces_the_cached_rows_before_the_first_hello(private_plane, tmp_path):  # noqa: F811
+    # H6: the organisation document is gone from the plane (410), so the cached rule under test is a console row.
+    status, body = private_plane.request("POST", "/v1/admin/tool-policies", {"service": "plane-loss-boot", "tool": "look", "blocked": True})
+    assert status in (200, 201), body
+    status, body = private_plane.request("POST", "/v1/admin/tool-policies/plane-loss-boot/look/rollout", {"state": "enforced", "comment": "test"})
+    assert status == 200, body
     start(private_plane, "plane-loss-boot")
     _, look = tools()
-    _until(lambda: runbound.plane_status().applied_policy_version is not None, what="the policy fetch")
-    with pytest.raises(runbound.PolicyViolation):
+    _until(lambda: api._SHARED.row_for("look"), what="the row for look")
+    with pytest.raises(runbound.ExecutionRefused) as refused:
         look("t")
+    assert refused.value.reason == "tool_blocked"
     private_plane.kill()
     api._teardown_for_tests()  # the worker restarts with the plane still dead
 
     start(private_plane, "plane-loss-boot")
     _, look = tools()
     assert runbound.plane_status().mode in ("connecting", "degraded")  # no hello has been answered
-    with pytest.raises(runbound.PolicyViolation):  # enforced from the cache, before any hello
+    with pytest.raises(runbound.ExecutionRefused) as refused:  # enforced from the cache, before any hello
         look("t")
+    assert refused.value.reason == "tool_blocked"
 
 
 def test_a_destructive_tool_waits_for_a_hello_when_there_is_neither_a_hello_nor_a_cache(private_plane):  # noqa: F811

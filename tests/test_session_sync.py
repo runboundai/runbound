@@ -50,6 +50,12 @@ def plane(monkeypatch) -> FakePlane:
     return fake
 
 
+def after_first_policy() -> None:
+    """The worker has loaded a sealed cache (as after a restart), so the floor (F3) lets read and write tools run on what it holds."""
+    api._SHARED._sealed_cache_loaded = True
+    api._SHARED._cache_written_at = time.time()
+
+
 def start(**kwargs) -> None:
     """init() in fleet mode, with the poller effectively switched off."""
     fields = {
@@ -97,6 +103,7 @@ def _read_tool():
 
 def test_tool_calls_never_touch_the_network_on_the_calling_thread(plane):
     start()
+    after_first_policy()
 
     @runbound.tool(effects={"read"})
     def search(query: str) -> str:
@@ -162,20 +169,21 @@ def test_the_session_door_stays_open_under_a_halt(plane):
     assert ran is True
 
 
-def test_a_fleet_halt_only_warns_under_warn(plane, caplog):
+def test_a_fleet_halt_refuses_under_warn_and_warns(plane, caplog):
     start(on_halt="warn")
     api._SHARED.apply_hello(HelloReply(halt=True))
     tool, ran = _tool({"write"})
 
     with caplog.at_level("WARNING", logger="runbound"):
         with runbound.session("user-9"):
-            assert tool() == "done"
+            with pytest.raises(runbound.ExecutionRefused):
+                tool()
 
-    assert ran == [True]
+    assert ran == []
     assert "halt" in caplog.text.lower()
 
 
-def test_the_halt_warning_is_not_repeated_for_every_call(plane, caplog):
+def test_every_call_a_halt_refuses_is_logged(plane, caplog):
     start(on_halt="warn")
     api._SHARED.apply_hello(HelloReply(halt=True))
     tool, _ran = _tool({"write"})
@@ -183,9 +191,10 @@ def test_the_halt_warning_is_not_repeated_for_every_call(plane, caplog):
     with caplog.at_level("WARNING", logger="runbound"):
         with runbound.session("user-9"):
             for _ in range(3):
-                tool()
+                with pytest.raises(runbound.ExecutionRefused):
+                    tool()
 
-    assert caplog.text.lower().count("halted by the control plane") == 1
+    assert caplog.text.lower().count("halted by the control plane") == 3
 
 
 def test_a_lifted_halt_lets_the_tool_run_again(plane):
@@ -203,17 +212,18 @@ def test_a_lifted_halt_lets_the_tool_run_again(plane):
     assert ran == [True]
 
 
-def test_a_stale_halt_stops_being_enforced(plane):
+def test_a_halt_is_still_enforced_after_the_plane_goes_quiet(plane):
     start(on_halt="raise")
     tool, ran = _tool({"write"})
     api._SHARED.apply_hello(HelloReply(halt=True))
     real = api._SHARED._now
-    api._SHARED._now = lambda: real() + shared_module.STALE_HALT_S + 5
+    api._SHARED._now = lambda: real() + 24 * 3600
 
     with runbound.session("user-9"):
-        assert tool() == "done"
+        with pytest.raises(runbound.ExecutionRefused):
+            tool()
 
-    assert ran == [True]
+    assert ran == []
 
 
 # --- Narrow no longer exists: a narrow halt is a full halt -------------------
@@ -258,16 +268,17 @@ def test_a_narrow_halt_does_not_refuse_the_door():
     assert ran is True
 
 
-def test_a_narrow_halt_is_not_applied_under_on_halt_warn(caplog):
+def test_a_narrow_halt_is_a_full_halt_under_on_halt_warn_too(caplog):
     start(on_halt="warn")
     api._SHARED.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
     tool, ran = _tool({"financial"})
 
     with caplog.at_level("WARNING", logger="runbound"):
         with runbound.session("user-9"):
-            tool()  # does not raise: on_halt="warn" applies no halt at all
+            with pytest.raises(runbound.ExecutionRefused):
+                tool()  # on_halt="warn" no longer lets a halted call through
 
-    assert ran == [True]
+    assert ran == []
     assert "halted" in caplog.text.lower()
 
 
@@ -277,6 +288,7 @@ def test_a_narrow_halt_is_not_applied_under_on_halt_warn(caplog):
 def test_a_plane_that_is_down_never_stops_a_tool(plane):
     plane.ok = False
     start(on_halt="raise")
+    after_first_policy()  # F3: a worker that has never held a policy runs nothing; one restarted on a sealed cache runs on it
     tool, ran = _tool({"write"})
 
     with runbound.session("user-9"):
@@ -288,6 +300,7 @@ def test_a_plane_that_is_down_never_stops_a_tool(plane):
 def test_a_plane_that_explodes_never_reaches_the_host(plane):
     plane.explodes = True
     start()
+    after_first_policy()
     tool, _ran = _tool({"write"})
 
     with runbound.session("user-9"):
@@ -300,6 +313,7 @@ def test_a_plane_that_explodes_never_reaches_the_host(plane):
 def test_an_org_policy_arrives_without_an_init(plane):
     plane.policy_body = {"version": 1, "policy": {"deny": ["wire_transfer"]}}
     start()
+    after_first_policy()
 
     @runbound.tool(effects={"write"})
     def wire_transfer(amount: int) -> str:

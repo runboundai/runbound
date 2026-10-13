@@ -54,7 +54,7 @@ def lookup_order(order_id: str) -> dict:
 | Keyword | Value | Refuses a call when |
 |---|---|---|
 | `blocked` | `True` | always. Reported as the `deny` rule. |
-| `max_calls` | `int >= 1` | the tool has been attempted more than `max_calls` times **in this session**. The attempt being judged counts, so `1` lets the first call run and refuses the second. |
+| `max_calls` | `int >= 1` | the tool has already been **admitted** `max_calls` times in this session and this call would be one more. The call being judged counts itself, so `1` lets the first call run and refuses the second; a call an earlier check refused does not use one up. |
 | `constraint` | `predicate(call) -> bool` | the predicate returns `False` or raises. |
 | `require_approval` | `predicate(call) -> bool` | the predicate returns `False` or raises. Each tool has its own. |
 | `reviewed` | `True` | never. It says the tool was looked at and is deliberately unrestricted, which satisfies `require_rules`. It is not an allow-list. |
@@ -72,8 +72,10 @@ type is reported, never its message. A keyword that can never be enforced
 (`max_calls=0`, a `constraint` that is not callable, `blocked=True` together
 with `reviewed=True`) raises `ValueError` at decoration.
 
-`max_calls` counts attempts, not successes: a refused call still counts.
-`runbound.tool_calls(key=None)` reads the tally without making a call.
+`max_calls` counts admitted calls, not attempts: a call that is refused (by a block, a validator, a
+capability class, an approval) or deferred for approval gives its unit back, and calls running at the
+same moment each hold one, so they cannot jointly pass the limit. `runbound.tool_calls(key=None)` is
+the other tally: it counts every attempt, refused ones included, and reads without making a call.
 
 ### `require_rules`: the CI gate
 
@@ -172,6 +174,10 @@ next one is refused with `reason="blast_radius"`.
 
 ## Console rows
 
+> **Only runbound 1.x enforces console rows.** A worker on 0.x (0.11.2 is what a plain
+> `pip install runbound` installs) ignores them and keeps just the rules in your code and the older
+> organisation-wide policy. See [Upgrading from 0.11.x](upgrading-from-0-11.md).
+
 A control plane serves one row per tool of a service with `GET /v1/policy`
 (`rows` and `rows_hash`; see [Plane link](plane-link.md)). A row is in state
 `dry_run` or `enforced`, and it is folded with the tool's code rules **field by
@@ -183,16 +189,68 @@ a quota. It can never loosen what the code states.
 | `blocked` | OR with `blocked=True` |
 | `max_calls_per_session` | both apply, so the lower holds |
 | `approval_required` | OR with code approval |
-| `approval_mode` | code wins when it declares a mode; else the row's (`sync` by default). A `deferred` row on a tool whose arguments are not JSON-friendly falls back to `sync`. |
+| `approval_mode` | code wins when it declares a mode; else `sync`. A row never makes a tool deferred: only the tool's own `mode="deferred"` registration does. |
 | `approval_timeout_s` | the lower |
-| `risk_class` | the stricter by rank `read < write < external < financial < destructive < privileged`; on a tool that declares no class, the row's class becomes its class |
+| `risk_class` | the stricter by rank `read < write < external < financial < destructive < privileged`. A tool that declares no class stays unclassified (it fails closed) under a `read`, `write` or `external` row; a `financial`, `destructive` or `privileged` row raises it to that class. Either way, `init(capabilities=...)` judges it as the stricter of unclassified and the row's class. A row never makes a tool less strict. |
 | `quota` | enforced as below |
 | `fail_mode` | used by the quota: `closed` unless the row says `open` |
 
-A row that cannot be parsed is skipped. The rows a worker holds are replaced
-only when `rows_hash` changes; a new `policy_version` alone keeps them. The
+A row that cannot be read safely is never skipped: its tool is refused with
+`reason="policy_unsupported"` until the row is changed or the SDK upgraded (the other tools are not
+affected). That covers a field this SDK does not know, a value the console itself would not accept, and
+lines it cannot read. The worker tells the plane which tools those are on every heartbeat. The rows a worker holds are replaced
+only when `rows_hash` changes; a new `policy_version` alone keeps them. A
+policy answer that says the plane could not read its rows (an empty `rows_hash`,
+or HTTP 503 `policy_rows_unavailable`) is not an answer: the worker keeps what it
+holds, saves nothing to its cache and asks again on the next heartbeat. The
 rows and their hash are kept in the [policy cache](plane-loss.md), and rules
 declared in code are never written there.
+
+### Decision lines
+
+A row can state its rule as **lines**, each `allow`, `ask` or `deny`, with an optional approval requirement
+(an `ask` line) and optional limits. This SDK reports that it reads them (`policy_features` on every
+heartbeat), and the plane then serves them beside the fields above. A line may carry a condition
+(`when`, an `all of` / `any of` group of tests on the call's arguments, one nested group at most; and
+an `unless`), and then it applies only to calls it matches. **The strictest matching line decides**
+(`deny`, then `ask`, then `allow`), and **the limits of every matching line apply** (the smallest cap
+and the smallest quota; a conditional line's cap counts the calls that matched the same lines). `otherwise`
+decides only when a row has no lines. A row stated in the older fields is read as the lines the plane
+derives from them, so it decides exactly as before. A line looser than a rule in your code changes
+nothing, and a row whose older fields are stricter than its own lines is refused
+(`policy_unsupported`, reported as `legacy_view_mismatch`), so a damaged lines payload can never run a
+tool that the older view would have stopped.
+
+When the plane tells a worker it cannot enforce a restriction on one tool and has no stricter
+fallback, it halts that tool alone (`halted_tools`): the tool is refused with `reason="policy_halted"`
+and the rest run, until the plane lifts it. A row may also carry a `candidate`: a dry-run revision served
+beside the enforced one. It is read only to record `would_refuse`; it never decides, never takes a
+quota unit and never asks anyone.
+
+### Conditions
+
+A test reads one of the tool's arguments, or the trusted context (`environment`, `version`, `service`; set
+`RUNBOUND_ENVIRONMENT` and `RUNBOUND_SERVICE_VERSION`). The operators are a closed list, by the argument's type:
+
+| Type | Operators |
+|---|---|
+| number | `>`, `>=`, `<`, `<=`, `between` (inclusive) |
+| string | `equals`, `starts_with`, `ends_with`, `is_one_of` (case-sensitive, exact: no pattern matching, no trimming) |
+| boolean | `is_true`, `is_false` |
+| list | `contains`, `length_lt`, `length_gt` |
+| context | `equals`, `is_one_of` |
+
+A test is **true, false or unknown**. An argument that is missing, `None`, or the wrong type for the operator (a
+bool is not a number, a string is not a list) makes the test unknown, never false. A line whose test is unknown
+never matches by itself; but if it could have made the decision stricter, the call is refused with
+`reason="condition_unevaluable"` rather than let through (unless the decision is already `deny`). The arguments a
+test reads are the ones the tool will receive, after your rewrite hooks, by parameter name (a positional argument
+too), with the parameter's default when the caller omitted it.
+
+A line may also carry `repetition: {max: n, scope: "session"}`: the call that would be the (n+1)-th with the
+same tool and the same arguments in one session is refused with `reason="repetition_exceeded"`. A call refused
+for any other reason does not count. In a dry run a candidate rule records `would_refuse:<reason>` (a deny) or
+`would_ask:approval` (an ask) and changes nothing.
 
 ### `dry_run`, then `enforced`
 
@@ -202,8 +260,10 @@ refused, the call runs and the SDK records `would_refuse`:
 - the call's `tool_result` gets the tag `would_refuse:<reason>`, for example
   `would_refuse:tool_blocked` (read it with `runbound.tool_results()`);
 - a warning anomaly `Dry run: would refuse tool ...` and its Decision (boundary
-  `row`, verdict `deny`) are recorded once per session, reason and tool, in
-  `runbound.events()` and `runbound.decisions()`.
+  `row`, verdict `deny`) are recorded for **every** call it would have refused, in
+  `runbound.events()` and `runbound.decisions()`, up to 100 per session, reason and
+  tool; past that they are counted and one summary (`suppressed_count`) is sent when
+  the session block exits. A dry run never pages anyone: its reaction stays `dry_run`.
 
 A `dry_run` row never asks a person, and its `risk_class` is not applied. Its
 quota is counted (the unit is taken) so the numbers you read are the real ones.
@@ -233,14 +293,17 @@ the limit, however many workers run.
 - **Over the limit.** `ExecutionRefused`, `reason="quota_exceeded"`, with
   `exc.retry_after` in seconds. It is `retryable`, after `retry_after`:
   retrying before then is refused again.
-- **The plane away** (the link is not `connected`, or a take fails). The lease in
+- **The plane away** (the link is not `connected`, a take fails, or the plane
+  answers the take with HTTP 400 or 404). The lease in
   hand keeps being spent. Past it, every class is refused with
   `reason="quota_plane_unavailable"` while `fail_mode` is `closed` (the
   default). With `open` the worker admits `limit // 10` calls (at least 1) per
   `control_plane_poll_s` seconds, because it cannot know how many peers share the
   quota.
-- **A take the plane does not recognise** (HTTP 400 or 404, a row that changed
-  under the worker): the call runs.
+- **A take the plane does not recognise** (HTTP 400 or 404, for example a proxy
+  that does not route `/v1/quota/*`, or a row that changed under the worker): the
+  quota cannot be verified, so the row's `fail_mode` decides as above, and one
+  warning a minute names the status.
 - **A tool that will ask a person** takes nothing here. `POST /v1/approvals`
   takes the unit before an approval exists; a full quota there is
   `quota_exceeded` too, and the same tool and key is not asked again for the
@@ -256,8 +319,8 @@ does not run.
 | # | Check | Refusal `reason` |
 |---|---|---|
 | 0 | a session already stopped by `block_and_latch` | the stored refusal again |
-| 1 | a fleet halt from the plane (`on_halt="raise"`) | `halt` |
-| 2 | the plane gone, for a consequential or unclassified tool | `plane_unavailable` |
+| 1 | a fleet halt from the plane | `halt` |
+| 2 | the plane gone, or a policy announced and not yet served, for a consequential or unclassified tool | `plane_unavailable` |
 | 3 | your `pre_hooks` (may rewrite the arguments) | `hook_refused`, `hook_error` |
 | 4 | argument validation against the signature and hints | `invalid_arguments` |
 | 5 | code rules: `deny` (`blocked=True`), then `allow`, `max_calls`, `constraint` | `tool_blocked` for `deny`, else `policy` |
@@ -268,7 +331,8 @@ does not run.
 | 10 | a person (`approval="required"` or a row) | `approval_denied`, `approval_timeout`, `approval_unavailable`, `quota_exceeded` |
 | 11 | your `gate_hooks` (refuse only) | `hook_refused`, `hook_error` |
 
-Step 2 uses the tool's classes after a row's `risk_class` is folded in. What
+Step 2 uses the tool's classes after a row's `risk_class` is folded in; a row never
+opens a tool that fails closed. What
 each reason means, and which are retryable, is in
 [Handling refusals](handling-refusals.md).
 

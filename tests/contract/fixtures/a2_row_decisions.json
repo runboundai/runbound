@@ -1,0 +1,4989 @@
+{
+ "about": "The decision of every call of every legacy row case (O-LEG-ROW) as the 1.0.0a2 worker made it on the legacy fields: main 051efc38, tests/legacy/fixtures/legacy_rows.json. The R2 EXIT test (test_old_new_same_or_stricter.py) holds a lines worker to it.",
+ "cases": {
+  "O-LEG-ROW-1": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-10": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-100": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-101": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-102": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-103": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ]
+  },
+  "O-LEG-ROW-104": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-105": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-106": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-107": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-108": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-109": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-11": {
+   "": [
+    [
+     "refused",
+     "quota_exceeded"
+    ],
+    [
+     "refused",
+     "quota_exceeded"
+    ]
+   ]
+  },
+  "O-LEG-ROW-110": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-111": {
+   "": [
+    [
+     "deferred",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-112": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-113": {
+   "": [
+    [
+     "deferred",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-114": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-115": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-116": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-117": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-118": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-12": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-120": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-121": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-122": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-123": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-124": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-125": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-127": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-128": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-129": {
+   "": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-13": {
+   "": [
+    [
+     "refused",
+     "quota_exceeded"
+    ],
+    [
+     "refused",
+     "quota_exceeded"
+    ]
+   ]
+  },
+  "O-LEG-ROW-131": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-132": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-133": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-134": {
+   "": [
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-135": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-136": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-14": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-140": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-141": {
+   "": [
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-142": {
+   "": [
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-143": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-144": {
+   "": [
+    [
+     "refused",
+     "policy"
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ]
+  },
+  "O-LEG-ROW-146": {
+   "": [
+    [
+     "refused",
+     "approval"
+    ]
+   ]
+  },
+  "O-LEG-ROW-147": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-148": {
+   "": [
+    [
+     "refused",
+     "approval"
+    ]
+   ]
+  },
+  "O-LEG-ROW-149": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-15": {
+   "": [
+    [
+     "refused",
+     "quota_exceeded"
+    ],
+    [
+     "refused",
+     "quota_exceeded"
+    ]
+   ]
+  },
+  "O-LEG-ROW-151": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-152": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ],
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-153": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-154": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-155": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-156": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-158": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-159": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-16": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-160": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-17": {
+   "": [
+    [
+     "refused",
+     "quota_exceeded"
+    ],
+    [
+     "refused",
+     "quota_exceeded"
+    ]
+   ]
+  },
+  "O-LEG-ROW-18": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-19": {
+   "": [
+    [
+     "refused",
+     "quota_exceeded"
+    ],
+    [
+     "refused",
+     "quota_exceeded"
+    ]
+   ]
+  },
+  "O-LEG-ROW-2": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-20": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-200": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-201": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-202": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-203": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ]
+  },
+  "O-LEG-ROW-204": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-205": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-206": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-207": {
+   "": [
+    [
+     "refused",
+     "policy"
+    ]
+   ]
+  },
+  "O-LEG-ROW-208": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-21": {
+   "": [
+    [
+     "refused",
+     "quota_exceeded"
+    ],
+    [
+     "refused",
+     "quota_exceeded"
+    ]
+   ]
+  },
+  "O-LEG-ROW-22": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-23": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-24": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-25": {
+   "": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-26": {
+   "": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-260": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-261": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-262": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-263": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-264": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-265": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-266": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-267": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-27": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-3": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-30": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-300": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-301": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-302": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-303": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-304": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-305": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-306": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-307": {
+   "connected": [
+    [
+     "deferred",
+     null
+    ],
+    [
+     "deferred",
+     null
+    ],
+    [
+     "deferred",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-308": {
+   "connected": [
+    [
+     "deferred",
+     null
+    ],
+    [
+     "deferred",
+     null
+    ],
+    [
+     "deferred",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-309": {
+   "connected": [
+    [
+     "deferred",
+     null
+    ],
+    [
+     "deferred",
+     null
+    ],
+    [
+     "deferred",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-31": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-310": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-311": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-312": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-313": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-314": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-315": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-316": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-317": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-318": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-319": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-32": {
+   "": [
+    [
+     "deferred",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-320": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-321": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-322": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-323": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-324": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-325": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-326": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-327": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-328": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-329": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-33": {
+   "": [
+    [
+     "refused",
+     "approval_denied"
+    ]
+   ]
+  },
+  "O-LEG-ROW-330": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-34": {
+   "": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-35": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-36": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-37": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-38": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-4": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ]
+  },
+  "O-LEG-ROW-40": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-400": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-401": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-402": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-403": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-404": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-405": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-406": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-407": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-408": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-409": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-41": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-410": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-411": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-412": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-413": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-414": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-415": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-416": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-417": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-418": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-419": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-42": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-420": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-421": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-422": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-423": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-424": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-425": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-426": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-427": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-428": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-429": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-43": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-430": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-431": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-432": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-433": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-434": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-435": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-436": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-437": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-438": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-439": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-44": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-440": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-441": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-442": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-443": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-444": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-445": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-446": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-447": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-448": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-449": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-45": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-450": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-451": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-452": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-453": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-454": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-455": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-456": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-457": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-458": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-459": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-46": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-460": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-461": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-462": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-463": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-464": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-465": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-466": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-467": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-468": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-469": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-47": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-470": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-471": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-472": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-473": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-474": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-475": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-476": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-477": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-478": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-479": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-48": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-480": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-481": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-482": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-483": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-484": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-485": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-486": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-487": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-488": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-489": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-49": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-490": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-491": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-492": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-493": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-494": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "approval_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-495": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-496": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-497": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-498": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-499": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-5": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "session_max_calls"
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-50": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-500": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-501": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-51": {
+   "": [
+    [
+     "refused",
+     "plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-52": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-53": {
+   "": [
+    [
+     "refused",
+     "capability"
+    ]
+   ]
+  },
+  "O-LEG-ROW-55": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-56": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-57": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-58": {
+   "": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-59": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-6": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-60": {
+   "": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-600": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-601": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-602": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-603": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-604": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-605": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-606": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-607": {
+   "connected": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-608": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-609": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-61": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-610": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-611": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-612": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-613": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-614": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-615": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-616": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-617": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-618": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-619": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-62": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-620": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-63": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-64": {
+   "": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ],
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-650": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-651": {
+   "connected": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ],
+   "unavailable": [
+    [
+     "refused",
+     "quota_plane_unavailable"
+    ]
+   ]
+  },
+  "O-LEG-ROW-66": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-67": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-68": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-69": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-7": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-70": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-71": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-72": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-73": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-75": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-76": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-77": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-78": {
+   "": [
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-79": {
+   "": [
+    [
+     "refused",
+     "tool_blocked"
+    ],
+    [
+     "refused",
+     "tool_blocked"
+    ]
+   ]
+  },
+  "O-LEG-ROW-80": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  },
+  "O-LEG-ROW-81": {
+   "": [
+    [
+     "allowed",
+     null
+    ],
+    [
+     "allowed",
+     null
+    ]
+   ]
+  }
+ }
+}

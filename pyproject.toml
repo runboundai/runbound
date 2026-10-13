@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runbound"
-version = "1.0.0a2"
+version = "1.0.0a3"
 description = "A policy boundary around the tools an AI agent can call: per-tool policy, quotas, human approvals, fail-closed on plane loss, OpenTelemetry spans."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,8 +46,12 @@ langchain = ["langchain-core"]
 otel = ["opentelemetry-api>=1.39,<2", "opentelemetry-sdk>=1.39,<2"]
 
 [tool.setuptools]
-packages = ["runbound", "runbound.integrations"]
+packages = ["runbound", "runbound.integrations", "runbound._rules"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-markers = ["plane: runs against a real control-plane process (needs RUNBOUND_PLANE_PYTHON)"]
+markers = [
+    "plane: runs against a real control-plane process (needs RUNBOUND_PLANE_PYTHON)",
+    "legacy: today's decision, captured (R0): must pass on main; a change is a regression unless the register lists it",
+    "contract(item, ships=None): a tool-rules contract test (R0); with ships=, a strict xfail on today's engine until that release",
+]

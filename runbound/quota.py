@@ -127,6 +127,18 @@ class Leases:
             return True
 
 
+_UNVERIFIABLE_WARNED_AT = [0.0]
+
+
+def _warn_unverifiable(status: Any, tool: str) -> None:
+    """One warning a minute naming the status: the plane answered the take with 400/404, so the quota cannot be verified."""
+    now = time.monotonic()
+    if _UNVERIFIABLE_WARNED_AT[0] == 0.0 or now - _UNVERIFIABLE_WARNED_AT[0] >= 60.0:
+        _UNVERIFIABLE_WARNED_AT[0] = now
+        _LOG.warning("runbound: the control plane answered the quota take for %r with %s; the quota cannot be verified, "
+                     "so the row's fail mode decides", tool, status)
+
+
 def admit(engine: Any, session: Any, call: Any, row: Any, will_ask_person: bool, tags: list | None) -> None:
     """The quota stage for one call. Raises (or, for a dry_run row, records ``would_refuse``) when over."""
     quota = getattr(row, "quota", None)
@@ -170,8 +182,8 @@ def admit(engine: Any, session: Any, call: Any, row: Any, will_ask_person: bool,
         _refuse(engine, session, call, row, "quota_exceeded",
                 f"tool {call.name!r} is over its quota of {limit} per {quota.get('window')}; try again in {int(wait)} s", tags, wait)
         return
-    if status in (400, 404):  # the plane has no such quota (a row changed under us): nothing to hold the call to
-        return
+    if status in (400, 404):  # the plane says it has no such quota: cannot verify, so the fail-mode path decides (C23)
+        _warn_unverifiable(status, call.name)
     if row.fail_mode == "open" and leases.open_allows(call.name, limit, float(engine.config.control_plane_poll_s)):
         return
     _refuse(engine, session, call, row, "quota_plane_unavailable",

@@ -17,7 +17,6 @@ from runbound.config import RunboundConfig
 from runbound.plane_types import HelloReply
 from runbound.shared import (
     DEGRADE_AFTER,
-    STALE_HALT_S,
     LocalState,
     RemoteState,
     build,
@@ -308,25 +307,27 @@ def test_hello_sets_and_clears_the_halt():
     assert shared.halted() is False
 
 
-def test_a_stale_halt_fails_open():
+def test_a_halt_holds_however_long_the_plane_is_silent():
     clock = MovableClock()
     shared = remote(FakePlane(), clock)
     shared.apply_hello(HelloReply(halt=True))
 
-    clock.advance(STALE_HALT_S - 1)
+    clock.advance(59)
     assert shared.halted() is True
 
-    clock.advance(2)
+    clock.advance(24 * 3600)  # the enforcement floor (F1): a halt holds until the plane lifts it
+    assert shared.halted() is True
+    shared.apply_hello(HelloReply(halt=False))
     assert shared.halted() is False
 
 
-def test_a_halt_is_believed_again_once_the_plane_answers():
+def test_a_halt_survives_silence_and_is_confirmed_when_the_plane_answers():
     clock = MovableClock()
     shared = remote(FakePlane(), clock)
 
     shared.apply_hello(HelloReply(halt=True))
-    clock.advance(STALE_HALT_S + 1)
-    assert shared.halted() is False
+    clock.advance(61)
+    assert shared.halted() is True
 
     shared.apply_hello(HelloReply(halt=True))
     assert shared.halted() is True
@@ -382,14 +383,14 @@ def test_lifting_a_narrow_halt_clears_its_mode():
     assert shared.halt_mode() is None
 
 
-def test_a_stale_narrow_halt_fails_open():
+def test_a_narrow_halt_also_holds_through_silence():
     clock = MovableClock()
     shared = remote(FakePlane(), clock)
     shared.apply_hello(HelloReply(halt=True, halt_mode="narrow"))
 
-    clock.advance(STALE_HALT_S + 1)
+    clock.advance(24 * 3600)
 
-    assert shared.halt_mode() is None
+    assert shared.halt_mode() == "narrow"
 
 
 def test_local_state_has_no_halt_mode():
@@ -410,14 +411,14 @@ def test_the_hello_payload_does_not_ack_when_there_is_no_halt():
     assert shared._hello_payload()["halt_ack"] is False
 
 
-def test_the_hello_payload_stops_acking_once_a_stale_halt_releases():
+def test_the_hello_payload_keeps_acking_a_halt_that_holds():
     clock = MovableClock()
     shared = remote(FakePlane(), clock)
     shared.apply_hello(HelloReply(halt=True, halt_mode="stop"))
 
-    clock.advance(STALE_HALT_S + 1)
+    clock.advance(24 * 3600)
 
-    assert shared._hello_payload()["halt_ack"] is False
+    assert shared._hello_payload()["halt_ack"] is True
 
 
 # --- policy -----------------------------------------------------------------

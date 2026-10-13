@@ -7,7 +7,7 @@ The invariants (API.md, "Plane loss and the policy cache"):
 * a read, write or external tool never refuses for plane loss, at any point of any outage;
 * the last policy is enforced from the on-disk cache BEFORE the first hello;
 * modes only ever walk connecting -> connected -> degraded -> unavailable -> connected (a hello answered is the only way back);
-* a halt follows the plane's word at once, and lapses when the plane stops confirming it;
+* a halt follows the plane's word at once and holds until the plane lifts it, however long the plane is quiet;
 * one approval offered twice while it runs executes once.
 """
 
@@ -21,7 +21,6 @@ import pytest
 import runbound
 from runbound import approvals
 from runbound.plane_types import HelloReply
-from runbound.shared import STALE_HALT_S
 
 from .flapping import Phase, Rig  # noqa: F401  (Rig for type readers)
 
@@ -115,16 +114,16 @@ def test_the_cache_is_enforced_before_the_first_hello(rig_factory):
     assert outcome(look) == "ok"
 
 
-def test_a_halt_follows_the_plane_at_once_and_lapses_when_the_plane_stops_confirming_it(rig_factory):
-    rig = rig_factory([Phase(10), Phase(20, "ok", {"halt": True}), Phase(STALE_HALT_S + 60, "503")])
+def test_a_halt_follows_the_plane_at_once_and_holds_when_the_plane_goes_quiet(rig_factory):
+    rig = rig_factory([Phase(10), Phase(20, "ok", {"halt": True}), Phase(180, "503")])
     look, pay, unclassified, ran = tools()
     rig.run(10)
     assert outcome(look) == "ok"
     rig.run(5)  # a halting hello
     assert rig.shared.halted() is True and outcome(look) == "halt"
     rig.run(15)
-    rig.run(STALE_HALT_S + 20)  # the plane has been quiet longer than a halt is believed
-    assert rig.shared.halted() is False
+    rig.run(80)  # the plane has been quiet well past a minute: the halt is still enforced (F1)
+    assert rig.shared.halted() is True and outcome(look) == "halt"
 
 
 def test_a_halt_that_flips_on_and_off_is_followed_each_time(rig_factory):

@@ -46,7 +46,7 @@ set) as the Bearer key.
 | **Org tool policy**, merged with yours (it can only remove freedom) | your policy alone |
 | **Quotas**: a row's limit per fixed UTC window, shared by every worker of the service | none |
 | **Approvals**: `@runbound.tool(approval="required")`, sync or deferred, and a row's `approval_required` | refused at once: `reason="approval_unavailable"`; the body never runs |
-| **Halt**: the plane stops every tool of the fleet (`on_halt="raise"` refuses with `reason="halt"`) | nothing to halt |
+| **Halt**: the plane stops every tool of the fleet (refuses with `reason="halt"`) | nothing to halt |
 | **Policy cache**: the last served policy and rows on disk, enforced by a restarted worker before its first heartbeat | nothing cached; code rules come from code |
 | **Fleet view**: each worker's tool report (names, parameters, classes, rules; never arguments) and its exported refusals and changes (`export_events`), in one console | records stay in the process |
 
@@ -59,7 +59,8 @@ because nobody could be asked. A `capabilities={...: "approve"}` class rule refu
 With a plane configured, a tool carrying `financial`, `destructive` or `privileged`, or no class,
 is refused (`plane_unavailable`, retryable) once the plane has not answered for
 `consequential_grace_s` (60 s by default), and while the first heartbeat is still pending unless
-the policy cache was confirmed in the last 15 minutes. `read`, `write` and `external` tools keep
+the policy cache was confirmed in the last 15 minutes; no tool of any class runs before the first heartbeat is answered or a
+sealed cache is loaded (`policy_unavailable`, retryable). `read`, `write` and `external` tools keep
 running on the cache. A new approval needs a connected link; a quota past its lease refuses
 `quota_plane_unavailable` while the row's `fail_mode` is `closed`. A process with no plane
 configured has none of this. See [Plane loss](../guides/plane-loss.md).

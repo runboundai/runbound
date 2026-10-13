@@ -177,7 +177,8 @@ def facts(
     tool: str, outcome: str, *, config: Any, run_id: str | None, key: str | None, effects: frozenset,
     call_id: str | None, args_digest: str | None, exc: BaseException | None, decision: Any,
     policy_version: int | None, flags: tuple, flag_score: float, result_chars: int,
-    approval_request_id: str | None = None, would_refuse: str | None = None,
+    approval_request_id: str | None = None, would_refuse: str | None = None, record: "dict | None" = None,
+    reason_code: str | None = None,
 ) -> dict:
     """The attribute dict of one finished call (RS-3 / otel-clickhouse.md §1.2)."""
     refused = outcome == "refused"
@@ -215,4 +216,13 @@ def facts(
         out[n.DECISION_REASON] = would_refuse
     pv = policy_version if policy_version else getattr(decision, "policy_version", None)
     out[n.DECISION_POLICY_VERSION] = pv or None
+    if record:  # the decision record: the primary code (an existing reason, verbatim), what matched, what contributed, in which state
+        matched = tuple(record.get("matched_rule_ids") or ())
+        out[n.DECISION_REASON_CODE] = reason_code if refused and reason_code else (
+            would_refuse if would_refuse else "rule" if matched else "fallback")
+        out[n.DECISION_MATCHED_RULE_IDS] = matched
+        out[n.DECISION_SERVICE_DEFAULT_REVISION] = record.get("service_default_revision")
+        out[n.DECISION_POLICY_STATE] = record.get("policy_state")
+        out[n.DECISION_CONTRIBUTORS] = tuple(record.get("contributors") or ())
+        out[n.SDK_VERSION] = record.get("sdk_version")
     return out

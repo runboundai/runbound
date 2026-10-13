@@ -1,0 +1,1564 @@
+[
+ {
+  "id": "O-TT-1",
+  "note": "ALL OF(True,True)",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-2",
+  "note": "ALL OF(True,False)",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-3",
+  "note": "ALL OF(True,None)",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-4",
+  "note": "ALL OF(False,True)",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-5",
+  "note": "ALL OF(False,False)",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-6",
+  "note": "ALL OF(False,None)",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-7",
+  "note": "ALL OF(None,True)",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-8",
+  "note": "ALL OF(None,False)",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-9",
+  "note": "ALL OF(None,None)",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-10",
+  "note": "ANY OF(True,True)",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-11",
+  "note": "ANY OF(True,False)",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-12",
+  "note": "ANY OF(True,None)",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-13",
+  "note": "ANY OF(False,True)",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-14",
+  "note": "ANY OF(False,False)",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-15",
+  "note": "ANY OF(False,None)",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-16",
+  "note": "ANY OF(None,True)",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-17",
+  "note": "ANY OF(None,False)",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-18",
+  "note": "ANY OF(None,None)",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-19",
+  "note": "ANY OF(true, unknown) matches",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-20",
+  "note": "UNLESS True over an unconditional rule",
+  "when": null,
+  "unless": {
+   "lit": true
+  },
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-21",
+  "note": "UNLESS False over an unconditional rule",
+  "when": null,
+  "unless": {
+   "lit": false
+  },
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-22",
+  "note": "UNLESS None over an unconditional rule",
+  "when": null,
+  "unless": {
+   "lit": null
+  },
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-23",
+  "note": "ALL OF(true) UNLESS True with when=True",
+  "when": {
+   "lit": true
+  },
+  "unless": {
+   "lit": true
+  },
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-24",
+  "note": "ALL OF(true) UNLESS False with when=True",
+  "when": {
+   "lit": true
+  },
+  "unless": {
+   "lit": false
+  },
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-25",
+  "note": "ALL OF(true) UNLESS None with when=True",
+  "when": {
+   "lit": true
+  },
+  "unless": {
+   "lit": null
+  },
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-26",
+  "note": "ALL OF(true) UNLESS True with when=False",
+  "when": {
+   "lit": false
+  },
+  "unless": {
+   "lit": true
+  },
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-27",
+  "note": "ALL OF(true) UNLESS False with when=False",
+  "when": {
+   "lit": false
+  },
+  "unless": {
+   "lit": false
+  },
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-28",
+  "note": "ALL OF(true) UNLESS None with when=False",
+  "when": {
+   "lit": false
+  },
+  "unless": {
+   "lit": null
+  },
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-29",
+  "note": "ALL OF(true) UNLESS True with when=None",
+  "when": {
+   "lit": null
+  },
+  "unless": {
+   "lit": true
+  },
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-30",
+  "note": "ALL OF(true) UNLESS False with when=None",
+  "when": {
+   "lit": null
+  },
+  "unless": {
+   "lit": false
+  },
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-31",
+  "note": "ALL OF(true) UNLESS None with when=None",
+  "when": {
+   "lit": null
+  },
+  "unless": {
+   "lit": null
+  },
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-32",
+  "note": "ALL OF(true, ANY OF(false, unknown))",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "any": [
+      {
+       "lit": false
+      },
+      {
+       "lit": null
+      }
+     ]
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-33",
+  "note": "ANY OF(false, ALL OF(true, unknown))",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "all": [
+      {
+       "lit": true
+      },
+      {
+       "lit": null
+      }
+     ]
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-34",
+  "note": "ALL OF(ANY OF(true, unknown), ANY OF(false, false))",
+  "when": {
+   "all": [
+    {
+     "any": [
+      {
+       "lit": true
+      },
+      {
+       "lit": null
+      }
+     ]
+    },
+    {
+     "any": [
+      {
+       "lit": false
+      },
+      {
+       "lit": false
+      }
+     ]
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-35",
+  "note": "ANY OF(ALL OF(true, true), ALL OF(unknown, unknown))",
+  "when": {
+   "any": [
+    {
+     "all": [
+      {
+       "lit": true
+      },
+      {
+       "lit": true
+      }
+     ]
+    },
+    {
+     "all": [
+      {
+       "lit": null
+      },
+      {
+       "lit": null
+      }
+     ]
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-36",
+  "note": "ALL OF(True, True, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-37",
+  "note": "ALL OF(True, True, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-38",
+  "note": "ALL OF(True, True, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-39",
+  "note": "ALL OF(True, False, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-40",
+  "note": "ALL OF(True, False, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-41",
+  "note": "ALL OF(True, False, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-42",
+  "note": "ALL OF(True, None, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-43",
+  "note": "ALL OF(True, None, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-44",
+  "note": "ALL OF(True, None, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-45",
+  "note": "ALL OF(False, True, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-46",
+  "note": "ALL OF(False, True, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-47",
+  "note": "ALL OF(False, True, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-48",
+  "note": "ALL OF(False, False, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-49",
+  "note": "ALL OF(False, False, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-50",
+  "note": "ALL OF(False, False, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-51",
+  "note": "ALL OF(False, None, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-52",
+  "note": "ALL OF(False, None, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-53",
+  "note": "ALL OF(False, None, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-54",
+  "note": "ALL OF(None, True, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-55",
+  "note": "ALL OF(None, True, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-56",
+  "note": "ALL OF(None, True, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-57",
+  "note": "ALL OF(None, False, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-58",
+  "note": "ALL OF(None, False, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-59",
+  "note": "ALL OF(None, False, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-60",
+  "note": "ALL OF(None, None, True) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-61",
+  "note": "ALL OF(None, None, False) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-62",
+  "note": "ALL OF(None, None, None) = the pairwise fold",
+  "when": {
+   "all": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-63",
+  "note": "ANY OF(True, True, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-64",
+  "note": "ANY OF(True, True, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-65",
+  "note": "ANY OF(True, True, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-66",
+  "note": "ANY OF(True, False, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-67",
+  "note": "ANY OF(True, False, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-68",
+  "note": "ANY OF(True, False, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-69",
+  "note": "ANY OF(True, None, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-70",
+  "note": "ANY OF(True, None, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-71",
+  "note": "ANY OF(True, None, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-72",
+  "note": "ANY OF(False, True, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-73",
+  "note": "ANY OF(False, True, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-74",
+  "note": "ANY OF(False, True, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-75",
+  "note": "ANY OF(False, False, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-76",
+  "note": "ANY OF(False, False, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": false
+ },
+ {
+  "id": "O-TT-77",
+  "note": "ANY OF(False, False, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-78",
+  "note": "ANY OF(False, None, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-79",
+  "note": "ANY OF(False, None, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-80",
+  "note": "ANY OF(False, None, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-81",
+  "note": "ANY OF(None, True, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-82",
+  "note": "ANY OF(None, True, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-83",
+  "note": "ANY OF(None, True, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-84",
+  "note": "ANY OF(None, False, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-85",
+  "note": "ANY OF(None, False, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-86",
+  "note": "ANY OF(None, False, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-87",
+  "note": "ANY OF(None, None, True) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": true
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": true
+ },
+ {
+  "id": "O-TT-88",
+  "note": "ANY OF(None, None, False) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": false
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ },
+ {
+  "id": "O-TT-89",
+  "note": "ANY OF(None, None, None) = the pairwise fold",
+  "when": {
+   "any": [
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    },
+    {
+     "lit": null
+    }
+   ]
+  },
+  "unless": null,
+  "expect_block": null
+ }
+]

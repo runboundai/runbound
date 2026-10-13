@@ -27,6 +27,9 @@ class FakeShared:
 
     fleet = True
 
+    def policy_state(self):
+        return "fresh"
+
     def __init__(self, rows=(), link="connected", take=None, approve="approved"):
         self.rows = policy_rows.parse(list(rows))
         self.quota = Leases()
@@ -52,7 +55,7 @@ class FakeShared:
     def policy(self):
         return None
 
-    policy_version = 0
+    policy_version = 7
     policy_dry_run = False
 
     def observers(self):
@@ -183,14 +186,15 @@ def test_a_row_can_require_approval_of_a_tool_the_code_leaves_alone():
     assert create[2]["mode"] == "sync" and create[2]["timeout_s"] == 30.0
 
 
-def test_a_rows_deferred_mode_applies_when_the_code_is_silent_and_the_args_are_json_friendly():
+def test_a_rows_deferred_mode_never_makes_a_tool_deferred_only_the_codes_registration_does():
+    """R4 (Apollo Q3): no inference. A row that says ``deferred`` on a tool whose code registered no deferred execution asks synchronously."""
     shared = start(FakeShared([row("look", approval_required=True, approval_mode="deferred")]))
     look, _, ran = tools()
-    assert look(3)["status"] == "pending_approval" and ran == []
-    assert shared.calls[0][2]["mode"] == "deferred"
+    assert look(3) == "ok" and ran == ["look"]  # the (fake) plane approved the synchronous request, so the body ran in line
+    assert shared.calls[0][2]["mode"] == "sync"
 
 
-def test_a_deferred_row_on_a_tool_with_non_json_arguments_falls_back_to_sync():
+def test_a_deferred_row_on_a_tool_with_non_json_arguments_stays_sync():
     import datetime as dt
 
     shared = start(FakeShared([row("when", approval_required=True, approval_mode="deferred")]))
@@ -235,11 +239,12 @@ def test_a_rows_risk_class_raises_the_tools_class_and_never_lowers_it():
     assert policy_rows.effective_effects(policy_rows.parse([row("t", risk_class="privileged")])["t"], effects) == {"privileged", "financial"}
 
 
-def test_fail_mode_closed_wins_and_malformed_rows_are_skipped():
+def test_fail_mode_closed_wins_and_malformed_rows_refuse_their_tool():
     rows = policy_rows.parse([row("a", fail_mode="open"), row("b"), {"tool": 5}, "junk", row("c", state="draft"),
                               row("d", max_calls_per_session=0)])
     assert rows["a"].fail_mode == "open" and rows["b"].fail_mode == "closed"
-    assert set(rows) == {"a", "b", "d"} and rows["d"].max_calls is None
+    assert set(rows) == {"a", "b", "c", "d"}  # a row naming no tool is dropped; every other is kept
+    assert rows["c"].unsupported and rows["d"].unsupported and not rows["a"].unsupported  # C2: unreadable is refused, never skipped
 
 
 def test_the_rows_hash_helper_matches_the_documented_construction():
@@ -452,10 +457,48 @@ def test_a_dry_run_quota_is_counted_and_records_would_refuse_without_refusing():
     assert "would_refuse:quota_exceeded" in runbound.tool_results()[-1]["tags"]
 
 
-def test_a_row_for_a_quota_the_plane_does_not_know_does_not_block_the_call():
-    start(FakeShared([row("look", quota=QUOTA)], take=lambda b: (404, {"error": "no_such_quota"})))
-    look, _, _ = tools()
+@pytest.mark.parametrize("status", [400, 404])
+def test_a_take_the_plane_answers_with_400_or_404_cannot_be_verified_so_a_closed_row_refuses(status, caplog):
+    """O-QTA-404 (register C23): the plane saying it has no such quota is not permission; the fail-mode path decides."""
+    from runbound import quota
+
+    quota._UNVERIFIABLE_WARNED_AT[0] = 0.0
+    start(FakeShared([row("look", quota=QUOTA)], take=lambda b: (status, {"error": "no_such_quota"})))
+    look, _, ran = tools()
+    with caplog.at_level("WARNING", logger="runbound"):
+        with pytest.raises(runbound.ExecutionRefused) as refused:
+            look()
+    assert refused.value.reason == "quota_plane_unavailable" and ran == []
+    assert any(str(status) in r.getMessage() for r in caplog.records)
+
+
+def test_a_404_take_with_fail_mode_open_runs_at_the_static_share_then_refuses():
+    shared = start(FakeShared([row("look", quota={"limit": 2, "window": "hour", "per": "service"}, fail_mode="open")],
+                              take=lambda b: (404, {"error": "no_such_quota"})))
+    look, _, ran = tools()
     assert look() == "ok"
+    outcomes = []
+    for _ in range(40):
+        try:
+            look()
+            outcomes.append("ran")
+        except runbound.ExecutionRefused as refusal:
+            outcomes.append(refusal.reason)
+    assert "quota_plane_unavailable" in outcomes  # the open share is finite: a plane that keeps saying 404 does not mean no limit
+    assert len(shared.takes()) >= 1
+
+
+def test_the_unverifiable_take_warning_is_throttled_to_one_a_minute(caplog):
+    from runbound import quota
+
+    quota._UNVERIFIABLE_WARNED_AT[0] = 0.0
+    start(FakeShared([row("look", quota=QUOTA)], take=lambda b: (404, {})))
+    look, _, _ = tools()
+    with caplog.at_level("WARNING", logger="runbound"):
+        for _ in range(3):
+            with pytest.raises(runbound.ExecutionRefused):
+                look()
+    assert len([r for r in caplog.records if "cannot be verified" in r.getMessage() and "404" in r.getMessage()]) == 1
 
 
 def test_a_deferred_execution_does_not_take_a_second_unit():

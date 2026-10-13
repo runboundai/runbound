@@ -1,0 +1,361 @@
+[
+ {
+  "id": "O-APR-S1",
+  "note": "one satisfied, one pending: not authorised",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   }
+  ],
+  "expect_states": {
+   "a": "satisfied",
+   "b": "pending"
+  },
+  "expect_authorised": false,
+  "expect_after": "wait"
+ },
+ {
+  "id": "O-APR-S2",
+  "note": "both satisfied: authorised",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   },
+   {
+    "approver": "cy",
+    "source": "b"
+   }
+  ],
+  "expect_states": {
+   "a": "satisfied",
+   "b": "satisfied"
+  },
+  "expect_authorised": true,
+  "expect_after": "allow"
+ },
+ {
+  "id": "O-APR-S3",
+  "note": "a one-time approval consumed for a does not satisfy b, though the decider is eligible under both",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   }
+  ],
+  "shared": false,
+  "expect_states": {
+   "a": "satisfied",
+   "b": "pending"
+  },
+  "expect_authorised": false,
+  "expect_after": "wait"
+ },
+ {
+  "id": "O-APR-S4",
+  "note": "the service flag lets one decider eligible under both satisfy both",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   }
+  ],
+  "shared": true,
+  "expect_states": {
+   "a": "satisfied",
+   "b": "satisfied"
+  },
+  "expect_authorised": true,
+  "expect_after": "allow"
+ },
+ {
+  "id": "O-APR-S5",
+  "note": "the flag does not help a decider who is not eligible under b",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "bo",
+    "source": "a"
+   }
+  ],
+  "shared": true,
+  "expect_states": {
+   "a": "satisfied",
+   "b": "pending"
+  },
+  "expect_authorised": false,
+  "expect_after": "wait"
+ },
+ {
+  "id": "O-APR-S6",
+  "note": "denial of any requirement is deny",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   },
+   {
+    "approver": "cy",
+    "source": "b",
+    "verdict": "deny"
+   }
+  ],
+  "expect_states": {
+   "a": "satisfied",
+   "b": "denied"
+  },
+  "expect_authorised": false,
+  "expect_after": "deny"
+ },
+ {
+  "id": "O-APR-S7",
+  "note": "timeout of any requirement is deny",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   },
+   {
+    "approver": "cy",
+    "source": "b",
+    "verdict": "expire"
+   }
+  ],
+  "expect_states": {
+   "a": "satisfied",
+   "b": "expired"
+  },
+  "expect_authorised": false,
+  "expect_after": "deny"
+ },
+ {
+  "id": "O-APR-S8",
+  "note": "a revoked requirement is deny",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a"
+   },
+   {
+    "approver": "cy",
+    "source": "b",
+    "verdict": "revoke"
+   }
+  ],
+  "expect_states": {
+   "a": "satisfied",
+   "b": "revoked"
+  },
+  "expect_authorised": false,
+  "expect_after": "deny"
+ },
+ {
+  "id": "O-APR-S9",
+  "note": "a denial is never shared by the flag",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [
+     "ana",
+     "cy"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [
+   {
+    "approver": "ana",
+    "source": "a",
+    "verdict": "deny"
+   }
+  ],
+  "shared": true,
+  "expect_states": {
+   "a": "denied",
+   "b": "pending"
+  },
+  "expect_authorised": false,
+  "expect_after": "deny"
+ },
+ {
+  "id": "O-APR-S10",
+  "note": "no requirements is not authorised (an ask that names nobody is not permission)",
+  "reqs": [],
+  "decisions": [],
+  "expect_states": {},
+  "expect_authorised": false,
+  "expect_after": "deny"
+ },
+ {
+  "id": "O-APR-S11",
+  "note": "nothing decided: pending, wait",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [
+     "ana",
+     "bo"
+    ],
+    "wait_s": null
+   }
+  ],
+  "decisions": [],
+  "expect_states": {
+   "a": "pending"
+  },
+  "expect_authorised": false,
+  "expect_after": "wait"
+ }
+]

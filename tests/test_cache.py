@@ -243,7 +243,18 @@ def test_a_cache_with_a_different_token_is_not_loaded(tmp_path):
 
 
 CONSEQUENTIAL = [{"financial"}, {"destructive"}, {"privileged"}, None, set()]
-OTHERS = [{"read"}, {"write"}, {"external"}, {"read", "write"}]
+OTHERS = [{"read"}, {"external"}, {"write", "external"}]
+BARE_WRITE = [{"write"}, {"read", "write"}]  # no tag besides write: unclassified for fail mode (K8)
+
+
+@pytest.mark.parametrize("effects", BARE_WRITE)
+def test_a_bare_write_is_unclassified_for_fail_mode_so_it_refuses_when_the_policy_is_unavailable(tmp_path, effects):
+    clock = Clock()
+    shared = remote(tmp_path, clock)  # no cache, no hello
+    assert shared.policy_state() == "unavailable" and shared.plane_refusal(frozenset(effects))
+    cache.write(where(tmp_path), TOKEN, body(1))
+    sealed = remote(tmp_path, clock)  # a valid sealed cache: not unavailable, so a write with no tag runs as it always did
+    assert sealed.policy_state() == "cached" and sealed.plane_refusal(frozenset(effects)) is None
 
 
 @pytest.mark.parametrize("effects", OTHERS)
@@ -397,6 +408,10 @@ def test_through_the_decorator_a_consequential_tool_refuses_and_a_read_tool_runs
     with pytest.raises(runbound.ExecutionRefused) as caught:
         drop()  # unavailable: refused
     assert caught.value.reason == "plane_unavailable" and caught.value.decision.level == "fleet"
+    with pytest.raises(runbound.ExecutionRefused) as early:
+        look()  # F3: nothing handshaken and no sealed cache, so even a read tool runs nothing yet
+    assert early.value.reason == "policy_unavailable" and early.value.retryable
+    api._SHARED._sealed_cache_loaded = True  # a worker restarted on a sealed cache: the read tool runs on what it holds
     assert look() == "found"
     assert runbound.tool_results()[0]["outcome"] == "refused"
 
@@ -424,3 +439,32 @@ def test_code_declared_rules_are_never_in_the_cache(tmp_path):
     assert read is None or "blocked" not in json.dumps(read)
     with pytest.raises(runbound.ExecutionRefused):
         wipe()  # the code rule applies with or without the cache
+
+
+# --- the validity window follows the service (Apollo's ruling on TR2-O1) ------------------------------------------------
+
+
+@pytest.mark.parametrize("effects", CONSEQUENTIAL)
+def test_without_enforced_defaults_a_service_keeps_the_per_class_cache_trust(tmp_path, effects):
+    """Today's rule, unchanged: a sealed cache older than 15 minutes is not trusted by a consequential tool at boot, and the grace applies."""
+    effects = frozenset(effects or ())
+    cache.write(where(tmp_path), TOKEN, body(1))
+    clock = Clock()
+    shared = remote(tmp_path, clock)
+    assert shared._defaults_enforced is False and shared.plane_refusal(effects) is None  # connecting, cache just confirmed
+    clock.t += 61  # past consequential_grace_s with no hello
+    assert shared.plane_refusal(effects)  # the old grace still refuses; nothing was loosened
+
+
+@pytest.mark.parametrize("effects", CONSEQUENTIAL)
+def test_with_enforced_defaults_one_24_hour_window_replaces_the_grace(tmp_path, effects):
+    """The single window applies only to a service that has adopted enforced defaults (TR2-O3 sets the flag from the served policy)."""
+    effects = frozenset(effects or ())
+    cache.write(where(tmp_path), TOKEN, body(1))
+    clock = Clock()
+    shared = remote(tmp_path, clock)
+    shared._defaults_enforced = True
+    clock.t += 3600  # an hour of silence: cached, so the policy is enforced in full and fail mode does not apply
+    assert shared.policy_state() == "cached" and shared.plane_refusal(effects) is None
+    shared._cache_written_at -= cache.STALE_AFTER_S + 5  # the policy held is now past its 24 h window
+    assert shared.policy_state() == "unavailable" and shared.plane_refusal(effects)

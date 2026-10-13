@@ -21,9 +21,8 @@ Three rules hold everywhere in this module:
 * **No network under a lock.** The lock guards a handful of fields for a few
   microseconds; every HTTP call is made outside it.
 
-What the plane says is cached, not trusted forever: a fleet-wide halt we have
-not heard confirmed for :data:`STALE_HALT_S` stops being enforced. A plane that
-vanishes must not leave a fleet stopped.
+What the plane says is cached: a fleet-wide halt it served holds until the plane
+lifts it (the enforcement floor, F1), whether or not the plane keeps answering.
 """
 
 import logging
@@ -44,19 +43,14 @@ _LOG = logging.getLogger("runbound")
 #: asking. Three, so a single dropped packet is not an outage.
 DEGRADE_AFTER = 3
 
-#: How long without an answered hello before the link is ``unavailable``; equal to :data:`STALE_HALT_S`, so
-#: with the defaults a halt is honoured right up to the moment consequential tools stop on their own.
+#: How long without an answered hello before the link mode is ``unavailable`` (a label; the policy state is separate).
 UNAVAILABLE_AFTER_S = 60.0
 
 #: ``init(consequential_grace_s=)``: how long after the last answered hello (or after start) financial /
 #: destructive / privileged and unclassified tools keep running on the cache. Never above 60 s, so the
-#: grace can not outlast a halt.
+#: grace can not outlast a halt (a halt now holds until lifted, but the grace stays the bound for a service
+#: without enforced defaults).
 GRACE_DEFAULT_S = 60.0
-
-#: How long a halt outlives the last contact with the plane. A halt is the
-#: heaviest thing the plane can say, so it is also the first thing we stop
-#: believing when the plane goes quiet: after this, the fleet runs again.
-STALE_HALT_S = 60.0
 
 
 class LocalState:
@@ -123,6 +117,12 @@ class RemoteState:
         self._misses = 0
         self._started_at = now()
         self._grace = float(getattr(config, "consequential_grace_s", GRACE_DEFAULT_S))
+        #: Whether the sealed policy this worker holds carries ENFORCED service defaults (``defaults_v1``, TR2-O3). Until a plane serves
+        #: them, every service keeps today's per-class cache trust (``plane_refusal``); this stays False.
+        self._defaults_enforced = False
+        self._defaults_raw: "dict | None" = None  # the served service_defaults envelope, kept for the cache
+        self._defaults: Any = None  # lines.Defaults, when readable
+        self._defaults_problem: "tuple | None" = None  # (reason code, text) when served defaults cannot be read safely
         self._last_success: float | None = None
         self._last_attempt: float | None = None
         self._halt = False
@@ -131,6 +131,12 @@ class RemoteState:
         self._policy: dict | None = None
         self._policy_version = 0
         self._policy_dry_run = False
+        #: Has this worker ever held a policy (a fetch that succeeded, or a cache it loaded)? And the newest
+        #: ``policy_version`` a hello announced: a plane that says a policy exists while the worker holds none
+        #: has not governed this worker yet (see :meth:`plane_refusal`).
+        self._policy_held = False
+        self._sealed_cache_loaded = False
+        self._announced_version = 0
         self._poller: Any = None
         #: The tool-report hash the plane has acknowledged, and the one riding a
         #: heartbeat whose reply has not come back yet; see :meth:`_tools_payload`.
@@ -156,6 +162,8 @@ class RemoteState:
         self._rows: dict = {}
         self._rows_hash: str | None = None
         self._rows_raw: list | None = None
+        self._unreadable_rows = 0
+        self._halted_tools: dict = {}  # tool -> reasons the plane halted it for (halt_tools_v1); refused with policy_halted
         self.quota = Leases()
         self._load_cache()
         from .approvals import ReportQueue
@@ -170,11 +178,17 @@ class RemoteState:
         body, _status = cache_module.read(self._cache_path, getattr(self._config, "token", None), self._config.service)
         if body is None:
             return
+        self._policy_held = True
+        self._sealed_cache_loaded = True
         policy = body.get("policy")
         self._policy = policy if isinstance(policy, dict) else None
         self._policy_version = _as_int(body.get("policy_version"))
         self._policy_dry_run = bool(body.get("policy_dry_run", False))
         self._set_rows(body.get("rows"), body.get("rows_hash"))
+        self._set_defaults(body.get("service_defaults"))
+        if body.get("halt") in ("stop", "narrow"):  # a served halt survives a restart while the plane is down
+            self._halt, self._halt_mode = True, body["halt"]
+        self._halted_tools = _halted_tools([{"tool": t, "reasons": r} for t, r in (body.get("halted_tools") or {}).items()]) if isinstance(body.get("halted_tools"), dict) else {}
         written = body.get("written_at")
         self._cache_written_at = float(written) if isinstance(written, (int, float)) else None
         age = self.cache_age_s()
@@ -186,7 +200,45 @@ class RemoteState:
 
         self._rows_raw = rows if isinstance(rows, list) else None
         self._rows = policy_rows.parse(rows)
+        self._unreadable_rows = policy_rows.unreadable(rows)
         self._rows_hash = digest if isinstance(digest, str) else None
+
+    def halted_reasons(self, tool: str) -> "list | None":
+        """The reasons the plane halted ``tool`` for (``halted_tools``, ``halt_tools_v1``), or ``None`` when it did not."""
+        return self._halted_tools.get(tool)
+
+    def _set_defaults(self, raw: Any) -> None:
+        """Hold the served service defaults. Enforced ones switch the service to the single validity window and to fail mode per key."""
+        from . import lines
+
+        self._defaults_raw = raw if isinstance(raw, dict) else None
+        self._defaults, self._defaults_problem = None, None
+        if self._defaults_raw is not None:
+            try:
+                self._defaults = lines.parse_defaults(self._defaults_raw)
+            except lines.LineError as error:
+                self._defaults_problem = (error.code, str(error))
+        self._defaults_enforced = (self._defaults is not None and self._defaults.state == "enforced") or (
+            self._defaults_problem is not None and self._defaults_raw.get("state", "enforced") == "enforced")
+
+    def defaults(self) -> Any:
+        """The service defaults this worker holds (``lines.Defaults``), or ``None`` when the service has not adopted any."""
+        return self._defaults
+
+    def defaults_problem(self) -> "tuple | None":
+        return self._defaults_problem
+
+    def policy_unsupported(self) -> list:
+        """The tools whose served rule this SDK cannot interpret safely (floor F2), as ``[{"tool", "why"}]``, plus an entry with no
+        tool for served entries that name none. Each such tool is refused with ``policy_unsupported``; the hello will report this list."""
+        found = [{"tool": tool, "why": row.unsupported, "reason": row.unsupported_code or "invalid_body"}
+                 for tool, row in sorted(self._rows.items()) if row.unsupported]
+        if self._defaults_problem is not None:
+            found.append({"tool": "*", "reason": self._defaults_problem[0], "why": self._defaults_problem[1]})
+        if getattr(self, "_unreadable_rows", 0):
+            found.append({"tool": None, "reason": "row_unparseable",
+                          "why": f"{self._unreadable_rows} served entr{'y' if self._unreadable_rows == 1 else 'ies'} name no tool"})
+        return found
 
     def row_for(self, tool: str) -> Any:
         """The dashboard row for ``tool`` (``None`` when there is none). A plain dict read: no lock, no copy."""
@@ -205,7 +257,8 @@ class RemoteState:
                 return
             self._cache_saved_mono = now
             body = cache_module.body_for(self._config.service, self._policy_version, self._policy, self._policy_dry_run,
-                                         self._rows_hash, self._rows_raw)
+                                         self._rows_hash, self._rows_raw, halt=self._halt_mode if self._halt else None,
+                                         halted_tools=self._halted_tools, service_defaults=self._defaults_raw)
         if cache_module.write(self._cache_path, getattr(self._config, "token", None), body):
             self._cache_written_at = body["written_at"]
 
@@ -232,28 +285,71 @@ class RemoteState:
         with self._lock:
             self._misses += 1
 
+    def awaiting_first_policy(self) -> bool:
+        """True until this worker has had a first answered hello or loaded a sealed cache: no governed call runs before then (F3)."""
+        with self._lock:
+            return self._last_success is None and not self._sealed_cache_loaded
+
+    def policy_state(self) -> str:
+        """``fresh`` | ``cached`` | ``unavailable`` (TPD §5.7), a function of now and what this worker holds.
+
+        *fresh*: a hello was answered recently. *cached*: it was not, but the policy this worker holds was sealed within the
+        validity window (:data:`runbound.cache.STALE_AFTER_S`, 24 h): it is enforced in full and fail mode does not apply.
+        *unavailable*: there is no policy, or the one held has expired. Plane unreachable does not by itself mean unavailable.
+        """
+        from .lines import State as states
+
+        with self._lock:
+            now = self._now()
+            serving = self._last_success is not None and (self._policy_held or not self._announced_version)
+            served_at = self._last_success if serving else None
+            sealed_ages = [age for age in (self.cache_age_s(), None if served_at is None else now - served_at) if age is not None]
+        sealed = states.Cache(sealed_at=now - min(sealed_ages)) if sealed_ages else None
+        fresh_s = max(30.0, 2.0 * float(getattr(self._config, "control_plane_poll_s", 5.0)))
+        return states.state(now, served_at, sealed, states.Validity(fresh_s=fresh_s, cache_s=cache_module.STALE_AFTER_S))
+
     def plane_refusal(self, effects: "frozenset | None") -> str | None:
         """Why a tool carrying ``effects`` must be refused because the plane is gone, else ``None``.
 
-        read/write/external run on the cache (or code rules alone) whatever the state. financial /
-        destructive / privileged and unclassified tools refuse once ``consequential_grace_s`` has passed
-        since the last answered hello (or since start, with none), and, while still *connecting*, unless the
-        cache was last confirmed within 15 minutes.
-        """
-        from .hooks import fails_closed
+        Which rule applies follows the service (Apollo's ruling on TR2-O1, TPD §5.5 "existing services keep today's behaviour until an
+        operator adopts defaults"):
 
+        * A service **without enforced service defaults** (every service today) keeps the per-class cache trust it has always had.
+          ``read``, ``write`` + a tag and ``external`` tools run on the cache (or on code rules) whatever the state. ``financial`` /
+          ``destructive`` / ``privileged`` and unclassified tools refuse once ``consequential_grace_s`` has passed since the last
+          answered hello (or since start, with none), and, while still *connecting*, unless the cache was last confirmed within 15
+          minutes. One change on top (register K8): a **bare write** (``write`` alone, or with ``read``) counts as unclassified for fail
+          mode, so it refuses when the policy is *unavailable* (no policy, or one older than the 24 h window), and not otherwise.
+        * A service whose sealed policy carries **enforced defaults** (``defaults_v1``, TR2-O3) buys the single window: fresh and cached
+          policies are enforced in full and fail mode applies only when unavailable.
+        """
+        from .hooks import fails_closed, fails_closed_unavailable
+
+        if self._defaults_enforced:
+            if self.policy_state() != "unavailable":
+                return None  # fresh and cached: the sealed policy, defaults included, is enforced in full
+            if self._defaults is not None:
+                from . import lines
+
+                if lines.resolve(self._defaults, effects).fail_mode != "closed":
+                    return None
+            elif not fails_closed_unavailable(effects):
+                return None
+            return "the control plane is unreachable and this worker holds no policy within its validity window (%d h)" % (cache_module.STALE_AFTER_S // 3600)
         if not fails_closed(effects):
+            if fails_closed_unavailable(effects) and self.policy_state() == "unavailable":
+                return "the control plane is unreachable and this worker holds no policy within its validity window (%d h)" % (cache_module.STALE_AFTER_S // 3600)
             return None
         with self._lock:
             reference = self._last_success if self._last_success is not None else self._started_at
             if self._now() - reference >= self._grace:
                 return "the control plane has not answered for %d s" % self._grace
-            if self._last_success is not None:
+            if self._last_success is not None and (self._policy_held or not self._announced_version):
                 return None
-            age = self.cache_age_s()
+            age = self.cache_age_s()  # no hello yet, or told a policy exists while holding none: the cache decides
         if age is not None and age <= cache_module.FRESH_FOR_CONSEQUENTIAL_S:
             return None
-        return "the control plane has not answered yet and there is no fresh policy cache"
+        return "the control plane has not answered yet, or has not served its policy, and there is no fresh policy cache"
 
     def approval_refusal(self) -> str | None:
         """Why a NEW approval cannot be requested now, else ``None``: only a connected link can take one."""
@@ -278,12 +374,9 @@ class RemoteState:
             return self._policy
 
     def halted(self) -> bool:
-        """Is the fleet halted? A halt lapses :data:`STALE_HALT_S` after contact went quiet."""
+        """Is the fleet halted? A halt the plane served holds until the plane lifts it (the enforcement floor, F1): it does not lapse."""
         with self._lock:
-            if not self._halt:
-                return False
-            clock = self._staleness_clock()
-            return clock is not None and self._now() - clock <= STALE_HALT_S
+            return bool(self._halt)
 
     def halt_mode(self) -> "str | None":
         """``"stop"`` or ``"narrow"`` while a halt is enforced, else ``None``."""
@@ -303,10 +396,8 @@ class RemoteState:
             last = self._last_success
             age = None if last is None else max(0.0, self._now() - last)
             halt_stale = None
-            if self._halt and last is not None:
-                age_of_halt = max(0.0, self._now() - (self._staleness_clock() or last))
-                if age_of_halt <= STALE_HALT_S:
-                    halt_stale = age_of_halt
+            if self._halt and last is not None:  # informational: how long the halt has gone unconfirmed; it is enforced regardless
+                halt_stale = max(0.0, self._now() - (self._staleness_clock() or last))
             reason = None
             if self._misses >= 1:
                 reason = "heartbeat failures"
@@ -343,6 +434,7 @@ class RemoteState:
             notice = getattr(reply, "notice", None)
             mode = getattr(reply, "halt_mode", "stop")
             mode = mode if mode in ("stop", "narrow") else "stop"
+            halt_moved = halted_moved = False
             with self._lock:
                 if unavailable:
                     if not self._fleet_state_unavailable:
@@ -352,9 +444,15 @@ class RemoteState:
                 else:
                     self._fleet_state_unavailable = False
                     self._state_unavailable_since = None
+                    halt_before = self._halt
+                    tools_before = self._halted_tools
+                    self._halted_tools = _halted_tools(getattr(reply, "halted_tools", None))
+                    halted_moved = tools_before != self._halted_tools
                     self._halt = bool(getattr(reply, "halt", False))
                     self._halt_mode = mode if self._halt else "stop"
+                    halt_moved = halt_before != self._halt
                     changed = version != self._policy_version
+                    self._announced_version = version
                 self._notice = notice if isinstance(notice, str) else None
                 said = getattr(reply, "plane_degraded", None)
                 said = said if isinstance(said, str) and said else None
@@ -375,6 +473,8 @@ class RemoteState:
                 self._fetch_policy(version)
             elif not unavailable and self._policy_version:
                 self._save_cache()  # keep the cache fresh: its age is what consequential tools trust
+            if not unavailable and (halt_moved or halted_moved):
+                self._save_cache(force=True)  # a halt put on or lifted is on disk at once
             if not unavailable:
                 from . import approvals
 
@@ -408,14 +508,26 @@ class RemoteState:
         data = self._attempt(lambda: self._client.policy(self._config.service), "policy")
         if data is None:
             return
-        body, resolved, dry_run = _policy_envelope(data, version)
         rows, digest = (data.get("rows"), data.get("rows_hash")) if isinstance(data, dict) else (None, None)
+        if digest == "":
+            # The plane's read-error marker: it could not read its rows, so this is not an answer. Apply nothing (the
+            # held rows, document and version stay, which also makes the next hello fetch again) and write no cache
+            # (register C12: a transient plane error must never erase every rule on every worker that polls during it).
+            self._record(False)
+            _warn_policy_unread()
+            return
+        body, resolved, dry_run = _policy_envelope(data, version)
+        if body is not None:
+            _warn_legacy_document()
         with self._lock:
             self._policy = body
             self._policy_version = resolved
             self._policy_dry_run = dry_run
+            self._policy_held = True
             # A bumped policy_version is not proof the rows changed (it is shared with document policies and
             # refusal profiles): replace them only when their hash differs from the one held.
+            if isinstance(data, dict):
+                self._set_defaults(data.get("service_defaults"))  # the envelope carries them every time; absent = not adopted
             if isinstance(digest, str) and digest != self._rows_hash:
                 self._set_rows(rows, digest)
             elif not isinstance(digest, str) and rows is None:
@@ -484,9 +596,12 @@ class RemoteState:
             "active": _active_sessions(),
             "coverage": _coverage_payload(),
             # This worker's ack that it has seen and applied a halt as of the
-            # last reply it processed. ``halted()`` applies the staleness rule,
-            # so a worker that stopped enforcing a stale halt stops acking it.
+            # last reply it processed. A halt holds until the plane lifts it.
             "halt_ack": self.halted(),
+            # What this SDK enforces, on EVERY hello: the plane serves lines only to a worker that said so on its latest hello, and a
+            # hello without it resets the worker to the legacy fields (stricter or equal).
+            "policy_features": list(policy_features()),
+            "policy_unsupported": self._unsupported_payload(),
         }
         if self._rows_hash is not None:
             payload["rows_hash"] = self._rows_hash  # the rows held: the plane (T2) compares it to what it serves
@@ -498,6 +613,10 @@ class RemoteState:
             payload["renew_claims"] = executing[:20]  # approvals being run here: the plane extends their claims
         payload.update(self._tools_payload())
         return payload
+
+    def _unsupported_payload(self) -> list:
+        """``policy_unsupported`` as the hello carries it: ``[{tool, reason}]`` for each tool this worker refuses as unreadable."""
+        return [{"tool": u["tool"], "reason": u["reason"]} for u in self.policy_unsupported() if u["tool"]]  # "*" is the service defaults
 
     def _tools_payload(self) -> dict:
         """``tools_hash`` every time, ``tools`` only when the plane needs it.
@@ -593,6 +712,31 @@ def build(config: Any) -> Any:
         return LocalState()
 
 
+LEGACY_DOCUMENT_WARNING = (
+    "runbound: this control plane still serves the legacy organisation policy document (deny/allow lists). "
+    "It is deprecated: it is still enforced in this release and stops being read in a later one. "
+    "Move its rules to per-tool rules in the console."
+)
+
+
+def _warn_legacy_document() -> None:
+    """The plane served a non-null ``policy`` document: say once per process that it is deprecated. It is still enforced."""
+    from .hooks import _warn_once
+
+    _warn_once(("legacy-organisation-policy-document",), LEGACY_DOCUMENT_WARNING)
+
+
+_UNREAD_WARNED_AT = [0.0]
+
+
+def _warn_policy_unread() -> None:
+    """One warning a minute that the plane could not read its rows (the marker ``rows_hash == ""``)."""
+    now = time.monotonic()
+    if now - _UNREAD_WARNED_AT[0] >= 60.0 or _UNREAD_WARNED_AT[0] == 0.0:
+        _UNREAD_WARNED_AT[0] = now
+        _LOG.warning("runbound: the control plane could not read its policy rows; keeping the rules held and trying again")
+
+
 def _policy_envelope(data: dict, version: int) -> tuple[dict | None, int, bool]:
     """Split a policy response into ``(policy, version, dry_run)``.
 
@@ -636,6 +780,23 @@ def _coverage_payload() -> dict:
     except Exception:
         _LOG.debug("runbound: could not build the coverage payload", exc_info=True)
         return {}
+
+
+def policy_features() -> tuple:
+    """The R2 policy features this SDK actually enforces; it never reports one it does not (TR2-O2 AC1)."""
+    from . import lines
+
+    return lines.FEATURES
+
+
+def _halted_tools(value: Any) -> dict:
+    """``{tool: reasons}`` from the reply's ``halted_tools`` (``[{"tool", "reasons"}]``); anything else is ignored."""
+    out: dict = {}
+    for item in value if isinstance(value, list) else ():
+        if isinstance(item, dict) and isinstance(item.get("tool"), str) and item["tool"]:
+            reasons = item.get("reasons")
+            out[item["tool"]] = [str(r) for r in reasons] if isinstance(reasons, list) else []
+    return out
 
 
 def _as_int(value: Any, default: int = 0) -> int:

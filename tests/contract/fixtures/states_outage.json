@@ -1,0 +1,707 @@
+[
+ {
+  "id": "O-STA-5",
+  "note": "fresh: the served policy decides",
+  "state": "fresh",
+  "effects": [
+   "destructive"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "evaluate",
+   "reason": "served_policy"
+  }
+ },
+ {
+  "id": "O-STA-6",
+  "note": "cached: the sealed policy's ask is enforced in full",
+  "state": "cached",
+  "effects": [
+   "destructive"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "ask",
+  "expect": {
+   "decision": "ask",
+   "reason": "cached_policy",
+   "fail_mode_applied": false
+  }
+ },
+ {
+  "id": "O-STA-6a",
+  "note": "cached: its deny is enforced",
+  "state": "cached",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "deny",
+  "expect": {
+   "decision": "deny",
+   "fail_mode_applied": false
+  }
+ },
+ {
+  "id": "O-STA-6b",
+  "note": "cached: fail mode does not apply even to a destructive tool: the sealed allow stands",
+  "state": "cached",
+  "effects": [
+   "destructive"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "allow",
+  "expect": {
+   "decision": "allow",
+   "fail_mode_applied": false
+  }
+ },
+ {
+  "id": "O-STA-6c",
+  "note": "cached: a code-declared approval is a floor under a sealed allow",
+  "state": "cached",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "approval": true
+  },
+  "cached": "allow",
+  "expect": {
+   "decision": "ask"
+  }
+ },
+ {
+  "id": "O-STA-7",
+  "note": "unavailable: a destructive tool with no rule refuses",
+  "state": "unavailable",
+  "effects": [
+   "destructive"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "plane_unavailable",
+   "fail_mode_applied": true
+  }
+ },
+ {
+  "id": "O-STA-7a",
+  "note": "unavailable: a read tool runs per the service's fail mode (open)",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "allow",
+   "reason": "fail_open",
+   "fail_mode_applied": true
+  }
+ },
+ {
+  "id": "O-STA-7b",
+  "note": "unavailable: a read tool refuses when the service set its fail mode closed",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "closed",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "plane_unavailable"
+  }
+ },
+ {
+  "id": "O-STA-7c",
+  "note": "unavailable: a tool with no declared effect is unclassified, and unclassified is closed",
+  "state": "unavailable",
+  "effects": [],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "plane_unavailable"
+  }
+ },
+ {
+  "id": "O-STA-7d",
+  "note": "unavailable: any closed tag closes it (read + destructive)",
+  "state": "unavailable",
+  "effects": [
+   "read",
+   "destructive"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse"
+  }
+ },
+ {
+  "id": "O-STA-7e",
+  "note": "unavailable: a tag with no setting is closed, never open",
+  "state": "unavailable",
+  "effects": [
+   "external"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse"
+  }
+ },
+ {
+  "id": "O-STA-7f",
+  "note": "K8: a bare write has no tag, so it is unclassified, and unclassified is closed",
+  "state": "unavailable",
+  "effects": [
+   "write"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "plane_unavailable"
+  }
+ },
+ {
+  "id": "O-STA-7g",
+  "note": "K8: read + write is still a bare write: unclassified, closed",
+  "state": "unavailable",
+  "effects": [
+   "read",
+   "write"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "plane_unavailable"
+  }
+ },
+ {
+  "id": "O-STA-7h",
+  "note": "K8: write + external has a tag; external stays per its setting (open)",
+  "state": "unavailable",
+  "effects": [
+   "write",
+   "external"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "allow",
+   "reason": "fail_open"
+  }
+ },
+ {
+  "id": "O-STA-7i",
+  "note": "K8: ...and closed when the service closes external",
+  "state": "unavailable",
+  "effects": [
+   "write",
+   "external"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "closed",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "refuse"
+  }
+ },
+ {
+  "id": "O-STA-7j",
+  "note": "K8: 'unless the service default says otherwise': an open unclassified default lets a bare write run",
+  "state": "unavailable",
+  "effects": [
+   "write"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "open"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "allow",
+   "reason": "fail_open"
+  }
+ },
+ {
+  "id": "O-STA-7k",
+  "note": "a read alone is still a read: open",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "allow",
+   "reason": "fail_open"
+  }
+ },
+ {
+  "id": "O-STA-10",
+  "note": "K7: expired cache that denied the tool: refused whatever fail mode says (read, open)",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "deny",
+  "expect": {
+   "decision": "refuse",
+   "reason": "policy_expired_restricted",
+   "fail_mode_applied": false
+  }
+ },
+ {
+  "id": "O-STA-10a",
+  "note": "K7: expired cache that required a human: refused (external, open)",
+  "state": "unavailable",
+  "effects": [
+   "external"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "ask",
+  "expect": {
+   "decision": "refuse",
+   "reason": "policy_expired_restricted"
+  }
+ },
+ {
+  "id": "O-STA-10b",
+  "note": "K7: expired cache that allowed a read tool: fail mode as written (open -> allow)",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "allow",
+  "expect": {
+   "decision": "allow",
+   "reason": "fail_open",
+   "fail_mode_applied": true
+  }
+ },
+ {
+  "id": "O-STA-10c",
+  "note": "K7: expired cache that allowed a destructive tool: fail mode as written (closed -> refuse)",
+  "state": "unavailable",
+  "effects": [
+   "destructive"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": "allow",
+  "expect": {
+   "decision": "refuse",
+   "reason": "plane_unavailable",
+   "fail_mode_applied": true
+  }
+ },
+ {
+  "id": "O-STA-10d",
+  "note": "K7: no cache at all: fail mode as written (read open)",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {},
+  "cached": null,
+  "expect": {
+   "decision": "allow",
+   "reason": "fail_open"
+  }
+ },
+ {
+  "id": "O-STA-10e",
+  "note": "K7: an expired deny still refuses when every tag is open",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "open",
+   "destructive": "open",
+   "privileged": "open",
+   "unclassified": "open"
+  },
+  "code": {},
+  "cached": "deny",
+  "expect": {
+   "decision": "refuse",
+   "reason": "policy_expired_restricted"
+  }
+ },
+ {
+  "id": "O-STA-10f",
+  "note": "K7: a code predicate's refusal stands before the expired policy is consulted",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "constraint_refused": true
+  },
+  "cached": "deny",
+  "expect": {
+   "decision": "deny",
+   "reason": "code_constraint"
+  }
+ },
+ {
+  "id": "O-STA-8",
+  "note": "unavailable: a code-declared approval refuses whatever fail mode says",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "approval": true
+  },
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "approval_unverifiable",
+   "fail_mode_applied": false
+  }
+ },
+ {
+  "id": "O-STA-8a",
+  "note": "...even when every tag is open",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "open",
+   "destructive": "open",
+   "privileged": "open",
+   "unclassified": "open"
+  },
+  "code": {
+   "approval": true
+  },
+  "cached": null,
+  "expect": {
+   "decision": "refuse",
+   "reason": "approval_unverifiable"
+  }
+ },
+ {
+  "id": "O-STA-9",
+  "note": "a code predicate's refusal stands when fresh",
+  "state": "fresh",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "constraint_refused": true
+  },
+  "cached": null,
+  "expect": {
+   "decision": "deny",
+   "reason": "code_constraint"
+  }
+ },
+ {
+  "id": "O-STA-9a",
+  "note": "...when cached, whatever the sealed policy allows",
+  "state": "cached",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "constraint_refused": true
+  },
+  "cached": "allow",
+  "expect": {
+   "decision": "deny",
+   "reason": "code_constraint"
+  }
+ },
+ {
+  "id": "O-STA-9b",
+  "note": "...when unavailable, even for a read tool failing open",
+  "state": "unavailable",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "constraint_refused": true
+  },
+  "cached": null,
+  "expect": {
+   "decision": "deny",
+   "reason": "code_constraint"
+  }
+ },
+ {
+  "id": "O-STA-9c",
+  "note": "a code block stands in every state",
+  "state": "cached",
+  "effects": [
+   "read"
+  ],
+  "fail_mode_by_tag": {
+   "read": "open",
+   "write": "open",
+   "external": "open",
+   "financial": "closed",
+   "destructive": "closed",
+   "privileged": "closed",
+   "unclassified": "closed"
+  },
+  "code": {
+   "blocked": true
+  },
+  "cached": "allow",
+  "expect": {
+   "decision": "deny",
+   "reason": "code_blocked"
+  }
+ }
+]

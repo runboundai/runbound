@@ -1,0 +1,580 @@
+{
+ "about": "Every \u00a75.2 operator, three-valued (tests/contract/test_operators.py). expect is true, false or null (unknown).",
+ "cases": [
+  {
+   "id": "O-OP-1",
+   "op": ">",
+   "actual": 5,
+   "value": 3,
+   "expect": true
+  },
+  {
+   "id": "O-OP-2",
+   "op": ">",
+   "actual": 3,
+   "value": 5,
+   "expect": false
+  },
+  {
+   "id": "O-OP-3",
+   "op": ">",
+   "actual": 3,
+   "value": 3,
+   "expect": false
+  },
+  {
+   "id": "O-OP-5",
+   "op": ">",
+   "actual": 5.5,
+   "value": 5,
+   "expect": true
+  },
+  {
+   "id": "O-OP-6",
+   "op": ">",
+   "actual": true,
+   "value": 0,
+   "expect": null
+  },
+  {
+   "id": "O-OP-7",
+   "op": ">",
+   "actual": "5",
+   "value": 3,
+   "expect": null
+  },
+  {
+   "id": "O-OP-8",
+   "op": ">",
+   "actual": 5,
+   "value": "3",
+   "expect": null
+  },
+  {
+   "id": "O-OP-9",
+   "op": ">=",
+   "actual": 3,
+   "value": 3,
+   "expect": true
+  },
+  {
+   "id": "O-OP-10",
+   "op": ">=",
+   "actual": 2,
+   "value": 3,
+   "expect": false
+  },
+  {
+   "id": "O-OP-12",
+   "op": "<",
+   "actual": 2,
+   "value": 3,
+   "expect": true
+  },
+  {
+   "id": "O-OP-13",
+   "op": "<",
+   "actual": 3,
+   "value": 3,
+   "expect": false
+  },
+  {
+   "id": "O-OP-14",
+   "op": "<=",
+   "actual": 3,
+   "value": 3,
+   "expect": true
+  },
+  {
+   "id": "O-OP-15",
+   "op": "<=",
+   "actual": 4,
+   "value": 3,
+   "expect": false
+  },
+  {
+   "id": "O-OP-16",
+   "op": "<=",
+   "actual": null,
+   "value": 3,
+   "expect": null
+  },
+  {
+   "id": "O-OP-17",
+   "op": "between",
+   "actual": 5,
+   "value": [
+    1,
+    10
+   ],
+   "expect": true
+  },
+  {
+   "id": "O-OP-18",
+   "op": "between",
+   "actual": 1,
+   "value": [
+    1,
+    10
+   ],
+   "expect": true
+  },
+  {
+   "id": "O-OP-19",
+   "op": "between",
+   "actual": 10,
+   "value": [
+    1,
+    10
+   ],
+   "expect": true
+  },
+  {
+   "id": "O-OP-20",
+   "op": "between",
+   "actual": 11,
+   "value": [
+    1,
+    10
+   ],
+   "expect": false
+  },
+  {
+   "id": "O-OP-21",
+   "op": "between",
+   "actual": 0,
+   "value": [
+    1,
+    10
+   ],
+   "expect": false
+  },
+  {
+   "id": "O-OP-22",
+   "op": "between",
+   "actual": 5,
+   "value": [
+    10,
+    1
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-23",
+   "op": "between",
+   "actual": 5,
+   "value": [
+    1
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-24",
+   "op": "between",
+   "actual": 5,
+   "value": "1,10",
+   "expect": null
+  },
+  {
+   "id": "O-OP-25",
+   "op": "between",
+   "actual": "5",
+   "value": [
+    1,
+    10
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-26",
+   "op": "between",
+   "actual": true,
+   "value": [
+    0,
+    1
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-27",
+   "op": "equals",
+   "actual": "EU",
+   "value": "EU",
+   "expect": true
+  },
+  {
+   "id": "O-OP-28",
+   "op": "equals",
+   "actual": "eu",
+   "value": "EU",
+   "expect": false
+  },
+  {
+   "id": "O-OP-29",
+   "op": "equals",
+   "actual": " EU",
+   "value": "EU",
+   "expect": false
+  },
+  {
+   "id": "O-OP-30",
+   "op": "equals",
+   "actual": 5,
+   "value": "5",
+   "expect": null
+  },
+  {
+   "id": "O-OP-31",
+   "op": "equals",
+   "actual": "5",
+   "value": 5,
+   "expect": null
+  },
+  {
+   "id": "O-OP-32",
+   "op": "starts_with",
+   "actual": "refund_42",
+   "value": "refund",
+   "expect": true
+  },
+  {
+   "id": "O-OP-33",
+   "op": "starts_with",
+   "actual": "Refund_42",
+   "value": "refund",
+   "expect": false
+  },
+  {
+   "id": "O-OP-34",
+   "op": "starts_with",
+   "actual": "x",
+   "value": "",
+   "expect": true
+  },
+  {
+   "id": "O-OP-35",
+   "op": "starts_with",
+   "actual": 1,
+   "value": "1",
+   "expect": null
+  },
+  {
+   "id": "O-OP-36",
+   "op": "ends_with",
+   "actual": "a.csv",
+   "value": ".csv",
+   "expect": true
+  },
+  {
+   "id": "O-OP-37",
+   "op": "ends_with",
+   "actual": "a.CSV",
+   "value": ".csv",
+   "expect": false
+  },
+  {
+   "id": "O-OP-38",
+   "op": "ends_with",
+   "actual": [
+    "a"
+   ],
+   "value": "a",
+   "expect": null
+  },
+  {
+   "id": "O-OP-39",
+   "op": "is_one_of",
+   "actual": "b",
+   "value": [
+    "a",
+    "b"
+   ],
+   "expect": true
+  },
+  {
+   "id": "O-OP-40",
+   "op": "is_one_of",
+   "actual": "B",
+   "value": [
+    "a",
+    "b"
+   ],
+   "expect": false
+  },
+  {
+   "id": "O-OP-41",
+   "op": "is_one_of",
+   "actual": "a",
+   "value": [],
+   "expect": null
+  },
+  {
+   "id": "O-OP-42",
+   "op": "is_one_of",
+   "actual": 1,
+   "value": [
+    "1"
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-43",
+   "op": "is_one_of",
+   "actual": "a",
+   "value": "ab",
+   "expect": null
+  },
+  {
+   "id": "O-OP-44",
+   "op": "is_one_of",
+   "actual": "a",
+   "value": [
+    "a",
+    1
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-45",
+   "op": "is_true",
+   "actual": true,
+   "value": null,
+   "expect": true
+  },
+  {
+   "id": "O-OP-46",
+   "op": "is_true",
+   "actual": false,
+   "value": null,
+   "expect": false
+  },
+  {
+   "id": "O-OP-47",
+   "op": "is_false",
+   "actual": false,
+   "value": null,
+   "expect": true
+  },
+  {
+   "id": "O-OP-48",
+   "op": "is_false",
+   "actual": true,
+   "value": null,
+   "expect": false
+  },
+  {
+   "id": "O-OP-49",
+   "op": "is_true",
+   "actual": 1,
+   "value": null,
+   "expect": null
+  },
+  {
+   "id": "O-OP-50",
+   "op": "is_true",
+   "actual": "true",
+   "value": null,
+   "expect": null
+  },
+  {
+   "id": "O-OP-51",
+   "op": "is_false",
+   "actual": 0,
+   "value": null,
+   "expect": null
+  },
+  {
+   "id": "O-OP-52",
+   "op": "contains",
+   "actual": [
+    "a",
+    "b"
+   ],
+   "value": "a",
+   "expect": true
+  },
+  {
+   "id": "O-OP-53",
+   "op": "contains",
+   "actual": [
+    "a",
+    "b"
+   ],
+   "value": "c",
+   "expect": false
+  },
+  {
+   "id": "O-OP-56",
+   "op": "contains",
+   "actual": [
+    1,
+    2
+   ],
+   "value": 2,
+   "expect": true
+  },
+  {
+   "id": "O-OP-57",
+   "op": "contains",
+   "actual": [
+    true
+   ],
+   "value": 1,
+   "expect": false
+  },
+  {
+   "id": "O-OP-58",
+   "op": "contains",
+   "actual": [
+    1
+   ],
+   "value": true,
+   "expect": false
+  },
+  {
+   "id": "O-OP-59",
+   "op": "contains",
+   "actual": [
+    "1"
+   ],
+   "value": 1,
+   "expect": false
+  },
+  {
+   "id": "O-OP-60",
+   "op": "contains",
+   "actual": "abc",
+   "value": "a",
+   "expect": null
+  },
+  {
+   "id": "O-OP-61",
+   "op": "contains",
+   "actual": [
+    "a"
+   ],
+   "value": null,
+   "expect": null
+  },
+  {
+   "id": "O-OP-62",
+   "op": "contains",
+   "actual": [
+    "a"
+   ],
+   "value": [
+    "a"
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-63",
+   "op": "contains",
+   "actual": [],
+   "value": "a",
+   "expect": false
+  },
+  {
+   "id": "O-OP-64",
+   "op": "length_lt",
+   "actual": [
+    1,
+    2
+   ],
+   "value": 3,
+   "expect": true
+  },
+  {
+   "id": "O-OP-65",
+   "op": "length_lt",
+   "actual": [
+    1,
+    2
+   ],
+   "value": 2,
+   "expect": false
+  },
+  {
+   "id": "O-OP-66",
+   "op": "length_gt",
+   "actual": [
+    1,
+    2
+   ],
+   "value": 1,
+   "expect": true
+  },
+  {
+   "id": "O-OP-67",
+   "op": "length_gt",
+   "actual": [],
+   "value": 0,
+   "expect": false
+  },
+  {
+   "id": "O-OP-68",
+   "op": "length_lt",
+   "actual": "ab",
+   "value": 3,
+   "expect": null
+  },
+  {
+   "id": "O-OP-69",
+   "op": "length_gt",
+   "actual": [
+    1
+   ],
+   "value": -1,
+   "expect": null
+  },
+  {
+   "id": "O-OP-70",
+   "op": "length_gt",
+   "actual": [
+    1
+   ],
+   "value": true,
+   "expect": null
+  },
+  {
+   "id": "O-OP-71",
+   "op": "length_lt",
+   "actual": [
+    1
+   ],
+   "value": 1.5,
+   "expect": null
+  },
+  {
+   "id": "O-OP-72",
+   "op": "matches",
+   "actual": "abc",
+   "value": "a.c",
+   "expect": null
+  },
+  {
+   "id": "O-OP-73",
+   "op": "regex",
+   "actual": "abc",
+   "value": "a.*",
+   "expect": null
+  },
+  {
+   "id": "O-OP-74",
+   "op": "is_between",
+   "actual": 5,
+   "value": [
+    1,
+    9
+   ],
+   "expect": null
+  },
+  {
+   "id": "O-OP-75",
+   "op": "",
+   "actual": 5,
+   "value": 5,
+   "expect": null
+  }
+ ]
+}

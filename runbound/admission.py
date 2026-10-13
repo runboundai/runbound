@@ -78,8 +78,9 @@ def row(code: str, reason: str, retry_after_s: float | None = None) -> Decision:
     return Decision(verdict="deny", kind="action", boundary="row", detector="policy", reason=reason, evaluation=evaluation)
 
 
-def plane_unavailable(reason: str) -> Decision:
-    """The plane is gone and this tool's class does not run on a cache alone (S7)."""
+def plane_unavailable(reason: str, code: str = "plane_unavailable") -> Decision:
+    """The plane is gone and this tool's class does not run on a cache alone (S7); or, with ``code="policy_unavailable"``, no
+    governed call runs before the first handshake or sealed-cache load (the enforcement floor, F3)."""
     return Decision(
         verdict="deny",
         kind="action",
@@ -87,7 +88,7 @@ def plane_unavailable(reason: str) -> Decision:
         level="fleet",
         detector="plane",
         reason=reason,
-        evaluation={"code": "plane_unavailable"},
+        evaluation={"code": code},
     )
 
 

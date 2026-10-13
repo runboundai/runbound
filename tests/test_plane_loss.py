@@ -1,9 +1,8 @@
 """What a worker does with a fleet-wide halt when the control plane goes quiet.
 
-A halt is the heaviest thing the plane can say, so it is also the first thing
-a worker stops believing when the plane stops confirming it: after
-``STALE_HALT_S`` without contact the halt lapses and the fleet runs again
-(``shared.py``'s rule 1: the plane is an optimization, never a dependency).
+A halt is the heaviest thing the plane can say, so it holds until the plane lifts it
+(the enforcement floor, F1): going quiet does not release it. ``halt_stale_s`` only
+reports how long the halt has gone unconfirmed.
 
 No sockets and no sleeping: the plane is an in-memory double and the clock is
 one the test moves by hand.
@@ -11,7 +10,9 @@ one the test moves by hand.
 
 from runbound.config import RunboundConfig
 from runbound.plane_types import HelloReply, PlaneStatus
-from runbound.shared import STALE_HALT_S, RemoteState
+from runbound.shared import RemoteState
+
+QUIET_S = 24 * 3600  # a day without a word from the plane
 
 
 class MovableClock:
@@ -54,35 +55,35 @@ def remote(clock: MovableClock, **kwargs) -> RemoteState:
     return RemoteState(Plane(), None, config(**kwargs), now=clock)
 
 
-def test_a_halt_is_enforced_inside_the_window():
+def test_a_halt_is_enforced_while_the_plane_is_quiet():
     clock = MovableClock()
     shared = remote(clock)
     shared.apply_hello(HelloReply(halt=True))
 
-    clock.advance(STALE_HALT_S - 1)
+    clock.advance(59)
 
     assert shared.halted() is True
 
 
-def test_a_stale_halt_is_released_after_the_window():
+def test_a_halt_is_never_released_by_silence():
     clock = MovableClock()
     shared = remote(clock)
     shared.apply_hello(HelloReply(halt=True))
 
-    clock.advance(STALE_HALT_S - 1)
+    clock.advance(59)
     assert shared.halted() is True
 
-    clock.advance(2)
-    assert shared.halted() is False
+    clock.advance(QUIET_S)
+    assert shared.halted() is True
 
 
-def test_a_fresh_heartbeat_keeps_a_halt_alive_past_the_window():
+def test_a_fresh_heartbeat_confirms_a_halt_that_holds_anyway():
     clock = MovableClock()
     shared = remote(clock)
     shared.apply_hello(HelloReply(halt=True))
-    clock.advance(STALE_HALT_S - 1)
+    clock.advance(QUIET_S)
     shared.apply_hello(HelloReply(halt=True))
-    clock.advance(STALE_HALT_S - 1)
+    clock.advance(QUIET_S)
 
     assert shared.halted() is True
 
@@ -118,15 +119,15 @@ def test_halt_stale_s_counts_seconds_since_last_contact_while_enforced():
     assert status.halt_stale_s == status.last_contact_age_s
 
 
-def test_halt_stale_s_goes_back_to_none_once_release_lets_the_halt_lapse():
+def test_halt_stale_s_keeps_counting_because_the_halt_is_never_released_by_silence():
     clock = MovableClock()
     shared = remote(clock)
     shared.apply_hello(HelloReply(halt=True))
 
-    clock.advance(STALE_HALT_S + 1)
+    clock.advance(QUIET_S)
 
-    assert shared.halted() is False
-    assert shared.status().halt_stale_s is None
+    assert shared.halted() is True
+    assert shared.status().halt_stale_s == QUIET_S
 
 
 def test_plane_status_default_construction_is_unchanged():

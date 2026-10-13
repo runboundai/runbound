@@ -27,18 +27,22 @@ policies and is not proof of it, so a worker compares hashes and keeps what it h
 
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import logging
 from dataclasses import dataclass
 from typing import Any
 
+from . import _row_check as row_check
 from . import admission
+from . import lines as lines_module
 from .policy import CAPABILITIES
 
 _LOG = logging.getLogger("runbound")
 
 RANK = {name: index for index, name in enumerate(CAPABILITIES)}
+RANK_DECISION = {"allow": 0, "ask": 1, "deny": 2}
 STATES = ("dry_run", "enforced")
 
 
@@ -54,46 +58,200 @@ class Row:
     approval_timeout_s: float | None = None
     risk_class: str | None = None
     fail_mode: str = "closed"
+    headline: str | None = None
+    identifies: tuple = ()
+    #: Why the SDK cannot interpret this row safely (floor F2), else ``None``: the tool is refused with ``policy_unsupported``.
+    unsupported: str | None = None
+    unsupported_code: str | None = None  # row_unparseable | unknown_restriction_key | invalid_body | legacy_view_mismatch
+    #: The record behind this row's decision (TR2-O2 AC3): ``"<tool>#L1"`` ids of the lines that matched, what contributed, why.
+    matched: tuple = ()
+    contributors: tuple = ()
+    plan_reason: str = "fallback"
+    requirements: tuple = ()
+    #: True when the row decides nothing itself (no line, ``otherwise`` inherit): the service defaults decide, if it has adopted any.
+    inherit: bool = False
+    #: The lines of a row with a condition: decided anew for each call from its arguments and context (:func:`resolve_call`); the fields above
+    #: then hold the strictest outcome the row can produce, which is what the legacy view must never exceed.
+    conditional: tuple = ()
+    otherwise: "str | None" = None
+    #: A line the call could not evaluate (K1): the call is refused with this ``(code, text)`` and no line decided it.
+    refuse: "tuple | None" = None
+    #: Refuse the call when the session already made this many calls of the tool with the same arguments (a repetition control on a matching line).
+    repetition: "int | None" = None
+    #: A dry-run revision served beside this enforced one (WIRE-TR2 §3): evaluated only to record ``would_refuse``, never to decide.
+    candidate: "Row | None" = None
 
     @property
     def dry_run(self) -> bool:
         return self.state == "dry_run"
 
 
+def _build(raw: dict, tool: str, state: str) -> Row:
+    """One readable served row as a :class:`Row`. A row with ``lines`` is decided from them; one without is read from its legacy fields,
+    through the lines the plane would derive from them. Raises :class:`runbound.lines.LineError` for lines it cannot read safely."""
+    has_lines = "lines" in raw
+    if has_lines:
+        lines = lines_module.parse_lines(raw["lines"])
+        decided = lines_module.plan(lines, raw.get("otherwise"), static=True)
+        if RANK_DECISION[lines_module.legacy_decision(raw)] > RANK_DECISION[decided.decision]:
+            # The legacy view is the plane's most restrictive reading of the lines; one stricter than the lines themselves means
+            # the lines payload is looser than the plane meant. Never run on it.
+            raise lines_module.LineError(lines_module.LEGACY_VIEW_MISMATCH, "the legacy view of this row is stricter than its lines")
+    else:
+        lines = lines_module.lines_from_legacy(raw)
+        decided = lines_module.plan(lines, None, static=True)
+    quota = raw.get("quota")
+    max_calls = raw.get("max_calls_per_session")
+    if has_lines:
+        approval = decided.approval or {}
+        blocked, required = decided.decision == "deny", decided.decision == "ask"
+        mode, timeout = approval.get("approval_mode"), approval.get("approval_timeout_s")
+        max_calls, quota = decided.max_calls, decided.quota
+    else:
+        blocked, required = bool(raw.get("blocked")), bool(raw.get("approval_required"))
+        mode, timeout = raw.get("approval_mode"), raw.get("approval_timeout_s")
+    row = Row(
+        tool=tool, state=state, blocked=blocked, max_calls=max_calls, quota=quota, approval_required=required,
+        approval_mode=mode, approval_timeout_s=timeout, risk_class=raw.get("risk_class"),
+        fail_mode="open" if raw.get("fail_mode") == "open" else "closed",
+        headline=raw.get("headline"), identifies=tuple(raw.get("identifies") or ()),
+        matched=tuple(f"{tool}#{i}" for i in decided.matched), contributors=decided.contributors,
+        plan_reason=decided.reason, requirements=decided.requirements,
+        inherit=not lines and raw.get("otherwise") in (None, "inherit"),
+        conditional=lines if any(line.conditional for line in lines) else (), otherwise=raw.get("otherwise") if has_lines else None,
+        repetition=decided.repetition,
+    )
+    candidate = raw.get("candidate")
+    if isinstance(candidate, dict):
+        try:
+            row = dataclasses.replace(row, candidate=_build({**candidate, "tool": tool}, tool, "dry_run"))
+        except Exception:
+            _LOG.warning("runbound: a candidate rule for %r could not be read; it is not evaluated", tool, exc_info=True)
+    return row
+
+
+def apply_defaults(row: "Row | None", tool: str, effects: "frozenset | None", shared: Any) -> "Row | None":
+    """The row this call is decided by once the service's defaults are counted in (WIRE-TR2b; TR2-O3).
+
+    A service defaults is only a **fallback** (TPD §5.5): a tool with no row, or a row that decides nothing itself (no line, ``otherwise``
+    inherit), is decided by the default for its declared effects (the strictest of the operation's and the tags'; the unclassified default for a
+    tool with none); a row with a line, or an explicit ``otherwise``, keeps deciding. Enforced defaults gate the call; dry-run defaults ride as a
+    ``candidate`` and are only recorded. Defaults the SDK cannot read refuse the unruled tool (``policy_unsupported``).
+    """
+    defaults = getattr(shared, "defaults", lambda: None)()
+    problem = getattr(shared, "defaults_problem", lambda: None)()
+    if defaults is None and problem is None:
+        return row
+    if row is not None and (row.unsupported or not row.inherit):
+        return row
+    base = row if row is not None else Row(tool=tool, inherit=True)
+    if defaults is None:  # served enforced defaults this SDK cannot read: never resolve an unruled tool to allow
+        return Row(tool=tool, state="enforced", unsupported=problem[1], unsupported_code=problem[0])
+    resolved = lines_module.resolve(defaults, effects)
+    gate = dataclasses.replace(
+        base, blocked=base.blocked or resolved.decision == "deny", approval_required=base.approval_required or resolved.decision == "ask",
+        approval_mode=base.approval_mode or ("sync" if resolved.decision == "ask" else None),
+        approval_timeout_s=base.approval_timeout_s if resolved.wait_s is None else resolved.wait_s,
+        contributors=("default:service",), requirements=resolved.requirements, plan_reason="fallback")
+    if defaults.state == "dry_run":
+        return dataclasses.replace(base, candidate=dataclasses.replace(gate, state="dry_run", candidate=None))
+    if defaults.candidate is not None and base.candidate is None:  # a dry-run revision beside the enforced one: record only
+        seen = lines_module.resolve(defaults.candidate, effects)
+        shadow = dataclasses.replace(
+            base, blocked=base.blocked or seen.decision == "deny", approval_required=base.approval_required or seen.decision == "ask",
+            approval_mode=base.approval_mode or ("sync" if seen.decision == "ask" else None), contributors=("default:service",),
+            requirements=seen.requirements, plan_reason="fallback", state="dry_run", candidate=None)
+        return dataclasses.replace(gate, candidate=shadow)
+    return gate
+def resolve_call(row: "Row | None", args: "dict | None", context: dict) -> "Row | None":
+    """The row for THIS call: a row with a condition is decided anew from the call's final arguments and the trusted context (TPD §4b, §5.2).
+
+    The strictest matching line decides; an unknown line that could make it stricter refuses the call (``condition_unevaluable``, K1); the limits and
+    approval of a line count only while it matches; ``otherwise`` and the service defaults decide only when no line matches. A row with no condition is
+    returned as it is. The candidate, if any, is resolved the same way.
+    """
+    if row is None or row.unsupported:
+        return row
+    candidate = None if row.candidate is None else resolve_call(row.candidate, args, context)
+    if not row.conditional:
+        return row if candidate is row.candidate else dataclasses.replace(row, candidate=candidate)
+    decided = lines_module.plan(row.conditional, row.otherwise, args=args or {}, context=context)
+    approval = decided.approval or {}
+    refuse = None
+    if decided.decision == "refuse":
+        refuse = ("condition_unevaluable", "a console rule for this tool could not be evaluated on this call's arguments, and might have refused it")
+    return dataclasses.replace(
+        row, blocked=decided.decision == "deny", approval_required=decided.decision == "ask",
+        approval_mode=approval.get("approval_mode"), approval_timeout_s=approval.get("approval_timeout_s"),
+        max_calls=decided.max_calls, quota=decided.quota,
+        matched=tuple(f"{row.tool}#{i}" for i in decided.matched), contributors=decided.contributors, plan_reason=decided.reason,
+        requirements=decided.requirements, repetition=decided.repetition, candidate=candidate, refuse=refuse,
+        # no line matched this call and the row's otherwise is inherit: the service defaults decide it, as for a row with no line (TPD §5.5)
+        inherit=not decided.matched and refuse is None and row.otherwise in (None, "inherit"),
+    )
+
+
 def parse(rows: Any) -> "dict[str, Row]":
-    """The served rows as ``{tool: Row}``. Tolerant: a malformed row is skipped, never an error."""
+    """The served rows as ``{tool: Row}``. A row the SDK cannot interpret safely is kept, marked ``unsupported``, never skipped.
+
+    That is the floor (F2, register C2/C9/C19): a row the plane's validator would not have served, one with a key this SDK
+    does not know, or one that is not even an object with a tool name must never resolve to *allow*. The first two refuse
+    their own tool with ``policy_unsupported``; the last names no tool, so it can only be counted (:func:`unreadable`).
+    """
     out: dict = {}
     for raw in rows if isinstance(rows, list) else ():
         try:
-            tool, state = raw["tool"], raw.get("state", "enforced")
-            if not isinstance(tool, str) or state not in STATES:
+            tool = raw["tool"]
+            if not isinstance(tool, str) or not tool:
                 continue
-            quota = raw.get("quota")
-            risk = raw.get("risk_class")
-            max_calls = raw.get("max_calls_per_session")
-            out[tool] = Row(
-                tool=tool, state=state, blocked=bool(raw.get("blocked")),
-                max_calls=max_calls if isinstance(max_calls, int) and not isinstance(max_calls, bool) and max_calls >= 1 else None,
-                quota=quota if isinstance(quota, dict) and isinstance(quota.get("limit"), int) else None,
-                approval_required=bool(raw.get("approval_required")),
-                approval_mode=raw.get("approval_mode") if raw.get("approval_mode") in ("sync", "deferred") else None,
-                approval_timeout_s=raw.get("approval_timeout_s") if isinstance(raw.get("approval_timeout_s"), (int, float)) else None,
-                risk_class=risk if risk in RANK else None,
-                fail_mode="open" if raw.get("fail_mode") == "open" else "closed",
-            )
+            state = raw.get("state", "enforced")
+            why = row_check.problem(raw)
+            code = row_check.code_of(raw)
+            if why is None:
+                try:
+                    out[tool] = _build(raw, tool, state)
+                    continue
+                except lines_module.LineError as error:
+                    why, code = str(error), error.code
+            out[tool] = Row(tool=tool, state=state if state in STATES else "enforced", unsupported=why, unsupported_code=code)
         except Exception:
-            _LOG.debug("runbound: skipping a malformed policy row", exc_info=True)
+            _LOG.debug("runbound: a served policy row could not be read", exc_info=True)
     return out
 
 
+def unreadable(rows: Any) -> int:
+    """How many served entries name no tool (not an object, or no string ``tool``): nothing to refuse, so only counted."""
+    return sum(1 for raw in (rows if isinstance(rows, list) else ()) if not (isinstance(raw, dict) and isinstance(raw.get("tool"), str) and raw["tool"]))
+
+
 def effective_effects(row: "Row | None", effects: "frozenset | None") -> "frozenset | None":
-    """The tool's capability classes with the row's ``risk_class`` folded in: the stricter wins."""
+    """The tool's capability classes with the row's ``risk_class`` folded in: the stricter wins, and a row never loosens.
+
+    A tool that declares no effects is *unclassified* and fails closed. A row naming ``read``, ``write`` or ``external``
+    would turn it into a fail-open tool, which is a loosening of what the code declared, so such a row leaves it
+    unclassified; ``financial``, ``destructive`` and ``privileged`` raise it as before (register C15). A declared class
+    that is as strict as the row's, or stricter, is left alone.
+    """
     if row is None or row.risk_class is None or row.dry_run:
         return effects
     own = frozenset(effects or ())
-    if own and max(RANK.get(c, 0) for c in own) >= RANK[row.risk_class]:
+    if not own:
+        return effects if RANK[row.risk_class] < RANK["financial"] else frozenset({row.risk_class})
+    if max(RANK.get(c, 0) for c in own) >= RANK[row.risk_class]:
         return effects
     return frozenset({row.risk_class}) | own
+
+
+def requirement_of(row: "Row") -> "str | None":
+    """The requirement a request is for, as the plane stores it: the matched console line's id (``L2``), a default (``default:financial``) or ``code``.
+
+    Several together are joined in a fixed order, so a grant made for one set satisfies only that same set (never one of them alone). ``None`` with none.
+    """
+    names = sorted({source[4:] if source.startswith("row:") else source for source in (r.source for r in row.requirements)})
+    joined = ",".join(names)
+    if len(joined) > 64:
+        joined = "set:" + hashlib.sha1(joined.encode("utf-8")).hexdigest()[:20]
+    return joined or None
 
 
 def approval_spec(row: "Row | None", code_spec: Any, names: tuple, json_ok: bool, spec_type: type) -> Any:
@@ -102,16 +260,23 @@ def approval_spec(row: "Row | None", code_spec: Any, names: tuple, json_ok: bool
     ``None`` when none is required (a dry_run row never asks anyone). A deferred row on a tool whose
     arguments are not JSON-friendly falls back to sync.
     """
-    if row is None or not row.approval_required or row.dry_run:
+    if row is None or row.dry_run:
         return code_spec
+    if not row.approval_required:
+        # A row that only sets a wait still shortens the code's own approval ("the lower"); it asks nobody by itself (TR2 C17).
+        if code_spec is not None and row.approval_timeout_s:
+            return spec_type(code_spec.mode, float(min(code_spec.timeout_s, row.approval_timeout_s)), code_spec.names or names)
+        return code_spec
+    requirement = requirement_of(row)
     if code_spec is not None:
         mode = code_spec.mode
-        timeout = min(code_spec.timeout_s, row.approval_timeout_s) if row.approval_timeout_s else code_spec.timeout_s
-        return spec_type(mode, float(timeout), code_spec.names or names)
-    mode = row.approval_mode or "sync"
-    if mode == "deferred" and not json_ok:
-        mode = "sync"
-    return spec_type(mode, float(row.approval_timeout_s or 600.0), names)
+        # Two requirements, the code's and the row's, never merged: the wait is the shortest named (TPD §4b step 6, via _rules).
+        timeout = lines_module.wait_s(row.requirements, code_spec.timeout_s) if row.requirements else None
+        if timeout is None:
+            timeout = min(code_spec.timeout_s, row.approval_timeout_s) if row.approval_timeout_s else code_spec.timeout_s
+        return spec_type(mode, float(timeout), code_spec.names or names, requirement)
+    # Deferred execution needs the tool's own registration (the code states ``mode="deferred"``): a row alone never makes a tool deferred.
+    return spec_type("sync", float(row.approval_timeout_s or 600.0), names, requirement)
 
 
 def _refuse(engine: Any, session: Any, call: Any, row: Row, code: str, reason: str, tags: list | None,
@@ -124,7 +289,10 @@ def _refuse(engine: Any, session: Any, call: Any, row: Row, code: str, reason: s
                        f"{'Dry run: would refuse' if row.dry_run else 'Refused'} tool {call.name!r}{{whose}}: {reason}",
                        {"tool": call.name, "rule": code, "origin": "org", "state": row.state})
     if row.dry_run:
-        engine._alert(_stamp_decision(anomaly, decision, session=session), session, "dry_run")
+        # Every would-refuse call is evidence (the console counts them), so it goes down the refusal path: recorded one by one up
+        # to the record cap per session, rule and tool, then counted and summarised. What it must not do is page anyone: a
+        # dry_run reaction never matches an alert route unless the route asks for it.
+        engine._alert(_stamp_decision(anomaly, decision, session=session), session, "dry_run", refusal=True)
         if tags is not None:
             tags.append(f"would_refuse:{code}")
         return
@@ -135,13 +303,37 @@ def enforce(engine: Any, session: Any, call: Any, row: "Row | None", tags: list 
     """``blocked`` then the session cap, in that order (tool-policy.md §2). Consumes nothing."""
     if row is None:
         return
+    if row.unsupported is not None:
+        _refuse(engine, session, call, row, "policy_unsupported",
+                f"tool {call.name!r} has a console rule this SDK cannot interpret safely ({row.unsupported}); it is refused until the rule is changed or the SDK upgraded",
+                tags)
+        return
+    if row.refuse is not None:
+        _refuse(engine, session, call, row, row.refuse[0], f"tool {call.name!r}: {row.refuse[1]}", tags)
+        return
     if row.blocked:
         _refuse(engine, session, call, row, "tool_blocked", f"tool {call.name!r} is blocked by policy", tags)
     if row.max_calls is not None:
-        used = session.counted_calls(call.name)
+        used = session.counted_key(call.name, ",".join(row.matched)) if row.conditional else session.counted_calls(call.name)
         if used > row.max_calls:
             _refuse(engine, session, call, row, "session_max_calls",
                     f"tool {call.name!r} has been called {used} times in this session; the limit is {row.max_calls}", tags)
+    if row.repetition is not None:
+        digest = engine.call_digest(call)
+        said = f"tool {call.name!r} was already called {row.repetition} times with these arguments in this session"
+        if row.dry_run:  # a dry run keeps a count of its own, apart from the live one, so it never changes what a live rule would see
+            if not session.reserve_repeat(call.name, "dry:" + digest, row.repetition):
+                _refuse(engine, session, call, row, "repetition_exceeded", said, tags)
+        elif engine.hold_repeat(session, call, digest, row.repetition):
+            pass
+        else:
+            _refuse(engine, session, call, row, "repetition_exceeded", said, tags)
+    if row.dry_run and row.approval_required and tags is not None:
+        tags.append("would_ask:approval")  # a dry run asks nobody; it records that a live rule would have
+    if row.candidate is not None and not row.dry_run:
+        # A candidate (dry-run) revision beside the enforced one: what it would have refused is recorded, the call goes on. It never
+        # decides, never moves a live counter and never asks anyone (its quota and approval are not evaluated: R3 simulates those).
+        enforce(engine, session, call, row.candidate, tags)
 
 
 def rows_hash(rows: list) -> str:

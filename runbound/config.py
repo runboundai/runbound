@@ -24,8 +24,8 @@ _LOG = logging.getLogger("runbound")
 #: changes and ``init(token=...)`` starts connecting on its own.
 HOSTED_PLANE_URL = None
 
-#: What ``on_halt`` may be: ``"raise"`` refuses every tool while the plane
-#: has halted the fleet, ``"warn"`` logs it and lets the call through.
+#: What ``on_halt`` may be. It no longer changes anything: a fleet halt refuses every tool whichever it is
+#: (the enforcement floor), so the two values behave the same and the setting is kept only so existing code still runs.
 ON_HALT_MODES = ("raise", "warn")
 
 _WARNED: set = set()

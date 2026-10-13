@@ -98,7 +98,7 @@ Terms: a **consequential** tool carries a `financial`, `destructive` or `privile
     `blocked` OR, the lower session cap, `approval_required` OR, the code's `approval_mode` when it
     declares one, the lower timeout, the stricter `risk_class` (it can only raise the tool's
     class), `fail_mode` `closed`. A malformed row is skipped.
-    Asserted by: `tests/test_policy_rows.py::test_a_row_can_only_add_never_loosen_what_the_code_requires`, `tests/test_policy_rows.py::test_a_dashboard_row_blocks_a_tool_the_code_allows`, `tests/test_policy_rows.py::test_a_row_session_cap_and_the_codes_cap_the_lower_wins`, `tests/test_policy_rows.py::test_code_wins_on_approval_mode_and_the_timeout_is_the_lower`, `tests/test_policy_rows.py::test_a_rows_risk_class_raises_the_tools_class_and_never_lowers_it`, `tests/test_policy_rows.py::test_fail_mode_closed_wins_and_malformed_rows_are_skipped`
+    Asserted by: `tests/test_policy_rows.py::test_a_row_can_only_add_never_loosen_what_the_code_requires`, `tests/test_policy_rows.py::test_a_dashboard_row_blocks_a_tool_the_code_allows`, `tests/test_policy_rows.py::test_a_row_session_cap_and_the_codes_cap_the_lower_wins`, `tests/test_policy_rows.py::test_code_wins_on_approval_mode_and_the_timeout_is_the_lower`, `tests/test_policy_rows.py::test_a_rows_risk_class_raises_the_tools_class_and_never_lowers_it`, `tests/test_policy_rows.py::test_fail_mode_closed_wins_and_malformed_rows_refuse_their_tool`
 
 18. **Dry run refuses nothing.** A `dry_run` row or a `dry_run` policy records what it would have
     refused (`would_refuse`) and lets the call run; a dry-run approval row asks nobody.
@@ -169,9 +169,13 @@ Terms: a **consequential** tool carries a `financial`, `destructive` or `privile
 
 ## Plane loss and the policy cache
 
-32. **The plane-loss gate never refuses a `read`, `write` or `external` tool**, in any link
-    state, on a cache of any age. (A quota or an approval on that tool still needs the plane: 23, 25.)
-    Asserted by: `tests/test_cache.py::test_read_write_external_run_on_the_cache_in_every_state`, `tests/test_cache.py::test_through_the_decorator_a_consequential_tool_refuses_and_a_read_tool_runs`, `tests/test_session_sync.py::test_a_plane_that_is_down_never_stops_a_tool`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs`
+32. **Once a worker has had a first handshake or loaded a sealed cache, the plane-loss gate never refuses a `read` or
+    `external` tool** (nor `write` with another tag), in any link state, on a cache of any age; a bare `write` (no
+    other tag) counts as unclassified and refuses `plane_unavailable` only when the worker holds no policy within
+    24 h. (A quota or an approval on that tool still needs the plane: 23, 25.) Before that first handshake or cache
+    load no governed call runs: `read`, `write` and `external` refuse `policy_unavailable`, the other classes
+    `plane_unavailable`.
+    Asserted by: `tests/test_cache.py::test_read_write_external_run_on_the_cache_in_every_state`, `tests/test_cache.py::test_a_bare_write_is_unclassified_for_fail_mode_so_it_refuses_when_the_policy_is_unavailable`, `tests/contract/test_enforcement_floor.py::test_o_flr_4_no_governed_call_runs_before_the_first_handshake_or_sealed_cache_load`, `tests/test_cache.py::test_through_the_decorator_a_consequential_tool_refuses_and_a_read_tool_runs`, `tests/test_session_sync.py::test_a_plane_that_is_down_never_stops_a_tool`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs`
 
 33. **Consequential and unclassified tools refuse `plane_unavailable`** once
     `consequential_grace_s` (15 to 60, default 60) has passed since the last answered hello (or
@@ -190,16 +194,17 @@ Terms: a **consequential** tool carries a `financial`, `destructive` or `privile
     atomically (no torn reads), never lets an older `policy_version` overwrite a newer one, sits in
     a `0700` directory as a `0600` file, never under `XDG_RUNTIME_DIR`, and holds no token. Rules
     declared in code never come from it.
-    Asserted by: `tests/test_cache.py::test_a_new_worker_enforces_the_cached_policy_before_any_hello`, `tests/test_cache.py::test_four_writers_and_four_readers_give_no_torn_reads`, `tests/test_cache.py::test_an_older_version_never_overwrites_a_newer_one`, `tests/test_cache.py::test_the_layout_and_permissions`, `tests/test_cache.py::test_xdg_runtime_dir_is_never_used`, `tests/test_cache.py::test_round_trip_and_no_token_on_disk`, `tests/test_cache.py::test_code_declared_rules_are_never_in_the_cache`, `tests/integration/test_plane_loss_real.py::test_a_restart_enforces_the_cached_org_policy_before_the_first_hello`
+    Asserted by: `tests/test_cache.py::test_a_new_worker_enforces_the_cached_policy_before_any_hello`, `tests/test_cache.py::test_four_writers_and_four_readers_give_no_torn_reads`, `tests/test_cache.py::test_an_older_version_never_overwrites_a_newer_one`, `tests/test_cache.py::test_the_layout_and_permissions`, `tests/test_cache.py::test_xdg_runtime_dir_is_never_used`, `tests/test_cache.py::test_round_trip_and_no_token_on_disk`, `tests/test_cache.py::test_code_declared_rules_are_never_in_the_cache`, `tests/integration/test_plane_loss_real.py::test_a_restart_enforces_the_cached_rows_before_the_first_hello`
 
 37. **The cache file is MAC'd with a key derived from the token:** a hand-edited, truncated,
     other-token or other-service file is ignored as if absent. This is tamper-evidence, not a
     boundary against anyone who can read the token.
     Asserted by: `tests/test_cache.py::test_a_hand_edited_cache_is_rejected`, `tests/test_cache.py::test_another_tokens_cache_another_service_garbage_and_truncation_are_rejected`, `tests/test_cache.py::test_a_cache_with_a_different_token_is_not_loaded`
 
-38. **A fleet halt under `on_halt="raise"` refuses every tool of every class**; it lapses 60 s
-    after contact with the plane went quiet; a `narrow` halt is a full halt; `on_halt="warn"` only logs.
-    Asserted by: `tests/test_session_sync.py::test_a_fleet_halt_refuses_even_a_read_tool_under_stop`, `tests/test_plane_loss.py::test_a_stale_halt_is_released_after_the_window`, `tests/test_wall_sdk.py::test_a_narrow_halt_is_a_full_halt`, `tests/test_wall_sdk.py::test_on_halt_warn_logs_and_lets_the_tool_run`
+38. **A fleet halt refuses every tool of every class**, whatever `on_halt` says; it holds until the
+    plane lifts it (silence never releases it) and survives a restart while the plane is down; a `narrow`
+    halt is a full halt; `on_halt="warn"` changes nothing.
+    Asserted by: `tests/test_session_sync.py::test_a_fleet_halt_refuses_even_a_read_tool_under_stop`, `tests/test_plane_loss.py::test_a_halt_is_never_released_by_silence`, `tests/test_wall_sdk.py::test_a_narrow_halt_is_a_full_halt`, `tests/test_wall_sdk.py::test_on_halt_warn_logs_and_still_refuses_the_tool`
 
 ## What leaves the process
 

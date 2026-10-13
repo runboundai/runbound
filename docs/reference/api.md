@@ -87,6 +87,6 @@ See [Handling refusals](../guides/handling-refusals.md).
 
 | Name | What it is |
 |---|---|
-| `runbound.__version__` | `1.0.0a2`. |
+| `runbound.__version__` | `1.0.0a3`. |
 
 ---

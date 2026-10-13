@@ -1,0 +1,47 @@
+[
+ {
+  "id": "O-APR-W1",
+  "note": "wait is the shortest named",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [],
+    "wait_s": 900
+   },
+   {
+    "source": "b",
+    "eligible": [],
+    "wait_s": 300
+   },
+   {
+    "source": "c",
+    "eligible": [],
+    "wait_s": null
+   }
+  ],
+  "expect_wait": 300
+ },
+ {
+  "id": "O-APR-W2",
+  "note": "none named: the default (null)",
+  "reqs": [
+   {
+    "source": "a",
+    "eligible": [],
+    "wait_s": null
+   },
+   {
+    "source": "b",
+    "eligible": [],
+    "wait_s": null
+   }
+  ],
+  "expect_wait": null
+ },
+ {
+  "id": "O-APR-W3",
+  "note": "no requirements: null",
+  "reqs": [],
+  "expect_wait": null
+ }
+]

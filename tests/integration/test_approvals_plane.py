@@ -286,6 +286,49 @@ def test_a_restart_between_request_and_approval_a_sealed_request_runs_on_another
     assert ran == [11] and results[0]["outcome"] == "executed" and results[0]["request_id"] == out["request_id"]
 
 
+def test_a_sealed_request_run_by_another_worker_keeps_the_original_run_in_its_span(plane):  # noqa: F811
+    from runbound import otel_names as names, spans
+    from test_spans import Collector, attrs_of
+
+    collector = Collector()
+    try:
+        start(plane, "deferred-run", approval_secret=SECRET, worker_id="before", otel_endpoint=collector.url)
+
+        @runbound.tool(effects={"write"}, approval="required", mode="deferred")
+        def archive(ticket: int):
+            return ticket
+
+        with runbound.session("run-before") as state:
+            out = archive(12)
+            run_id = state.session_id
+        (waiting,) = _until(lambda: pending(plane, "deferred-run"), what="the pending request")
+        api._teardown_for_tests()  # the requesting worker is gone
+
+        results = start(plane, "deferred-run", approval_secret=SECRET, worker_id="after", otel_endpoint=collector.url)
+
+        @runbound.tool(effects={"write"}, approval="required", mode="deferred")  # noqa: F811
+        def archive(ticket: int):  # noqa: F811
+            return ticket
+
+        decide(plane, waiting["id"], "approve")
+        _until(lambda: results, what="the other worker's execution")
+        spans.exporter().flush(5.0)
+        resumed = [attrs_of(sp) for sp in collector.spans()
+                   if attrs_of(sp).get(names.APPROVAL_REQUEST_ID) == out["request_id"]
+                   and attrs_of(sp).get(names.OUTCOME) != "pending_approval"]
+        assert [a[names.RUN_ID] for a in resumed] == [run_id]  # the filing run, not the second worker's default
+        assert [a[names.APPROVAL_REQUEST_ID] for a in resumed] == [out["request_id"]]
+        # the console deep link /traces?approval_id=<request id> must find the filing span AND the resumed one: same key, same value
+        filed = [attrs_of(sp) for sp in collector.spans() if attrs_of(sp).get(names.OUTCOME) == "pending_approval"]
+        assert [a[names.APPROVAL_REQUEST_ID] for a in filed] == [out["request_id"]]
+        together = [attrs_of(sp) for sp in collector.spans()
+                    if attrs_of(sp).get(names.APPROVAL_REQUEST_ID) == out["request_id"]]
+        assert len(together) == 2 and {a[names.OUTCOME] for a in together} == {"pending_approval", "ok"}
+        assert {a[names.RUN_ID] for a in together} == {run_id}  # one run, so one trace
+    finally:
+        collector.close()
+
+
 def test_a_restart_with_no_seal_an_unsealed_request_is_never_run_elsewhere(plane):  # noqa: F811
     start(plane, "deferred-unsealed", worker_id="before")
 

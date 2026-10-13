@@ -14,12 +14,13 @@ REASONS = (
     "policy", "approval", "capability", "blast_radius", "halt", "plane",
     "invalid_arguments", "hook_refused", "hook_error",
     "approval_denied", "approval_timeout", "approval_tampered", "approval_unavailable", "quota_exceeded", "plane_unavailable",
-    "tool_blocked", "session_max_calls", "quota_plane_unavailable",
+    "tool_blocked", "session_max_calls", "quota_plane_unavailable", "policy_unsupported",
+    "policy_unavailable", "policy_expired_restricted", "policy_halted", "condition_unevaluable", "repetition_exceeded",
 )
 
 #: ``exc.reason`` values a bare retry can safely repeat: the dependency said
 #: "not right now", not "this is against the rules".
-_RETRYABLE_REASONS = frozenset({"plane", "plane_unavailable", "quota_exceeded", "quota_plane_unavailable"})
+_RETRYABLE_REASONS = frozenset({"plane", "plane_unavailable", "policy_unavailable", "approval_unavailable", "quota_exceeded", "quota_plane_unavailable"})
 
 #: A Decision's ``boundary`` is the most direct signal of which reason applies.
 _BOUNDARY_REASON = {
@@ -70,7 +71,8 @@ def _infer_reason(
             return _VIOLATION_RULE_REASON[rule]
     boundary = getattr(decision, "boundary", None) if decision is not None else None
     if boundary == "plane":
-        return "plane_unavailable" if (getattr(decision, "evaluation", None) or {}).get("code") == "plane_unavailable" else "plane"
+        code = (getattr(decision, "evaluation", None) or {}).get("code")
+        return code if code in ("plane_unavailable", "policy_unavailable", "policy_expired_restricted", "policy_halted") else "plane"
     if boundary in ("approval", "row"):  # the Decision names which way it ended
         code = (getattr(decision, "evaluation", None) or {}).get("code")
         return code if code in REASONS else "approval_unavailable"

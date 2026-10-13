@@ -202,11 +202,17 @@ def write(path: Path | None, token: str | None, body: dict) -> bool:
 
 
 def body_for(service: str, policy_version: int, policy: dict | None, dry_run: bool,
-             rows_hash: str | None = None, rows: Any = None, served_at: float | None = None) -> dict:
-    """The cache body for what the plane just served (``rows`` arrive with T1a)."""
+             rows_hash: str | None = None, rows: Any = None, served_at: float | None = None,
+             halt: str | None = None, halted_tools: dict | None = None, service_defaults: dict | None = None) -> dict:
+    """The cache body for what the plane just served (``rows`` arrive with T1a).
+
+    ``halt`` is the mode of a fleet halt the plane has served and not lifted (``"stop"`` or ``"narrow"``), else ``None``: a halt holds
+    until the plane lifts it, so a worker restarted while the plane is down must still start halted.
+    """
     now = time.time()
     return {
         "v": VERSION, "service": service, "policy_version": policy_version, "policy": policy,
-        "policy_dry_run": bool(dry_run), "rows_hash": rows_hash, "rows": rows,
+        "policy_dry_run": bool(dry_run), "rows_hash": rows_hash, "rows": rows, "halt": halt,
+        "halted_tools": halted_tools or {}, "service_defaults": service_defaults,
         "served_at": served_at if served_at is not None else now, "written_at": now,
     }

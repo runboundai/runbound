@@ -111,6 +111,7 @@ def halted_worker():
     runbound.init()
     clock = Clock()
     state = remote(clock)
+    state.apply_hello(HelloReply())  # a first handshake: the floor (F3) runs no governed call before one
     api._ENGINE.shared = state
     yield state, clock
     api._teardown_for_tests()
@@ -164,17 +165,16 @@ def test_the_tool_runs_again_once_the_plane_lifts_the_halt(halted_worker):
     assert ran == ["look"]
 
 
-def test_a_halt_the_plane_went_quiet_about_stops_being_enforced(halted_worker):
-    from runbound.shared import STALE_HALT_S
-
+def test_a_halt_the_plane_went_quiet_about_is_still_enforced(halted_worker):
     state, clock = halted_worker
     look, _, _, _ = make_tools()
     halt(state)
-    clock.advance(STALE_HALT_S + 1)
-    assert look() == "ok"
+    clock.advance(24 * 3600)
+    with pytest.raises(ExecutionRefused):
+        look()
 
 
-def test_on_halt_warn_logs_and_lets_the_tool_run(caplog):
+def test_on_halt_warn_logs_and_still_refuses_the_tool(caplog):
     api._teardown_for_tests()
     try:
         runbound.init(on_halt="warn")
@@ -183,11 +183,12 @@ def test_on_halt_warn_logs_and_lets_the_tool_run(caplog):
         look, _, pay, ran = make_tools()
         halt(state)
         with caplog.at_level(logging.WARNING, logger="runbound"):
-            assert look() == "ok"
-            assert pay() == "ok"
-        assert ran == ["look", "pay"]
+            for tool in (look, pay):
+                with pytest.raises(ExecutionRefused):
+                    tool()
+        assert ran == []
         warnings = [r for r in caplog.records if "Fleet halted" in r.getMessage()]
-        assert len(warnings) == 1  # once a minute, not once a call
+        assert len(warnings) == 2  # one per refused call: a refusal is always logged
     finally:
         api._teardown_for_tests()
 

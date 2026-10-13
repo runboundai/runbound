@@ -25,7 +25,7 @@ Every refusal carries:
 | Attribute | What it is |
 |---|---|
 | `reason` | a stable code from the closed set below. Switch on this, not on the message. |
-| `retryable` | `True` only when repeating the same call unchanged could succeed (`plane`, `plane_unavailable`, `quota_exceeded`, `quota_plane_unavailable`). |
+| `retryable` | `True` only when repeating the same call unchanged could succeed (`plane`, `plane_unavailable`, `approval_unavailable`, `quota_exceeded`, `quota_plane_unavailable`). |
 | `retry_after` | seconds until a retry could succeed when that is known (a quota's window), else `None`. |
 | `boundary` | the Decision's dimension: `policy`, `row`, `capability`, `blast_radius`, `halt`, `plane`, `arguments`, `hook`, `hook_error` or `approval`. |
 | `decision` | the full `Decision` (`verdict`, `kind`, `boundary`, `level`, `reason`, `detector`, `evaluation`). |
@@ -51,15 +51,19 @@ anything else.
 | `approval` | `PolicyViolation` | a `require_approval` callback returned `False` or raised, or no callback exists for the tool. | no |
 | `capability` | `CapabilityRefused` | a class rule denies (or says `approve` for) one of the tool's classes, or the tool is unclassified while some class is narrowed. | no |
 | `blast_radius` | `ExecutionRefused` | `max_actions_per_run` executed calls already ran in this session. | no |
-| `halt` | `ExecutionRefused` | the plane halted the service and `on_halt="raise"`. A halt lapses 60 s after the plane stops confirming it. | no |
+| `halt` | `ExecutionRefused` | the plane halted the service (whatever `on_halt` says). A halt holds until the plane lifts it. | no |
 | `invalid_arguments` | `ExecutionRefused` | the arguments do not fit the signature or type hints. Nothing is coerced. | no |
 | `hook_refused` | `ExecutionRefused` | one of your `pre_hooks` or `gate_hooks` returned `hooks.refuse(...)` or `False`. | no |
 | `hook_error` | `ExecutionRefused` | one of your hooks raised or outlived `hook_timeout_s` on a `financial`, `destructive`, `privileged` or unclassified tool; or a built-in check (validation, policy, class rules) raised. | no |
 | `tool_blocked` | `PolicyViolation` for a code rule, `ExecutionRefused` for a row | the tool is blocked: `blocked=True`, a `deny` entry (or an org policy's), or a console row. | no |
 | `session_max_calls` | `ExecutionRefused` | a console row's per-session cap is reached. | no |
 | `quota_exceeded` | `ExecutionRefused` | a row's quota is used up for this window, or the plane answered an approval request with 429. `retry_after` is set. | yes |
-| `quota_plane_unavailable` | `ExecutionRefused` | a quota cannot be checked (the link is not `connected`, or the take failed) and the row's `fail_mode` is `closed`. | yes |
-| `plane_unavailable` | `ExecutionRefused` | the plane is gone and the tool is `financial`, `destructive`, `privileged` or unclassified. See [Plane loss](plane-loss.md). | yes |
+| `quota_plane_unavailable` | `ExecutionRefused` | a quota cannot be checked (the link is not `connected`, the take failed, or the plane answered it with 400 or 404) and the row's `fail_mode` is `closed`. | yes |
+| `plane_unavailable` | `ExecutionRefused` | the plane is gone, or it announced a policy this worker has not received, and the tool is `financial`, `destructive`, `privileged` or unclassified. See [Plane loss](plane-loss.md). | yes |
+| `policy_unavailable` | `ExecutionRefused` | the worker has not yet had a first answered hello or loaded a sealed policy cache, so no tool of any class runs yet (read, write, external; the other classes get `plane_unavailable`). See [Plane loss](plane-loss.md). | yes |
+| `policy_expired_restricted` | `ExecutionRefused` | the plane is unreachable, the policy this worker holds is more than 24 hours old, and that policy blocked this tool or needed a person's approval for it. Fail mode does not let such a tool through. | no |
+| `policy_halted` | `ExecutionRefused` | the plane halted this one tool because this worker cannot enforce a restriction the plane holds for it and has no stricter fallback (`halted_tools` in the hello reply). Other tools run; it holds until the plane lifts it. | no |
+| `policy_unsupported` | `ExecutionRefused` | the console has a rule for this tool that this SDK cannot interpret safely: it carries a field this SDK does not know, or a value the console itself would not accept. Only this tool is refused, until the rule is changed or the SDK is upgraded. | no |
 | `approval_denied` | `ExecutionRefused` | a person denied the request. | no |
 | `approval_timeout` | `ExecutionRefused` | nobody decided within `timeout_s`, the request expired, or the plane could not be reached to file it before the deadline. | no |
 | `approval_unavailable` | `ExecutionRefused` | a new approval cannot be asked: no plane, the link is not `connected`, the arguments are not JSON, or the plane refused or stopped answering the request. | no |

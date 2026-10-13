@@ -268,14 +268,16 @@ def test_a_halted_fleet_refuses_every_tool_under_raise():
     assert excinfo.value.scope["level"] == "fleet"
 
 
-def test_a_halted_fleet_only_warns_under_warn(caplog):
+def test_a_halted_fleet_refuses_under_warn_too(caplog):
     caplog.set_level(logging.WARNING, logger="runbound")
     engine = Engine(RunboundConfig(on_halt="warn"), shared=HaltedShared())
 
-    engine.admit_call(session(), ToolCall("search", (), {}, None, {}))
-    engine.admit_call(session(), ToolCall("search", (), {}, None, {}))
+    for _ in range(2):
+        with pytest.raises(GuardrailTripped) as excinfo:
+            engine.admit_call(session(), ToolCall("search", (), {}, None, {}))
+        assert excinfo.value.reason == "halt"
 
-    assert caplog.text.count("Fleet halted") == 1  # at most once a minute
+    assert caplog.text.count("Fleet halted") == 2  # each refusal is logged, as under "raise"
 
 
 # --- construction -----------------------------------------------------------

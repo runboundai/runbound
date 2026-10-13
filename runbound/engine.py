@@ -6,6 +6,7 @@ tell the observers, raise. Observers hear *after* the fact (``on_event``, ``on_a
 and can never change it; one that raises is logged and skipped.
 """
 
+import contextvars
 import dataclasses
 import logging
 import threading
@@ -15,7 +16,7 @@ from typing import Any
 
 from . import _coverage, admission, approvals as approvals_module, gates as gates_module, hooks as hooks_module, local_events
 from . import policy_rows as rows_module, quota as quota_module
-from .capabilities import class_rules
+from .capabilities import _RANK as _CAPABILITY_RANK, class_rules
 from .config import RunboundConfig
 from .events import Anomaly, Decision, Event
 from .exceptions import CapabilityRefused, GuardrailTripped, PolicyViolation
@@ -46,8 +47,7 @@ HALT_DETECTOR = "halt"
 #: An error string kept on an event is truncated to this many characters.
 ERROR_MAX_CHARS = 500
 
-#: How long between the "fleet halted" warnings under ``on_halt="warn"``.
-_HALT_WARN_INTERVAL_S = 60.0
+
 
 
 
@@ -99,12 +99,23 @@ class Engine:
         """
         session.enter_chain(call.name)
         cleared = False
+        _REPEATS.set([])
+        _KEYS.set([])
         try:
             final = self._run_chain(session, call, **chain)
             cleared = True
             return final
         finally:
             session.leave_chain(call.name, cleared)
+            held = _REPEATS.get() or []
+            if not cleared:  # a refused or deferred call gives its repetition count back
+                for tool, digest in held:
+                    session.release_repeat(tool, digest)
+            for tool, key in _KEYS.get() or []:
+                session.leave_key(tool, key, cleared)
+            _KEYS.set(None)
+            _REPEATS.set(None)
+            _RECORD.set(None)
 
     def _run_chain(
         self,
@@ -127,8 +138,15 @@ class Engine:
         rewrite hooks, validation of the final arguments, policy rules, capability
         class and action cap, the approval rule, and last the user gate hooks.
         """
-        gates_module.halt(self, session, call.name)
         row = getattr(self.shared, "row_for", lambda _tool: None)(call.name)  # the dashboard's rule for this tool
+        declared = effects  # the code's own effects: what the service defaults are resolved from
+        row = rows_module.apply_defaults(row, call.name, effects, self.shared)  # the service defaults are the fallback of a tool no line decides
+        record = self._record(call, row, approval)
+        _RECORD.set(record)  # every refusal and the span of this call carry it (TPD §12 item 6)
+        if info is not None:
+            info["record"] = record
+        gates_module.halt(self, session, call.name)
+        unclassified = not effects  # the code declared nothing: a row's class may raise it, never relax how it is judged
         effects = rows_module.effective_effects(row, effects)  # a row's risk_class can only raise the tool's
         gates_module.plane(self, session, call, effects)
         timeout = self.config.hook_timeout_s
@@ -140,8 +158,19 @@ class Engine:
         except hooks_module.StageRefused as refused:
             self._refuse_stage(session, call, refused)
         self.enforce_policy(session, call, stage="rules")
+        row = rows_module.resolve_call(row, approvals_module.bound_arguments(call.name, call.args, call.kwargs), self._rule_context())
+        if row is not None and row.conditional and row.inherit:
+            row = rows_module.apply_defaults(row, call.name, declared, self.shared)  # no line matched: the service defaults decide
+        if row is not None and (row.conditional or row.candidate is not None):
+            record.update(self._record(call, row, approval))  # the lines that matched on THIS call's arguments
+        if row is not None and row.conditional and not row.unsupported:
+            key = ",".join(row.matched)  # a conditional line's cap counts the calls that matched the same lines
+            session.hold_key(call.name, key)
+            held_keys = _KEYS.get()
+            if held_keys is not None:
+                held_keys.append((call.name, key))
         rows_module.enforce(self, session, call, row, tags)  # blocked, then the session cap
-        self.admit_action(session, call.name, effects, decorated)
+        self.admit_action(session, call.name, effects, decorated, unclassified=unclassified)
         names, json_ok = approvals_module.tool_meta(call.name)
         approval = rows_module.approval_spec(row, approval, names, json_ok, approvals_module.ApprovalSpec)
         asks = approval is not None and approvals_module.current_request() is None
@@ -150,12 +179,70 @@ class Engine:
         self.enforce_policy(session, call, stage="approval")
         try:
             if approval is not None:
-                approvals_module.admit(self, session, call, approval, {} if info is None else info)
+                held = {} if info is None else info
+                approvals_module.admit(self, session, call, approval, held)
+                if held.get("granted"):  # a grant admitted it and the plane took no quota unit: take our own, as for a call nobody is asked about
+                    quota_module.admit(self, session, call, row, False, tags)
             if gate_hooks:
                 hooks_module.run_hooks(gate_hooks, call, effects, kind="gate", timeout=timeout, tags=tags)
         except hooks_module.StageRefused as refused:
             self._refuse_stage(session, call, refused)
         return call
+
+    def _record(self, call: ToolCall, row: Any, approval: Any) -> dict:
+        """The decision record of one call (TPD §4c.6, §12 item 6): why, under which policy, in which state. Never raises."""
+        from . import __version__
+
+        try:
+            state = getattr(self.shared, "policy_state", None)
+            policy_state = state() if callable(state) else None
+            version = int(getattr(self.shared, "policy_version", 0) or 0) or None
+            usable = row is not None and not row.unsupported
+            matched = list(row.matched) if usable else []
+            contributors = []
+            policy = self._policy()
+            if policy is not None and call.name in policy.deny:
+                contributors.append("code:blocked")
+            if approval is not None or (policy is not None and call.name in policy.require_approval):
+                contributors.append("code:approval")
+            contributors.extend(row.contributors if usable else ())
+            if not contributors:
+                contributors.append("default:service")
+            return {
+                "policy_state": policy_state, "policy_version": version, "matched_rule_ids": matched,
+                "service_default_revision": self._default_revision(), "contributors": contributors, "sdk_version": __version__,
+            }
+        except Exception:
+            _LOG.debug("runbound could not build a decision record", exc_info=True)
+            return {}
+
+    def _default_revision(self) -> "int | None":
+        """The revision of the enforced service defaults this worker holds, for the decision record; ``None`` without any."""
+        held = getattr(self.shared, "defaults", lambda: None)()
+        return held.revision if held is not None and held.state == "enforced" else None
+
+    def _rule_context(self) -> dict:
+        """The trusted context a console rule's ``ctx`` conditions read: the service, and the environment and version the deployment states."""
+        import os
+
+        context = {"service": getattr(self.config, "service", None), "environment": os.environ.get("RUNBOUND_ENVIRONMENT"),
+                   "version": os.environ.get("RUNBOUND_SERVICE_VERSION")}
+        return {key: value for key, value in context.items() if isinstance(value, str) and value}
+
+    def call_digest(self, call: ToolCall) -> str:
+        """The call's argument digest (the span's ``args_digest``): an equality token for the same tool with the same arguments in this process."""
+        from . import api as api_module
+
+        return api_module._args_hash(call.name, call.args, call.kwargs) or ""
+
+    def hold_repeat(self, session: SessionState, call: ToolCall, digest: str, limit: int) -> bool:
+        """Count this call against a repetition control; ``False`` when the session already made ``limit`` of them. Released if the call is later refused."""
+        if not session.reserve_repeat(call.name, digest, limit):
+            return False
+        held = _REPEATS.get()
+        if held is not None:
+            held.append((call.name, digest))
+        return True
 
     def _refuse_stage(self, session: SessionState, call: ToolCall, refused: "hooks_module.StageRefused") -> None:
         """Turn a refusal of a hook, validator, approval or failed built-in into the exception raised."""
@@ -179,12 +266,17 @@ class Engine:
         tool: str,
         effects: "frozenset | None" = None,
         decorated: bool = False,
+        unclassified: bool = False,
     ) -> None:
-        """The capability class rule (decorated tools only) and the action cap."""
+        """The capability class rule (decorated tools only) and the action cap.
+
+        ``unclassified``: the code declared no effects, so ``effects`` may be only what a row added; the tool is judged
+        as the stricter of "unclassified" and those classes (register C15).
+        """
         effects = effects or frozenset()
         if decorated:
             try:
-                judgment = self.judge_action(effects)
+                judgment = self.judge_action(effects, unclassified)
             except Exception:
                 _LOG.warning("runbound could not read the capability rules for %r", tool, exc_info=True)
                 failed = hooks_module.StageRefused("hook_error", "capability check failed", "capability")
@@ -194,12 +286,21 @@ class Engine:
                 self.refuse_by_capability(session, tool, effects, judgment)
         self._admit_actions(session)
 
-    def judge_action(self, effects: frozenset) -> dict:
-        """The ``init(capabilities=...)`` verdict for a tool carrying ``effects``."""
+    def judge_action(self, effects: frozenset, unclassified: bool = False) -> dict:
+        """The ``init(capabilities=...)`` verdict for a tool carrying ``effects``.
+
+        A tool the code left unclassified is refused whenever anything is narrowed; a row that names a class for it must
+        not hand it a more lenient verdict, so it is judged as the stricter of "unclassified" and the row's class.
+        """
         rules = class_rules(self.config.capabilities)
+        verdict, denied = rules.allows(effects), rules.denied_class(effects)
+        if unclassified and effects:
+            base = rules.allows(frozenset())
+            if _CAPABILITY_RANK[base] > _CAPABILITY_RANK[verdict]:
+                verdict, denied = base, rules.denied_class(frozenset())
         return {
-            "verdict": rules.allows(effects),
-            "denied_class": rules.denied_class(effects),
+            "verdict": verdict,
+            "denied_class": denied,
             "source": "class_rule",
             "reason": "a capability class rule on init()",
             "level": "process",
@@ -550,9 +651,31 @@ def _stamp_decision(
     key = getattr(session, "key", None) if session is not None else None
     key_hash = _key_hash_fn(key) if key else None
     details = anomaly.details if isinstance(anomaly.details, dict) else {}
+    record = _RECORD.get()
+    if record:  # the decision record rides the Decision's evaluation and the anomaly (WIRE-TR2 §7, §10f)
+        record = {**record, "reason_code": _reason_code(anomaly, decision)}
+        decision = dataclasses.replace(decision, evaluation={**decision.evaluation, **record})
+        details = {**details, **record}
     return dataclasses.replace(
         anomaly, details={**details, "decision": decision.as_dict(), "key_hash": key_hash}
     )
+
+
+#: The record of the call being admitted (set per call in the engine; read by ``_stamp_decision``).
+_RECORD: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("runbound_record", default=None)
+#: The repetition counts the call being admitted holds, given back if it does not clear the chain.
+_KEYS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("runbound_keys", default=None)
+_REPEATS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("runbound_repeats", default=None)
+
+
+def _reason_code(anomaly: Anomaly, decision: Decision) -> str:
+    """The refusal's primary reason code: one of the SDK's existing ``REASONS``, verbatim (WIRE-TR2 §7)."""
+    from .exceptions import _VIOLATION_RULE_REASON, _infer_reason
+
+    evaluation = decision.evaluation if isinstance(decision.evaluation, dict) else {}
+    if decision.boundary == "policy" and evaluation.get("rule") in _VIOLATION_RULE_REASON:
+        return _VIOLATION_RULE_REASON[evaluation["rule"]]
+    return _infer_reason(anomaly, decision, None)
 
 
 def _is_dry_run(violation: Violation) -> bool:

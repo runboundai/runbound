@@ -31,7 +31,7 @@ import pytest
 
 from runbound.plane import PlaneClient, Poller
 from runbound.plane_types import HelloReply, to_wire
-from runbound.shared import STALE_HALT_S, RemoteState
+from runbound.shared import RemoteState
 
 POLL_S = 0.02
 WAIT_TIMEOUT_S = 5.0
@@ -194,7 +194,7 @@ def test_a_halt_survives_fleet_state_unavailable_inside_the_window(fake_plane):
 
 
 
-def test_a_halt_lifts_after_the_stale_window_while_state_is_unavailable(fake_plane):
+def test_a_halt_holds_through_any_stretch_of_unavailable_state(fake_plane):
     clock = _MovableClock()
     fake_plane.set_hello(HelloReply(halt=True, halt_mode="stop"))
     remote = start_remote(fake_plane, clock)
@@ -209,11 +209,11 @@ def test_a_halt_lifts_after_the_stale_window_while_state_is_unavailable(fake_pla
         # state became unavailable, not from the last successful hello --
         # and the poller keeps calling successfully throughout, so if the
         # (wrong) old clock were still in use this would never go stale.
-        clock.advance(STALE_HALT_S - 1)
+        clock.advance(59)
         assert remote.halted() is True
 
-        clock.advance(2.0)
-        assert remote.halted() is False
+        clock.advance(24 * 3600)  # F1: a halt holds until the plane lifts it, however long the state stays unavailable
+        assert remote.halted() is True
     finally:
         remote.stop()
 
@@ -227,13 +227,13 @@ def test_the_halt_reapplies_once_the_plane_recovers_and_says_so(fake_plane):
 
         fake_plane.set_hello(HelloReply(fleet_state="unavailable"))
         wait_until(lambda: remote.status().reason == "fleet state unavailable")
-        clock.advance(STALE_HALT_S + 1)
-        assert remote.halted() is False
+        clock.advance(24 * 3600)
+        assert remote.halted() is True
 
         fake_plane.set_hello(HelloReply(halt=True, halt_mode="stop"))
-        wait_until(lambda: remote.halted() is True)
+        wait_until(lambda: remote.status().mode == "connected")
 
-        assert remote.status().mode == "connected"
+        assert remote.halted() is True
         assert remote.status().reason is None
     finally:
         remote.stop()

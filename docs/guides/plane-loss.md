@@ -31,18 +31,20 @@ link to `connected`.
 
 | Tool classes | While the plane is away |
 |---|---|
-| `read`, `write`, `external` | run in every mode, on the cache of any age (or on the code rules alone when there is no cache). |
-| `financial`, `destructive`, `privileged`, or no class at all | run until `consequential_grace_s` has passed since the last answered hello (or since `init()`), then refuse with `reason="plane_unavailable"`. Before the first hello is answered they also need a cache confirmed within the last 15 minutes; with none they refuse at once. |
+| `read`, `write` (with another tag), `external` | run in every mode, on the cache of any age, once the worker has had a first answered hello or loaded a sealed cache. Before that, nothing runs: they refuse `policy_unavailable` (retryable). |
+| a bare `write` (no other tag) | unclassified for fail mode: runs on a valid cache, refuses `plane_unavailable` once the worker holds no policy within 24 hours. |
+| `financial`, `destructive`, `privileged`, or no class at all | run until `consequential_grace_s` has passed since the last answered hello (or since `init()`), then refuse with `reason="plane_unavailable"`. Before the first hello is answered they also need a cache confirmed within the last 15 minutes; with none they refuse at once. The same holds for a worker whose hellos are answered but that has not been served the policy the plane announced (every policy fetch failed) and holds no cache: they refuse until the first policy arrives. A plane that announces no policy for the service gates nothing. |
 
 `consequential_grace_s` is an `init()` option from 15 to 60 seconds, default 60,
 so with the default these tools stop exactly when the mode becomes
 `unavailable`. A shorter grace stops them earlier, while the mode may still read
-`connected` or `degraded`. It cannot be longer than 60 s because a halt from the
-plane is only honoured for 60 s after the plane last confirmed it.
+`connected` or `degraded`.
 
 A tool's classes here include a console row's `risk_class` (see
 [Per-tool policy](policy.md#console-rows)), so a row can make a `read` tool
-`financial` for this purpose. A `plane_unavailable` refusal is
+`financial` for this purpose. A row never goes the other way: on a tool that
+declares no class, a `read`, `write` or `external` row leaves it unclassified,
+so it still refuses here. A `plane_unavailable` refusal is
 `retryable`, at the `fleet` level, and the body has not run.
 
 In `degraded` everything above still runs. Only two things depend on a live
@@ -50,7 +52,8 @@ link, in any mode other than `connected`:
 
 - **Quotas past the lease.** Units already leased keep being spent. Past them,
   every class is refused with `quota_plane_unavailable` while the row's
-  `fail_mode` is `closed` (the default); `open` admits `limit // 10` calls (at
+  `fail_mode` is `closed` (the default), and a take the plane answers with 400 or
+  404 counts the same way; `open` admits `limit // 10` calls (at
   least 1) per `control_plane_poll_s` seconds.
 - **New approvals.** A new request is refused with `approval_unavailable` ("the
   control plane link is degraded"). A sync approval that is already waiting
@@ -58,9 +61,9 @@ link, in any mode other than `connected`:
   requests only arrive with a hello, and an outcome report that cannot be
   delivered is queued on disk (below) and sent on the next connected hello.
 
-A halt the plane stated stops being enforced 60 s after the last answered
-hello. While the plane reports `fleet_state: "unavailable"` the halt is held as
-it was and the 60 s count from when that started.
+A halt the plane stated holds until the plane lifts it: the plane going quiet,
+reporting `fleet_state: "unavailable"`, or a restart of the worker while the plane is down does not release it
+(the halt is kept in the policy cache).
 
 ## The policy cache
 
@@ -89,7 +92,8 @@ the directory.
 When it is written: every time the plane serves a new policy, and on a hello
 that confirms the same policy, at most once a minute. So `written_at` means
 "last confirmed by the plane". A worker that has never been served a policy
-writes nothing.
+writes nothing, and neither does an answer in which the plane says it could not
+read its rows: the worker keeps what it holds and asks again.
 
 When it is read: at `init()`. A restarted worker enforces the cached policy
 and rows **before its first hello**; `plane_status().applied_policy_version`
@@ -120,7 +124,7 @@ call it.
 | `cache_age_s` | seconds since the cache this worker runs on was written; `None` with no cache. |
 | `stale` | `True` when the cache is older than 24 hours and the mode is not `connected`. A cache that old at `init()` is also logged once. |
 | `applied_policy_version` | the org policy version this worker enforces (from the plane or the cache); `None` if none. |
-| `halt_stale_s` | seconds since the last answered hello while a halt is enforced; `None` when no halt is. |
+| `halt_stale_s` | seconds since the last answered hello while a halt is enforced (informational: the halt is enforced regardless); `None` when no halt is. |
 | `notice` | the plane's last `notice` text, if any. |
 | `plane_degraded` | what the plane last said is wrong with itself while still answering (`"ledger_unreachable"`: it cannot reach its database); `None` when it said nothing or said it is fine. Informational: no decision changes on it, and `mode` stays `connected`. Each change is one `plane_degraded` entry in `runbound.events()`. |
 

@@ -33,7 +33,7 @@ The SDK calls seven endpoints on the plane and nowhere else.
 | `GET /v1/policy` | `plane.py` | a hello reply names a `policy_version` other than the one held | `?service=<service>` and nothing else |
 | `POST /v1/events` | `plane.py` | in the background, about once a second | `batch_id`, `service`, `worker_id`, `sent_at`, `dropped`, and four lanes: `events`, `anomalies`, `exits`, `changes` |
 | `POST /v1/quota/take` | `quota.py` | a call on a tool with a quota and no lease left | `tool`, `service`, and `key` (the sha256 of the session key) for a per-key quota |
-| `POST /v1/approvals` | `approvals.py` | a call that needs a person | `tool`, `request_id`, `args`, `mode`, `timeout_s`, `service`, `worker_id`, `run_id`, `key` when keyed, `seal` when deferred and a secret is set |
+| `POST /v1/approvals` | `approvals.py` | a call that needs a person | `tool`, `request_id`, `args`, `mode`, `timeout_s`, `service`, `worker_id`, `run_id`, `key` when keyed, `args_digest`, `requirement` when a rule asks, the decision record (`reason_code` when known, `matched_rule_ids`, `policy_version`, `service_default_revision`, `policy_state`, `contributors`, `sdk_version`), `seal` when deferred and a secret is set. A `granted: true` answer admits the call with no request |
 | `GET /v1/approvals/{id}` | `approvals.py` | a sync approval waiting for its answer | `?wait_s=` (at most 25): a long poll |
 | `POST /v1/approvals/{id}/report` | `approvals.py` | after an approved call ran | `outcome` (`executed`, `failed`, `tampered`, `clock_skew`), `worker_id`, and `result_digest` (a sha256 of the result) for an executed call |
 
@@ -69,12 +69,18 @@ What a hello carries:
 | `rows_hash` | the hash of the console rows held, when any are |
 | `quota_held` | units this worker still holds per tool in the current window, when any |
 | `renew_claims` | ids of approved deferred requests this worker is executing (at most 20), which extends their claims |
+| `policy_features` | what this SDK enforces (`lines`, `halt_tools_v1`, `defaults_v1`), on **every** hello and before the first policy fetch: the plane serves decision lines only to a worker that said so on its latest hello, and a hello without it resets the worker to the legacy fields |
+| `policy_features` | what this SDK enforces (`lines`, `halt_tools_v1`, `conditions_v1`, `repetition_v1`), on **every** hello and before the first policy fetch: the plane serves decision lines only to a worker that said so on its latest hello, and a hello without it resets the worker to the legacy fields |
+| `policy_unsupported` | `[{tool, reason}]` for each tool whose console rule this SDK cannot read safely and so refuses (`row_unparseable`, `unknown_restriction_key`, `invalid_body`, `legacy_view_mismatch`) |
 
 What the SDK reads from the reply: `halt` and `halt_mode`, `policy_version`,
 `poll_s`, `notice`, `tools_known` (`false` makes the next hello resend the tool
 report), `fleet_state`, `quota_leases` (`tool`, `window_start`, `window_end`,
 `granted`, ...), `approved` (deferred requests to run, each verified against
-its seal before anything runs) and `claims_lost` (ids no longer this worker's).
+its seal before anything runs), `claims_lost` (ids no longer this worker's),
+`halted_tools` (`[{tool, reasons}]`: tools the plane halted because this worker cannot enforce a
+restriction on them; each is refused with `policy_halted` while the rest run) and
+`policy_features_seen` (what the plane stored for this worker).
 
 A reply with `fleet_state: "unavailable"` means the plane could not read its
 own state: the SDK keeps the halt and policy version it held, applies no

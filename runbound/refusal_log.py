@@ -36,7 +36,8 @@ class RefusalLog:
 
     def admit(self, session_id: str, anomaly: Anomaly, reacted: str | None) -> bool:
         """Count one refusal; True while it is still within the record cap."""
-        key = (session_id, anomaly.detector, _detail(anomaly, "rule"), _detail(anomaly, "tool"))
+        # a dry run keeps its own budget: a row promoted to enforced in the middle of a session starts counting afresh
+        key = (session_id, anomaly.detector, _detail(anomaly, "rule"), _detail(anomaly, "tool"), reacted == "dry_run")
         with self._lock:
             entry = self._counts.get(key)
             if entry is None:
@@ -61,20 +62,30 @@ class RefusalLog:
                 if key[0] == session_id and entry[1] > 0:
                     due.append((entry[1], entry[2], entry[3]))
                     entry[1] = 0
-        return [(_summary(shape, count), reacted) for count, reacted, shape in due]
+        return [(_summary(shape, count, reacted), reacted) for count, reacted, shape in due]
 
 
-def _summary(shape: tuple, count: int) -> Anomaly:
-    """The one anomaly that stands for ``count`` refusals past the record cap."""
+def _summary(shape: tuple, count: int, reacted: "str | None" = None) -> Anomaly:
+    """The one anomaly that stands for ``count`` refusals past the record cap.
+
+    A dry run's summary says so: it stands for calls that WOULD have been refused (and ran), reacted ``dry_run``, with
+    ``details["dry_run"] = True``, so nothing can read it as a refusal.
+    """
     detector, base = shape
     details = dict(base)
     details["suppressed_count"] = int(count)
+    dry = reacted == "dry_run"
+    if dry:
+        details["dry_run"] = True
     tool = details.get("tool")
     return Anomaly(
         detector=detector,
         severity="warn",
         message=(
-            f"{count} more refusals of the same kind ({detector}"
+            f"{count} more dry-run would-refuse calls of the same kind ({detector}"
+            f"{'' if tool is None else ', tool ' + repr(tool)}); they ran, and were not recorded one by one"
+            if dry
+            else f"{count} more refusals of the same kind ({detector}"
             f"{'' if tool is None else ', tool ' + repr(tool)}) were not recorded one by one"
         ),
         details=details,

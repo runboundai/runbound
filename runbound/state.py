@@ -47,6 +47,9 @@ class SessionState:
         self.tool_calls: dict[str, int] = {}
         self._cleared: dict[str, int] = {}  # per tool: calls that cleared the whole chain (what max_calls counts)
         self._in_chain: dict[str, int] = {}  # per tool: calls inside the chain now, this one included
+        self._repeats: dict[tuple, int] = {}  # (tool, argument digest) -> calls counted by a repetition control
+        self._key_cleared: dict[tuple, int] = {}  # (tool, matched lines) -> calls that cleared the chain: what a conditional line's cap counts
+        self._key_in_chain: dict[tuple, int] = {}
         self.total_errors = 0
         self.started_at = time.monotonic()
         self.tripped_by: Anomaly | None = None
@@ -79,6 +82,44 @@ class SessionState:
         """
         with self.lock:
             return self._cleared.get(tool, 0) + self._in_chain.get(tool, 0)
+
+    def hold_key(self, tool: str, key: str) -> None:
+        """A call whose matching lines are ``key`` holds one unit of those lines' caps until it leaves the chain."""
+        with self.lock:
+            self._key_in_chain[(tool, key)] = self._key_in_chain.get((tool, key), 0) + 1
+
+    def leave_key(self, tool: str, key: str, cleared: bool) -> None:
+        with self.lock:
+            k = (tool, key)
+            self._key_in_chain[k] = max(0, self._key_in_chain.get(k, 0) - 1)
+            if cleared:
+                self._key_cleared[k] = self._key_cleared.get(k, 0) + 1
+
+    def counted_key(self, tool: str, key: str) -> int:
+        """Calls of ``tool`` that matched exactly these lines and cleared the chain, plus those inside it now (this one included)."""
+        with self.lock:
+            return self._key_cleared.get((tool, key), 0) + self._key_in_chain.get((tool, key), 0)
+
+    def reserve_repeat(self, tool: str, digest: str, limit: int) -> bool:
+        """Count one more call of ``tool`` with this argument digest, unless the session already made ``limit`` of them. Atomic: strict in one process."""
+        with self.lock:
+            key = (tool, digest)
+            if self._repeats.get(key, 0) >= limit:
+                return False
+            self._repeats[key] = self._repeats.get(key, 0) + 1
+            return True
+
+    def repeated(self, tool: str, digest: str) -> int:
+        """How many calls of ``tool`` with this argument digest the session has counted (no change)."""
+        with self.lock:
+            return self._repeats.get((tool, digest), 0)
+
+    def release_repeat(self, tool: str, digest: str) -> None:
+        """Give one back: the call that reserved it was refused later in the chain or is only pending."""
+        with self.lock:
+            key = (tool, digest)
+            if self._repeats.get(key, 0) > 0:
+                self._repeats[key] -= 1
 
     def mark_action_refused(self) -> None:
         """Count one tool attempt that admission or the policy refused."""

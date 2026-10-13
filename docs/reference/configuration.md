@@ -33,7 +33,7 @@ is local and opens no socket to a plane.
 | `service` | `str` | `"default"` | no | What the plane files this worker under. It also names the policy cache file, is part of every approval seal, and is the span resource's `service.name`. |
 | `worker_id` | `str \| None` | `None` | no | This worker's name in the fleet. Unset, it is `<hostname>:<pid>:<6 hex chars>`, fixed for the life of the process. |
 | `control_plane_poll_s` | `float` | `5.0` | no | Seconds between hellos (±10% jitter), in every link state. The plane's reply can set a different interval. Must be positive. |
-| `on_halt` | `str` | `"raise"` | no | What a fleet halt does: `"raise"` refuses every tool (`reason="halt"`); `"warn"` logs it at most once a minute and lets the call through. A halt stops being enforced 60 s after the plane last answered. |
+| `on_halt` | `str` | `"raise"` | no | What a fleet halt does: no longer anything. A halt refuses every tool (`reason="halt"`) under either value, and the setting is kept so existing code still runs. A halt holds until the plane lifts it, and is kept in the policy cache so it survives a restart. |
 | `consequential_grace_s` | `float` | `60.0` | no | How long after the last answered hello (or after start, with none) `financial`, `destructive`, `privileged` and unclassified tools keep running on the cached policy before they refuse with `reason="plane_unavailable"`. Between 15 and 60, so it never outlasts a halt. See [Plane loss](../guides/plane-loss.md). |
 | `cache_dir` | `str \| None` | `None` | no | Where the last policy the plane served is kept, so a restarted worker enforces it before its first hello. Unset: `RUNBOUND_CACHE_DIR`, else the platform cache directory, else the temp directory, else memory only; never `XDG_RUNTIME_DIR`. |
 

@@ -207,8 +207,9 @@ class HelloReply:
     #: report" reasoning every other field on this class follows.
     fleet_state: str = "ok"
     #: Deferred approvals a person approved that this worker may execute: ``[{"id", "tool",
-    #: "args", "request_id", "seal", "service", "expires_at"}]``, one per reply. The worker
-    #: verifies each item's seal before running anything; see :mod:`runbound.approvals`.
+    #: "args", "request_id", "seal", "service", "expires_at", "run_id"}]``, one per reply. The worker
+    #: verifies each item's seal before running anything; see :mod:`runbound.approvals`. ``run_id`` (str or null; absent from an
+    #: older plane) is the run that filed the request: a trace label outside the seal, so the resumed span keeps its run.
     approved: list = field(default_factory=list)
     #: Approval ids this worker asked to renew (``renew_claims`` on the hello) that are no longer its own:
     #: the claim lapsed, another worker holds it, or the request is done. Absent when none.
@@ -221,6 +222,13 @@ class HelloReply:
     #: ``plane_degraded`` event per change. A plane that predates the field, or leaves it out, is read as ``None``. Any other key a
     #: reply carries is ignored, as it always was.
     plane_degraded: str | None = None
+    #: What the plane stored for this worker from its latest hello (``policy_features`` echoed back); informational. Absent from an
+    #: older plane, read as ``[]``.
+    policy_features_seen: list = field(default_factory=list)
+    #: Tools this worker cannot enforce and has no restrictive fallback for, ``[{"tool", "reasons"}]``; sent only to a worker that
+    #: reported ``halt_tools_v1``. The worker refuses exactly these tools with ``policy_halted``; the rest run. A real fleet halt is
+    #: ``halt`` and is separate.
+    halted_tools: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)

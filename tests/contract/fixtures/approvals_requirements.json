@@ -1,0 +1,307 @@
+[
+ {
+  "id": "O-APR-1",
+  "note": "code-declared approval alone: one requirement, the code's",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "rule"
+  },
+  "code_approval": {
+   "source": "code",
+   "eligible": [
+    "sec"
+   ],
+   "wait_s": null
+  },
+  "expect": [
+   "code"
+  ]
+ },
+ {
+  "id": "O-APR-2",
+  "note": "code approval plus a matching ask rule: two requirements, never merged",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "rule"
+  },
+  "code_approval": {
+   "source": "code",
+   "eligible": [
+    "sec"
+   ],
+   "wait_s": null
+  },
+  "matching_ask": [
+   {
+    "source": "rule:r1",
+    "eligible": [
+     "lead"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "code",
+   "rule:r1"
+  ]
+ },
+ {
+  "id": "O-APR-3",
+  "note": "an explicit tool allow drops the service default's ask but never the code's",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "code_approval"
+  },
+  "code_approval": {
+   "source": "code",
+   "eligible": [],
+   "wait_s": null
+  },
+  "fallback_operative": false,
+  "service": [
+   {
+    "source": "service:destructive",
+    "eligible": [
+     "oncall"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "code"
+  ]
+ },
+ {
+  "id": "O-APR-3a",
+  "note": "with no code approval an explicit allow leaves nothing to ask",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "rule"
+  },
+  "fallback_operative": false,
+  "service": [
+   {
+    "source": "service:destructive",
+    "eligible": [],
+    "wait_s": null
+   }
+  ],
+  "expect": []
+ },
+ {
+  "id": "O-APR-4",
+  "note": "service-default requirements apply only when the fallback is operative",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "fallback"
+  },
+  "fallback_operative": true,
+  "service": [
+   {
+    "source": "service:default",
+    "eligible": [
+     "oncall"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "service:default"
+  ]
+ },
+ {
+  "id": "O-APR-4a",
+  "note": "two tags that each gate approval are two requirements",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "fallback"
+  },
+  "fallback_operative": true,
+  "tags": [
+   {
+    "source": "tag:financial",
+    "eligible": [
+     "cfo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "tag:destructive",
+    "eligible": [
+     "oncall"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "tag:financial",
+   "tag:destructive"
+  ]
+ },
+ {
+  "id": "O-APR-4b",
+  "note": "tag requirements keep their own approver lists (never a union)",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "fallback"
+  },
+  "fallback_operative": true,
+  "tags": [
+   {
+    "source": "tag:financial",
+    "eligible": [
+     "cfo"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "tag:destructive",
+    "eligible": [
+     "oncall"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "tag:financial",
+   "tag:destructive"
+  ],
+  "expect_eligible": {
+   "tag:financial": [
+    "cfo"
+   ],
+   "tag:destructive": [
+    "oncall"
+   ]
+  }
+ },
+ {
+  "id": "O-APR-4c",
+  "note": "tag requirements are dropped when a tool rule matched (fallback not operative)",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "rule"
+  },
+  "matching_ask": [
+   {
+    "source": "rule:r1",
+    "eligible": [
+     "lead"
+    ],
+    "wait_s": null
+   }
+  ],
+  "fallback_operative": false,
+  "tags": [
+   {
+    "source": "tag:financial",
+    "eligible": [
+     "cfo"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "rule:r1"
+  ]
+ },
+ {
+  "id": "O-APR-5",
+  "note": "several matching ask rules: one requirement each",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "rule"
+  },
+  "matching_ask": [
+   {
+    "source": "rule:a",
+    "eligible": [
+     "x"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "rule:b",
+    "eligible": [
+     "y"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "rule:a",
+   "rule:b"
+  ]
+ },
+ {
+  "id": "O-APR-6",
+  "note": "a deny asks nobody",
+  "outcome": {
+   "decision": "deny",
+   "primary_reason": "rule"
+  },
+  "code_approval": {
+   "source": "code",
+   "eligible": [],
+   "wait_s": null
+  },
+  "matching_ask": [
+   {
+    "source": "rule:r1",
+    "eligible": [],
+    "wait_s": null
+   }
+  ],
+  "expect": []
+ },
+ {
+  "id": "O-APR-6a",
+  "note": "a refuse asks nobody",
+  "outcome": {
+   "decision": "refuse",
+   "primary_reason": "condition_unevaluable"
+  },
+  "code_approval": {
+   "source": "code",
+   "eligible": [],
+   "wait_s": null
+  },
+  "expect": []
+ },
+ {
+  "id": "O-APR-6b",
+  "note": "an allow asks nobody",
+  "outcome": {
+   "decision": "allow",
+   "primary_reason": "rule"
+  },
+  "expect": []
+ },
+ {
+  "id": "O-APR-7",
+  "note": "the same source twice is one requirement",
+  "outcome": {
+   "decision": "ask",
+   "primary_reason": "rule"
+  },
+  "matching_ask": [
+   {
+    "source": "rule:r1",
+    "eligible": [
+     "a"
+    ],
+    "wait_s": null
+   },
+   {
+    "source": "rule:r1",
+    "eligible": [
+     "a"
+    ],
+    "wait_s": null
+   }
+  ],
+  "expect": [
+   "rule:r1"
+  ]
+ }
+]

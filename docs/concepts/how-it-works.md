@@ -16,10 +16,10 @@ The chain is `Engine.admit_call` in `runbound/engine.py`; the post chain is
 ```
  call issue_refund(order="A-1", amount=40)
    |
-   |  tool_call event recorded (it counts toward max_calls whether or not it is refused);
+   |  tool_call event recorded (an attempt: `tool_calls()` counts it whether or not it is refused);
    |  a session stopped by a block_and_latch policy is refused here
    v
- 1  halt                     plane halted the fleet; on_halt="raise" refuses   -> halt
+ 1  halt                     plane halted the fleet; every tool is refused      -> halt
  2  plane gate               plane gone, consequential or unclassified tool    -> plane_unavailable
  3  user pre hooks           init(pre_hooks=) then @tool(pre_hooks=); may rewrite the arguments
  4  argument validation      final arguments vs signature and type hints       -> invalid_arguments
@@ -53,13 +53,14 @@ first refusal wins and ends the call: nothing after it runs, the body never runs
 
 What each slot does:
 
-1. **Halt.** A fleet halt from the plane. With `on_halt="raise"` (the default) every tool is
-   refused; with `on_halt="warn"` the call goes on and a warning is logged at most once a minute.
+1. **Halt.** A fleet halt from the plane. Every tool is
+   refused, whatever `on_halt` says.
 2. **Plane gate.** Only with a plane configured. Once the plane has not answered for
    `consequential_grace_s` (default 60), a tool carrying `financial`, `destructive` or
    `privileged`, or no class at all, is refused (`plane_unavailable`, retryable); while the link
    is still connecting, such a tool is refused unless the on-disk policy cache was confirmed in the
-   last 15 minutes. `read`, `write` and `external` tools keep running.
+   last 15 minutes. `read`, `write` (with another tag) and `external` tools keep running. Until the first answered hello
+   or a sealed-cache load, no tool runs at all (`policy_unavailable`, retryable).
    See [Plane loss](../guides/plane-loss.md).
 3. **User pre hooks.** The only slot where the arguments can change (`hooks.rewrite(...)`).
    Everything after it sees the final arguments.
@@ -154,7 +155,8 @@ with runbound.session("user-8842", tags={"plan": "free"}):
 
 A key names one session, reused by every block with that key. `max_calls`, the row's
 `max_calls_per_session` and `max_actions_per_run` all count per session, and so does
-`runbound.tool_calls(key)`. A refused attempt still counts. The binding is a context variable: a
+`runbound.tool_calls(key)`. `tool_calls()` counts every attempt, a refused one too; `max_calls` and the
+row's session cap count admitted calls only. The binding is a context variable: a
 thread or asyncio task that opens its own block is unaffected by others, and blocks nest. At most
 `max_sessions` keys (default 10,000) are kept, least recently used out.
 

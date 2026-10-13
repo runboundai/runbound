@@ -103,7 +103,7 @@ Only for a tool decorated with `approval="required"`. See [Approvals](../guides/
 
 | Call | Body |
 |---|---|
-| `POST /v1/approvals` | `tool`, `request_id`, `args` (the final arguments, as one JSON object), `mode`, `timeout_s`, `service`, `worker_id`, `run_id` (the local session id); `key` (the session key's hash) when the session has a key; `requested_for` (the email or user id you passed to `runbound.session(requested_for=...)`, in the clear: it is what the plane compares the decider with) when the block names one; `seal` for a deferred request when an approval secret is set. |
+| `POST /v1/approvals` | `tool`, `request_id`, `args` (the final arguments, as one JSON object), `mode`, `timeout_s`, `service`, `worker_id`, `run_id` (the local session id); `key` (the session key's hash) when the session has a key; `requested_for` (the email or user id you passed to `runbound.session(requested_for=...)`, in the clear: it is what the plane compares the decider with) when the block names one; `seal` for a deferred request when an approval secret is set; `args_digest` (a sha256 of the tool name and the arguments, which the plane recomputes), `requirement` (the id of the rule that asks) and the decision record (rule ids, policy version, policy state, contributors, SDK version; no argument values). |
 | `GET /v1/approvals/{id}?wait_s=N` | No body. |
 | `POST /v1/approvals/{id}/report` | `outcome` (`executed`, `failed`, `tampered`, `clock_skew`), `worker_id`, and `result_digest` when a deferred request ran and returned a result. |
 

@@ -92,6 +92,7 @@ class ApprovalSpec:
     mode: str = "sync"
     timeout_s: float = 600.0
     names: tuple = ()  # the tool's parameter names, for normalising args
+    requirement: "str | None" = None  # which requirement this request is for (a console line id, a default or the code), so a grant satisfies only that one
 
 
 class Deferred(Exception):
@@ -110,6 +111,7 @@ class Pending:
     request_id: str
     args: dict
     approval_id: str | None
+    run_id: str | None = None  # the run that filed it: the resumed execution reports under the same run
 
 
 _PENDING: "OrderedDict[str, Pending]" = OrderedDict()
@@ -169,6 +171,7 @@ def reset_for_tests() -> None:
         _PENDING.clear()
         _EXECUTORS.clear()
         _META.clear()
+        _SIGS.clear()
         _INFLIGHT.clear()
         _EXECUTING.clear()
         _LOST.clear()
@@ -290,6 +293,7 @@ def check_registration(func: Callable, name: str, approval: Any, mode: Any, time
 
 
 _META: dict = {}  # tool -> (parameter names, are its arguments JSON-friendly), for approvals a row asks for
+_SIGS: dict = {}  # tool -> its inspect.Signature, to bind a call's arguments by name for a rule's conditions
 
 
 def json_friendly(func: Callable) -> bool:
@@ -311,9 +315,28 @@ def register_tool(name: str, func: Callable, executor: Callable) -> None:
         names = tuple(inspect.signature(func).parameters)
     except (TypeError, ValueError):
         names = ()
+    try:
+        signature = inspect.signature(func)
+    except (TypeError, ValueError):
+        signature = None
     with _LOCK:
         _EXECUTORS.setdefault(name, executor)
         _META[name] = (names, json_friendly(func))
+        _SIGS[name] = signature
+
+
+def bound_arguments(name: str, args: tuple, kwargs: dict) -> "dict | None":
+    """The call's arguments by parameter name, defaults applied, as a console rule's conditions read them; ``None`` when they cannot be bound."""
+    signature = _SIGS.get(name)
+    if signature is None:
+        return None
+    try:
+        bound = signature.bind_partial(*args, **kwargs)
+        bound.apply_defaults()
+    except TypeError:
+        return None
+    return {key: value for key, value in bound.arguments.items()
+            if signature.parameters[key].kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)}
 
 
 def tool_meta(name: str) -> tuple:
@@ -357,7 +380,9 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
     ``StageRefused`` (denied, timed out, unavailable) or :class:`Deferred` (a deferred request was
     filed). A call that *is* the execution of an approved deferred request skips the question.
     """
-    if _CURRENT.get() is not None:
+    resumed = _CURRENT.get()
+    if resumed is not None:
+        info["request_id"] = resumed  # the span of the resumed execution names the request a person approved
         return
     config, shared = engine.config, engine.shared
     unavailable = getattr(shared, "approval_refusal", lambda: None)()
@@ -388,21 +413,41 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
     requested_for = _REQUESTED_FOR.get()
     if requested_for:
         body["requested_for"] = requested_for
+    body["args_digest"] = args_digest(call.name, args)  # the plane recomputes it: a different canonical form fails loudly (400), never silently asks again
+    if spec.requirement:
+        body["requirement"] = spec.requirement
+    record = info.get("record") or {}
+    for field in ("reason_code", "matched_rule_ids", "policy_version", "service_default_revision", "policy_state", "contributors", "sdk_version"):
+        if record.get(field) is not None:
+            body[field] = record[field]  # the decision record rides on the request, so "why is this waiting" reads by approval id
     secret = config.approval_secret
     if spec.mode == "deferred" and secret:
         body["seal"] = make_seal(secret, config.service, call.name, request_id, args, spec.timeout_s)
     deadline = time.monotonic() + spec.timeout_s
     approval = _file(shared, body, deadline, (config.service, call.name, key_digest))
+    if approval.get("granted") is True:  # an active session/minutes grant admits this call: nobody is asked, nothing waits, the plane took no quota unit
+        grant_id = str(approval["grant_id"])
+        if isinstance(record.get("contributors"), list):
+            record["contributors"] = [*record["contributors"], f"grant:{grant_id}"]
+        info.update(request_id=request_id, granted=grant_id, quota=None)
+        return
     # ``approval["quota"]`` non-null means the plane already took this call's quota unit: never take another.
     info.update(request_id=request_id, approval_id=approval.get("id"), quota=approval.get("quota"))
     if spec.mode == "deferred":
         with _LOCK:
-            _PENDING[request_id] = Pending(call.name, request_id, args, approval.get("id"))
+            _PENDING[request_id] = Pending(call.name, request_id, args, approval.get("id"), body["run_id"])
             while len(_PENDING) > PENDING_MAX:
                 _PENDING.popitem(last=False)
         raise Deferred({"status": PENDING_RESULT_STATUS, "request_id": request_id}, approval.get("id"))
     info["sync"] = True
     _wait(shared, approval, deadline)
+
+
+def args_digest(tool: str, args: dict) -> str:
+    """The digest the plane recomputes for a request: sha256 of canonical JSON ``{"tool", "args"}`` (the arguments as the plane will parse them)."""
+    sent = json.loads(json.dumps(args))
+    text = json.dumps({"tool": tool, "args": sent}, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _file(shared: Any, body: dict, deadline: float, quota_key: tuple = ()) -> dict:
@@ -411,6 +456,8 @@ def _file(shared: Any, body: dict, deadline: float, quota_key: tuple = ()) -> di
     while True:
         status, data = shared.approvals("POST", "/v1/approvals", body, timeout=5.0)
         if status in (200, 201) and isinstance(data, dict) and data.get("id"):
+            return data
+        if status == 200 and isinstance(data, dict) and data.get("granted") is True and isinstance(data.get("grant_id"), str) and data["grant_id"]:
             return data
         if status == 429:  # an enforced quota is full: no approval was created, and none may be retried now
             wait = data.get("retry_after_s") if isinstance(data, dict) else None
@@ -618,6 +665,17 @@ def _engine() -> Any:
     return api._ENGINE
 
 
+def _run_as(run_id: Any) -> Any:
+    """The context a resumed execution runs in: bound to the run that filed it (see :func:`runbound.api._run_as`)."""
+    from . import api
+
+    if run_id is not None and not (isinstance(run_id, str) and 0 < len(run_id) <= api._RUN_ID_MAX):
+        _warn_once(("claim-run-id",), "runbound: an approved request carried a run_id that is not a string of 1 to %d "
+                   "characters; ignored, the call runs under the default run", api._RUN_ID_MAX)
+        run_id = None  # a bad label never fails a claim
+    return api._run_as(run_id)
+
+
 def _call_back(info: dict) -> None:
     engine = _engine()
     callback = getattr(getattr(engine, "config", None), "on_deferred_result", None)
@@ -639,11 +697,11 @@ def _execute(item: dict) -> None:
             return  # not a tool this worker has; the plane offers it again
         config = engine.config
         service = item.get("service") or config.service
+        own = _PENDING.get(request_id)  # parked on this worker, if it filed the request
         if item.get("seal") is not None:
             problem = verify_seal(config.approval_secret, item["seal"], service, tool, request_id, item.get("args"))
             args = item.get("args")
         else:
-            own = _PENDING.get(request_id)
             if own is None:
                 return  # unsealed and not parked here: only the requesting worker may run it
             problem = None if own.args == item.get("args") else "the arguments differ from the ones parked"
@@ -659,7 +717,8 @@ def _execute(item: dict) -> None:
         with _LOCK:
             _EXECUTING.add(approval_id)
         try:
-            result = executor(**args)
+            with _run_as((own.run_id if own is not None else None) or item.get("run_id")):
+                result = executor(**args)
             outcome = "executed"
         except BaseException as exc:  # the tool's own failure, or a refusal by the chain
             result, outcome = None, "failed"

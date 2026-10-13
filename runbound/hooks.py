@@ -369,6 +369,16 @@ def fails_closed(effects: frozenset | None) -> bool:
     return not classes or not classes <= FAIL_OPEN_EFFECTS
 
 
+def fails_closed_unavailable(effects: frozenset | None) -> bool:
+    """Does fail mode refuse this tool when the policy is unavailable (TPD §5.5, register K8)?
+
+    The classes ``fails_closed`` names, and also a bare ``write`` (``write`` alone or with ``read``): a write tool whose declaration
+    carries no further effect tag counts as unclassified for fail mode. ``{write, external}`` has a tag and follows it (open).
+    """
+    classes = frozenset(effects or ())
+    return fails_closed(classes) or ("write" in classes and not classes - {"read", "write"})
+
+
 def _call_hook(hook: Callable, call: ToolCall, timeout: float | None) -> Any:
     """``hook(call)``, bounded: a hook still running after ``timeout`` seconds counts as a raise.
 

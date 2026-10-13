@@ -1,0 +1,122 @@
+[
+ {
+  "id": "O-STA-1",
+  "note": "served 10 s ago: fresh",
+  "now": 1000,
+  "served_at": 990,
+  "sealed_at": null,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "fresh"
+ },
+ {
+  "id": "O-STA-1a",
+  "note": "served exactly fresh_s ago: still fresh (inclusive)",
+  "now": 1000,
+  "served_at": 970,
+  "sealed_at": null,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "fresh"
+ },
+ {
+  "id": "O-STA-2",
+  "note": "served long ago, a sealed cache within validity: cached",
+  "now": 1000,
+  "served_at": 500,
+  "sealed_at": 100,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "cached"
+ },
+ {
+  "id": "O-STA-2a",
+  "note": "never served this run, a sealed cache (a restart): cached",
+  "now": 1000,
+  "served_at": null,
+  "sealed_at": 100,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "cached"
+ },
+ {
+  "id": "O-STA-2b",
+  "note": "a cache exactly cache_s old is still cached (inclusive)",
+  "now": 87400,
+  "served_at": null,
+  "sealed_at": 1000,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "cached"
+ },
+ {
+  "id": "O-STA-3",
+  "note": "no served policy and no cache: unavailable",
+  "now": 1000,
+  "served_at": null,
+  "sealed_at": null,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "unavailable"
+ },
+ {
+  "id": "O-STA-3a",
+  "note": "a cache older than its validity: unavailable",
+  "now": 87401,
+  "served_at": null,
+  "sealed_at": 1000,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "unavailable"
+ },
+ {
+  "id": "O-STA-3b",
+  "note": "served long ago and the cache has expired too: unavailable",
+  "now": 90000,
+  "served_at": 100,
+  "sealed_at": 100,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "unavailable"
+ },
+ {
+  "id": "O-STA-4",
+  "note": "a cache that expires mid-run: the call at 86399 s is cached",
+  "now": 86399,
+  "served_at": null,
+  "sealed_at": 0,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "cached"
+ },
+ {
+  "id": "O-STA-4a",
+  "note": "...and the next call, at 86401 s, is unavailable (nothing remembers the earlier state)",
+  "now": 86401,
+  "served_at": null,
+  "sealed_at": 0,
+  "validity": {
+   "fresh_s": 30,
+   "cache_s": 86400
+  },
+  "expect": "unavailable"
+ }
+]

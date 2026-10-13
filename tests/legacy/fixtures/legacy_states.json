@@ -1,0 +1,592 @@
+{
+  "cases": {
+    "O-LEG-STA-1": {
+      "class": "read",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-10": {
+      "class": "external",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-101": {
+      "class": "read",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_blocked"
+    },
+    "O-LEG-STA-102": {
+      "class": "write",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_blocked"
+    },
+    "O-LEG-STA-103": {
+      "class": "external",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_blocked"
+    },
+    "O-LEG-STA-104": {
+      "class": "destructive",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_blocked"
+    },
+    "O-LEG-STA-105": {
+      "class": "read",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_approval"
+    },
+    "O-LEG-STA-106": {
+      "class": "write",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_approval"
+    },
+    "O-LEG-STA-107": {
+      "class": "external",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_approval"
+    },
+    "O-LEG-STA-108": {
+      "class": "destructive",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_expired_restricted",
+      "state": "sealed_approval"
+    },
+    "O-LEG-STA-109": {
+      "class": "read",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "sealed_allowed"
+    },
+    "O-LEG-STA-11": {
+      "class": "financial",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-110": {
+      "class": "write",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "sealed_allowed"
+    },
+    "O-LEG-STA-111": {
+      "class": "external",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "sealed_allowed"
+    },
+    "O-LEG-STA-112": {
+      "class": "destructive",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "sealed_allowed"
+    },
+    "O-LEG-STA-12": {
+      "class": "destructive",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-13": {
+      "class": "privileged",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-14": {
+      "class": "unclassified",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-15": {
+      "class": "read",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-16": {
+      "class": "write",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-17": {
+      "class": "external",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-18": {
+      "class": "financial",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-19": {
+      "class": "destructive",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-2": {
+      "class": "write",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-20": {
+      "class": "privileged",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-21": {
+      "class": "unclassified",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-22": {
+      "class": "read",
+      "link": "connecting",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-23": {
+      "class": "write",
+      "link": "connecting",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-24": {
+      "class": "external",
+      "link": "connecting",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-25": {
+      "class": "financial",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-26": {
+      "class": "destructive",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-27": {
+      "class": "privileged",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-28": {
+      "class": "unclassified",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-29": {
+      "class": "read",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-3": {
+      "class": "external",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-30": {
+      "class": "write",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-31": {
+      "class": "external",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-32": {
+      "class": "financial",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-33": {
+      "class": "destructive",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-34": {
+      "class": "privileged",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-35": {
+      "class": "unclassified",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-36": {
+      "class": "read",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-37": {
+      "class": "write",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-38": {
+      "class": "external",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-39": {
+      "class": "financial",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-4": {
+      "class": "financial",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-40": {
+      "class": "destructive",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-41": {
+      "class": "privileged",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-42": {
+      "class": "unclassified",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-43": {
+      "class": "read",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-44": {
+      "class": "write",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-45": {
+      "class": "external",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-46": {
+      "class": "financial",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-47": {
+      "class": "destructive",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-48": {
+      "class": "privileged",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-49": {
+      "class": "unclassified",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-5": {
+      "class": "destructive",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-50": {
+      "class": "read",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-51": {
+      "class": "write",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-52": {
+      "class": "external",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-53": {
+      "class": "financial",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-54": {
+      "class": "destructive",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-55": {
+      "class": "privileged",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-56": {
+      "class": "unclassified",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-57": {
+      "class": "read_write",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-58": {
+      "class": "write_external",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-59": {
+      "class": "read_write",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-6": {
+      "class": "privileged",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-60": {
+      "class": "write_external",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-61": {
+      "class": "read_write",
+      "link": "connecting",
+      "ran": false,
+      "reason": "plane_unavailable",
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-62": {
+      "class": "write_external",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_25h"
+    },
+    "O-LEG-STA-63": {
+      "class": "read_write",
+      "link": "connecting",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-64": {
+      "class": "write_external",
+      "link": "connecting",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_cache"
+    },
+    "O-LEG-STA-65": {
+      "class": "read_write",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-66": {
+      "class": "write_external",
+      "link": "unavailable",
+      "ran": false,
+      "reason": "policy_unavailable",
+      "state": "no_hello_61s"
+    },
+    "O-LEG-STA-67": {
+      "class": "read_write",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-68": {
+      "class": "write_external",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min_no_hello_61s"
+    },
+    "O-LEG-STA-69": {
+      "class": "read_write",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-7": {
+      "class": "unclassified",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_0min"
+    },
+    "O-LEG-STA-70": {
+      "class": "write_external",
+      "link": "connected",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_30s_silence"
+    },
+    "O-LEG-STA-71": {
+      "class": "read_write",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-72": {
+      "class": "write_external",
+      "link": "unavailable",
+      "ran": true,
+      "reason": null,
+      "state": "hello_then_61s_silence"
+    },
+    "O-LEG-STA-8": {
+      "class": "read",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_16min"
+    },
+    "O-LEG-STA-9": {
+      "class": "write",
+      "link": "connecting",
+      "ran": true,
+      "reason": null,
+      "state": "cache_16min"
+    }
+  }
+}

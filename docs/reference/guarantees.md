@@ -25,9 +25,9 @@ any one of them is.
   approval returns `{"status": "pending_approval", "request_id": ...}` instead, and the body does
   not run then either.
 - A refused call takes no quota unit and asks no person. It still counts as an attempt in
-  `tool_calls()`, so `max_calls` includes it, but never as an executed action.
+  `tool_calls()`, but never as an executed action and never against `max_calls`, which counts admitted calls.
 - `exc.reason` is always one of the fixed set in `runbound.exceptions.REASONS`. `exc.retryable`
-  (and `runbound.is_retryable(exc)`) is true only for `plane`, `plane_unavailable`, `quota_exceeded` and `quota_plane_unavailable`.
+  (and `runbound.is_retryable(exc)`) is true only for `plane`, `plane_unavailable`, `approval_unavailable`, `quota_exceeded` and `quota_plane_unavailable`.
   `exc.retry_after` gives the seconds to wait for a quota. See
   [Handling refusals](../guides/handling-refusals.md).
 - Arguments are validated against the signature and type hints and never coerced. A refusal
@@ -65,8 +65,12 @@ class".
   a policy that arrives over the wire carries no code.
 - A dashboard row folds onto the rules on `@runbound.tool`, field by field, most restrictive
   wins: `blocked` OR, the lower session cap, `approval_required` OR, the lower approval timeout,
-  the stricter `risk_class` (a row can raise a tool's class, never lower it), `fail_mode` `closed`
-  over `open`. A row can add rules; it never loosens one in code.
+  the stricter `risk_class` (a row can raise a tool's class, never lower it, and it never makes a
+  tool that declares no class fail open), `fail_mode` `closed` over `open`. A row can add rules; it
+  never loosens one in code.
+- A plane that cannot read its rows, or cannot confirm a quota, does not loosen a worker: the worker
+  keeps the rules it holds, and a quota it cannot verify follows the row's `fail_mode`. A worker that
+  has been told a policy exists but not served it refuses the consequential classes until it is.
 - A `dry_run` row or policy refuses nothing. It records what it would have refused
   (`would_refuse`) and lets the call run.
 - Rules declared in code never come from the policy cache.
@@ -98,8 +102,10 @@ See [Approvals](../guides/approvals.md). In INVARIANTS.md: "Approvals".
   since start with none. Before the first answer they also refuse unless the cached policy was
   confirmed within the last 15 minutes.
 - A restarted worker enforces the cached policy before its first hello.
-- A fleet halt lapses 60 s after the plane last answered. Because the grace period is at most
-  60 s, consequential tools have stopped on their own by the time a halt lapses.
+- A fleet halt holds until the plane lifts it; the plane going quiet does not release it, and it is kept in the sealed
+  cache so a restarted worker starts halted.
+- No governed call runs before a worker's first answered hello or sealed-cache load: a `read`, `write` or `external` tool
+  refuses `policy_unavailable`, a consequential or unclassified one `plane_unavailable`.
 - A process with no plane configured has no plane gate at all.
 - The plane is not on the call path: a call to a tool with no approval and no quota row makes no
   network call on the calling thread.
@@ -130,8 +136,8 @@ leaves the process".
   logged, and only your local policy applies.
 - **The policy cache is tamper-evident, not a boundary.** Its MAC is keyed from the token: a
   hand-edited or truncated file is ignored, but anyone who can read the token can write a valid one.
-- **A halt does not outlive the plane.** It lapses 60 s after the plane last answered, so a plane
-  that dies releases the fleet. `on_halt="warn"` never refuses at all.
+- **A halt outlives the plane.** It holds until the plane lifts it, so a plane that dies while the fleet is halted
+  leaves the fleet halted until a plane says otherwise.
 - **Only what passes through runbound is guarded.** A function without `@runbound.tool` (or a
   LangChain tool the handler does not see) is invisible, and the capability class rules apply only
   to decorated tools. `runbound.coverage()` and `runbound.assert_guarded()` show what is covered.

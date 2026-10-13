@@ -50,6 +50,7 @@ from .state import SessionState
 _LOG = logging.getLogger("runbound")
 
 _SESSION_ID_CHARS = 12
+_RUN_ID_MAX = 128
 _KEYED_ID_CHARS = 10
 
 _LOCK = threading.Lock()
@@ -454,6 +455,24 @@ def session(key: str, tags: dict | None = None, requested_for: str | None = None
         _CURRENT.reset(token)
         _count_active(-1)
         _flush_refusal_summaries(state)
+
+
+@contextlib.contextmanager
+def _run_as(run_id: Any) -> Iterator[None]:
+    """Run a deferred approval's execution as part of the run that filed it.
+
+    A resumed execution starts on a fresh thread with no session bound, so its span would carry the process's default run id.
+    This binds a throwaway session with the original ``run_id`` (a string of at most 128 characters; anything else, or no
+    engine, leaves the context as it was). It is not registered: counters start at zero, and nothing is kept after the block.
+    """
+    if not isinstance(run_id, str) or not 0 < len(run_id) <= _RUN_ID_MAX or _ENGINE is None:
+        yield
+        return
+    token = _CURRENT.set(SessionState(run_id))
+    try:
+        yield
+    finally:
+        _CURRENT.reset(token)
 
 
 def _enter_session(key: str, tags: dict | None) -> SessionState | None:
@@ -1010,6 +1029,7 @@ class _Run(float):
     effects: frozenset = frozenset()
     request_id: "str | None" = None  # the approval request this call filed, if any
     report_id: "str | None" = None  # the plane's id of a sync approval, to report the outcome on
+    record: "dict | None" = None  # the decision record of this call (policy state, matched lines, contributors ...)
 
 
 def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | None = None) -> _Run:
@@ -1048,13 +1068,16 @@ def _begin(
         )
     except GuardrailTripped as refusal:
         run.request_id = info.get("request_id")
+        run.record = info.get("record")
         _emit_result(tool_name, "refused", run, tags, exc=refusal)
         raise
     except approvals_module.Deferred:
         run.request_id = info.get("request_id")
+        run.record = info.get("record")
         _emit_result(tool_name, "pending_approval", run, tags)
         raise
     run.request_id = info.get("request_id")
+    run.record = info.get("record")
     run.report_id = info.get("approval_id") if info.get("sync") else None
     return args, kwargs, tags, run
 
@@ -1074,7 +1097,7 @@ def _end_span(tool_name: str, outcome: str, run: _Run, exc: "BaseException | Non
                 tool_name, outcome, config=getattr(engine, "config", None),
                 run_id=getattr(state, "session_id", None), key=getattr(state, "key", None), effects=run.effects,
                 call_id=span.call_id, args_digest=span.args_digest, approval_request_id=run.request_id, exc=exc if outcome == "error" else None,
-                decision=getattr(refusal, "decision", None),
+                decision=getattr(refusal, "decision", None), record=run.record, reason_code=getattr(refusal, "reason", None),
                 policy_version=getattr(getattr(engine, "shared", None), "policy_version", None),
                 flags=processed.flags if processed else (), flag_score=processed.flag_score if processed else 0.0,
                 result_chars=processed.chars_in if processed else 0,

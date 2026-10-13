@@ -22,7 +22,8 @@ from runbound.policy import ToolCall
 from runbound.shared import LocalState
 from runbound.state import SessionState
 
-KNOWN_EVALUATION_KEYS = {"limit", "used", "count", "rule", "denied_class"}
+RECORD_KEYS = {"reason_code", "policy_state", "policy_version", "matched_rule_ids", "service_default_revision", "contributors", "sdk_version"}
+KNOWN_EVALUATION_KEYS = {"limit", "used", "count", "rule", "denied_class"} | RECORD_KEYS  # the decision record rides the evaluation (TR2-O2)
 SECRET = "sk-do-not-log-me-42"
 
 
@@ -144,7 +145,7 @@ def test_action_cap_refusal_states_limit_and_used():
         ping()
 
     _assert_complete(excinfo.value, boundary="blast_radius", required=("limit", "used"))
-    assert excinfo.value.decision.evaluation == {"limit": 1, "used": 2}
+    assert {k: v for k, v in excinfo.value.decision.evaluation.items() if k not in RECORD_KEYS} == {"limit": 1, "used": 2}
 
 
 # --- the fleet-level site: a halt, decided elsewhere and only relayed here -----

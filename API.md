@@ -151,9 +151,9 @@ a boundary against anyone who can read the token. Rules declared in code never c
 A deferred approval being executed is named in the hello's `renew_claims` (at most 20) on every hello, which
 extends its claim; the reply's `claims_lost` lists ids that are no longer this worker's (stop renewing, start
 nothing new; a body already running reports as usual). Hellos go on every `poll_s` (±10% jitter) in every state; there is no separate probe. While the plane is
-away, `read`, `write` and `external` tools keep enforcing the cache of any age (`stale` after 24 h);
+away, `read`, `write` (with another tag) and `external` tools keep enforcing the cache of any age (`stale` after 24 h), and a bare `write` (no other tag: unclassified for fail mode) refuses `plane_unavailable` only once the worker holds no policy within 24 h;
 `financial`, `destructive`, `privileged` and unclassified tools refuse with `reason="plane_unavailable"`
-(retryable) once `init(consequential_grace_s=60)` (15 to 60, never longer than a halt lasts) has passed
+(retryable) once `init(consequential_grace_s=60)` (15 to 60) has passed
 since the last answered hello, and, while still `connecting`, unless the cache was last confirmed within
 15 minutes. The cache is rewritten at most once a minute by a hello that confirms the same policy, so its
 `written_at` means "last confirmed". A process with no plane configured is unaffected.
@@ -241,7 +241,7 @@ Each is the same object as its replacement; the first use in a process emits one
 
 ## Metadata
 
-- `__version__` — `1.0.0a2`.
+- `__version__` — `1.0.0a3`.
 
 ## Removed in S1
 

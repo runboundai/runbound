@@ -1,0 +1,10410 @@
+{
+ "about": "Generated against the plane's policy.tool_rows.validate_fields (tests-workspace/test_row_check_fixture_is_the_planes.py keeps it current). The SDK's runbound._row_check must agree on every case.",
+ "cases": [
+  {
+   "body": {
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "state": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000001
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 0
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": -1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": "5"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 2.5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "week"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "planet",
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "burst": 9,
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": "5",
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": true,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": 0
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "later"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": ""
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604801
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 0
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": -5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 30.0
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": "30"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "key:abc",
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     ""
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     " "
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": "ana"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x",
+     "x"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     1
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "  ana@acme.example  "
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "financial"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "destructive"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "privileged"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "scary"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "READ"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {amount}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{{x}}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.x:>10}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args._private}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.X}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{0}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "plain text"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "} stray"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{tool"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": ""
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "Order"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "a b"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": "order_id"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     1
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "x",
+     "x",
+     "x"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     ""
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_required": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_required": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_required": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_required": "true"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_required": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_required": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_required": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_required": "true"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_required": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_required": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_required": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_required": "true"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_required": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_required": false
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_required": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_required": "true"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "sync",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "deferred",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_mode": "later",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approval_timeout_s": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approval_timeout_s": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approval_timeout_s": 600
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approval_timeout_s": 604800
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": true,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": false,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_required": "true",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "approvers": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "approvers": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "approvers": [
+     "ana@acme.example"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "approvers": [
+     "@oncall"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 1,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 600,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approval_timeout_s": 604800,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "blocked": true
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "blocked": false
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "blocked": "yes"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "blocked": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [],
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [],
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "ana@acme.example"
+    ],
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "approvers": [
+     "@oncall"
+    ],
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": false,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": false,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "fail_mode": "closed"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "fail_mode": "open"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "fail_mode": "ajar"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "fail_mode": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": false,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": false,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": true,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": true,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": false,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "blocked": false,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": false,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": "yes",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "blocked": 1,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "headline": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "headline": "Refund {args.order_id}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "headline": "Approve {tool} on {service}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "headline": "{args.a.b}"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "closed",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "open",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": "ajar",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "fail_mode": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": null,
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "identifies": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "identifies": []
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "identifies": [
+     "_private"
+    ]
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Approve {tool} on {service}",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.a.b}",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": null,
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "max_calls_per_session": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "max_calls_per_session": 1
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "max_calls_per_session": 5
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "max_calls_per_session": 1000000
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [],
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [],
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [],
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [],
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ],
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "_private"
+    ],
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "quota": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    }
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    }
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 5,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "max_calls_per_session": 1000000,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": null,
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": null,
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": null,
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": null,
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "risk_class": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "risk_class": "read"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "risk_class": "write"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "risk_class": "external"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "window": "hour"
+    },
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 5,
+     "per": "key",
+     "window": "day"
+    },
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "quota": {
+     "limit": 0,
+     "window": "hour"
+    },
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": null,
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": null,
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": null,
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": null,
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "read",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "read",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "read",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "read",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "write",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "write",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "write",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "write",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "external",
+    "state": "dry_run"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "external",
+    "state": "enforced"
+   },
+   "params": null,
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "risk_class": "external",
+    "state": "bogus"
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "risk_class": "external",
+    "state": null
+   },
+   "params": null,
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}"
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.amount} for {args.order_id}"
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order}"
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.order_id.x}"
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{tool}"
+   },
+   "params": [],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null
+   },
+   "params": [],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": []
+   },
+   "params": [],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id",
+     "customer"
+    ]
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "customer"
+    ]
+   },
+   "params": [],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}"
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.amount} for {args.order_id}"
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order}"
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.order_id.x}"
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{tool}"
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": []
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id",
+     "customer"
+    ]
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "customer"
+    ]
+   },
+   "params": [
+    "order_id"
+   ],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order_id}"
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.amount} for {args.order_id}"
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "Refund {args.order}"
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "headline": "{args.order_id.x}"
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": "{tool}"
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "headline": null
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": []
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id"
+    ]
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": true
+  },
+  {
+   "body": {
+    "identifies": [
+     "order_id",
+     "customer"
+    ]
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": false
+  },
+  {
+   "body": {
+    "identifies": [
+     "customer"
+    ]
+   },
+   "params": [
+    "order_id",
+    "amount"
+   ],
+   "plane_accepts": false
+  }
+ ]
+}

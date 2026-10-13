@@ -108,9 +108,14 @@ SERVICE_TOKEN = "s" * 64
 
 
 @contextlib.contextmanager
-def launch(directory):
-    """A plane process on a throwaway SQLite file under ``directory``; killed on exit."""
+def launch(directory, app=None, extra_pythonpath=None, extra_env=None):
+    """A plane process on a throwaway SQLite file under ``directory``; killed on exit.
+
+    ``app`` (``module:factory``) replaces the plane's own factory, with ``extra_pythonpath`` put in front of the plane
+    directory so a test can wrap the real app (see ``test_policy_unserved_plane.py``); ``extra_env`` adds to the environment.
+    """
     python, plane_dir, plane_app = _plane_target()
+    plane_app = app or plane_app
     port = _free_port()
     db = directory / "plane.db"
     env = {
@@ -125,7 +130,8 @@ def launch(directory):
         "POLL_S": "1",
         "LOG_LEVEL": "WARNING",
         "MAINTENANCE_INTERVAL_S": "0",
-        "PYTHONPATH": plane_dir,
+        "PYTHONPATH": os.pathsep.join([str(extra_pythonpath), plane_dir]) if extra_pythonpath else plane_dir,
+        **(extra_env or {}),
     }
     log = directory / "plane.log"
     with open(log, "w") as out:
@@ -198,19 +204,22 @@ def test_the_new_sdk_talks_to_the_current_plane(plane, sdk):
         return status == 200 and {"lookup", "wipe_database"} <= names
     _until(inventory, what="the plane's tool inventory")
 
-    # 4. policy fetch: roll out an org policy; the next heartbeat announces its version and
-    #    the worker fetches it and applies it.
-    status, created = plane.request("POST", "/v1/admin/policies", {
-        "service": "it-service", "body": {"deny": ["send_email"]}, "state": "enforced"})
-    assert status == 200, created
-    _until(lambda: runbound.plane_status().applied_policy_version is not None, what="the policy fetch")
-    assert shared.policy() is not None and "send_email" in shared.policy().get("deny", [])
+    gone = plane.request("POST", "/v1/admin/policies", {"service": "it-service", "body": {"deny": ["x"]}, "state": "enforced"})
+    assert gone[0] == 410 and gone[1]["error"] == "policies_removed"  # H6: the organisation document is retired
+    # 4. policy fetch: roll out a console row for a tool; the next heartbeat announces its version and
+    #    the worker fetches it and applies it. (H6: the organisation document is no longer served: 410.)
+    status, created = plane.request("POST", "/v1/admin/tool-policies", {"service": "it-service", "tool": "send_email", "blocked": True})
+    assert status in (200, 201), created
+    status, rolled = plane.request("POST", "/v1/admin/tool-policies/it-service/send_email/rollout", {"state": "enforced", "comment": "test"})
+    assert status == 200, rolled
+    _until(lambda: shared.row_for("send_email"), what="the row for send_email")
 
     @runbound.tool(effects={"read"}, reviewed=True)
     def send_email(to): ...
 
-    with pytest.raises(runbound.PolicyViolation):
-        send_email("a@example.com")  # refused by the org policy the plane served
+    with pytest.raises(runbound.ExecutionRefused) as blocked:
+        send_email("a@example.com")  # refused by the console row the plane served
+    assert blocked.value.reason == "tool_blocked"
 
     # 5. a refused tool reaches the plane as /v1/events.
     with pytest.raises(runbound.ExecutionRefused):

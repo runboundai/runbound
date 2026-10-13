@@ -167,6 +167,7 @@ def test_with_no_plane_an_approval_tool_is_refused_at_once_and_the_body_never_ru
         wire(1.0)
     assert caught.value.reason == "approval_unavailable" and ran == []
     assert caught.value.decision.boundary == "approval"
+    assert caught.value.retryable is True and runbound.is_retryable(caught.value)  # no approver is reachable now: transient, like plane_unavailable
 
 
 def test_a_tool_without_approval_is_untouched_by_all_of_it():
