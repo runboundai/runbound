@@ -25,7 +25,9 @@ HEADLINE_MAX = 300
 #: The restriction fields of a row, and the labels the plane adds when it serves one (never restrictions).
 FIELDS = ("state", "blocked", "max_calls_per_session", "quota", "approval_required", "approval_mode", "approval_timeout_s",
           "approvers", "risk_class", "fail_mode", "headline", "identifies")
-SERVED_EXTRAS = ("tool", "version", "orphaned", "by", "at")
+#: ``rule_revision`` (WIRE-VPC 1, 3): the tool row's per-tool ordinal, served only to a worker that reported ``revisions_v1``. It names the revision a record was made under;
+#: it decides nothing, so it is accepted on a row and on the row's ``candidate`` and read nowhere else.
+SERVED_EXTRAS = ("tool", "version", "orphaned", "by", "at", "rule_revision")
 #: Served only to a worker that reported ``lines`` (WIRE-TR2 §3); their bodies are read by :mod:`runbound.lines`, not here.
 LINES_KEYS = ("lines", "otherwise", "candidate")
 
@@ -61,6 +63,8 @@ def problem(raw: Any) -> "str | None":
     unknown = sorted(str(k) for k in raw if k not in FIELDS and k not in SERVED_EXTRAS and k not in LINES_KEYS)
     if unknown:
         return f"unknown field(s): {', '.join(unknown)}"
+    if "rule_revision" in raw and not _whole(raw["rule_revision"], 1, 10_000_000):
+        return "rule_revision must be a whole number from 1"
     if raw.get("otherwise") is not None and raw["otherwise"] not in ("inherit", "allow", "ask", "deny"):
         return "otherwise is not inherit, allow, ask or deny"
     if "state" in raw and raw["state"] not in STATES:

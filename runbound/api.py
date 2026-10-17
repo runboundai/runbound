@@ -37,7 +37,7 @@ from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 from uuid import uuid4
 
-from . import _coverage, approvals as approvals_module, hooks as hooks_module, local_events, results as results_module, spans
+from . import _coverage, approvals as approvals_module, hooks as hooks_module, local_events, policy_rows as policy_rows_module, results as results_module, spans
 from .config import RunboundConfig
 from .engine import ERROR_MAX_CHARS, Engine
 from .events import Event
@@ -517,14 +517,26 @@ def _count_active(delta: int) -> None:
         _ACTIVE = max(0, _ACTIVE + delta)
 
 
-def _row_may_wait(tool_name: str) -> bool:
-    """Whether the tool's dashboard row can make the pre-chain wait on the plane (an approval, a quota take).
+def _may_wait(tool_name: str, effects: "frozenset | None") -> bool:
+    """Whether this tool's pre-chain can make the call wait on the plane (an approval, a quota take), decided by its row or by the service defaults.
 
-    Read at call time, like the engine's own lookup; a row that arrives in between costs one blocking call.
+    The same two decisions the engine takes, read at call time without running anything: the dashboard row's own approval or quota, and the
+    service defaults when no line decides the tool (no row, an inheriting row, or a conditional row whose lines may all miss the call). A defaults
+    ask waits exactly as a row's ask does. Defaults that allow or deny, a service without defaults, and a tool that has no row never wait, so
+    they stay on the loop. A row that arrives in between costs one blocking call.
     """
     engine, _ = _active()
-    row = None if engine is None else getattr(engine.shared, "row_for", lambda _tool: None)(tool_name)
-    return row is not None and bool(row.approval_required or row.quota)
+    if engine is None:
+        return False
+    shared = engine.shared
+    row = getattr(shared, "row_for", lambda _tool: None)(tool_name)
+    if row is not None and (row.approval_required or row.quota):
+        return True
+    if row is not None and not (row.inherit or (row.conditional and row.otherwise in (None, "inherit"))):
+        return False
+    base = None if row is None else dataclasses.replace(row, inherit=True)
+    decided = policy_rows_module.apply_defaults(base, tool_name, effects, shared)
+    return decided is not None and decided is not base and bool(decided.approval_required or decided.quota)
 
 
 def _active_count() -> int:
@@ -766,7 +778,8 @@ def tool(
         _coverage.tool_decorated(tool_name)
         reported = dataclasses.replace(rules, approval="required", approval_mode=spec.mode) if spec else rules
         _coverage.tool_declared(
-            tool_name, func, reported, polling=polling, idempotent=idempotent, retryable=retryable
+            tool_name, func, reported, polling=polling, idempotent=idempotent, retryable=retryable,
+            deferred=bool(spec and spec.mode == "deferred"),
         )
 
         def begin(args: tuple, kwargs: dict) -> tuple:
@@ -780,7 +793,7 @@ def tool(
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
                 try:
-                    if spec is not None or _row_may_wait(tool_name):  # a sync approval or a quota take blocks: keep it off the event loop
+                    if spec is not None or _may_wait(tool_name, rules.effects):  # a sync approval or a quota take blocks, a row's or the service defaults': keep it off the event loop
                         args, kwargs, tags, started = await asyncio.to_thread(begin, args, kwargs)
                     else:
                         args, kwargs, tags, started = begin(args, kwargs)

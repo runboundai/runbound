@@ -86,6 +86,22 @@ def test_a_destructive_tool_with_no_row_asks_for_approval_with_the_defaults_wait
     assert read() == "ok" and len(asked(shared)) == 1  # read is allow
 
 
+class Unreachable(Shared):
+    """A plane that was reached, held enforced defaults, and is now gone: the link is degraded, so a NEW approval cannot be requested."""
+
+    def approval_refusal(self):
+        return "the control plane link is degraded"
+
+
+def test_an_unruled_destructive_tool_the_defaults_ask_for_is_refused_approval_unavailable_when_the_plane_is_gone_and_its_body_never_runs():
+    shared = start(Unreachable(defaults=served()))
+    wipe, ran = make_tool("wipe", {"destructive"})
+    look, looked = make_tool("look", {"read"})
+    assert reason_of(wipe) == "approval_unavailable" and ran == []
+    assert asked(shared) == [], "nobody could be asked"
+    assert look() == "ok" and looked == [1], "a read tool runs either way"
+
+
 def test_a_tool_that_declares_nothing_takes_the_unclassified_default():
     shared = start(Shared(defaults=served()))
     act, _ = make_tool("mystery", None)

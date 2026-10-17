@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runbound"
-version = "1.0.0a3"
+version = "1.0.0a4"
 description = "A policy boundary around the tools an AI agent can call: per-tool policy, quotas, human approvals, fail-closed on plane loss, OpenTelemetry spans."
 readme = "README.md"
 requires-python = ">=3.10"

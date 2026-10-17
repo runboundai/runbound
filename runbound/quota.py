@@ -15,7 +15,11 @@ every kind passes through it, so leases plus takes never exceed the limit for an
   (:data:`OPEN_SHARE_DIVISOR`-th of the limit) per heartbeat period.
 * **Approvals.** A tool that will ask a person does not take here: ``POST /v1/approvals`` takes the unit
   before any approval row exists (a full quota is its 429), and the approval object's ``quota`` says so.
-* **dry_run** rows are counted like enforced ones; the call is never refused, ``would_refuse`` is recorded.
+* **dry_run** rows take NO unit and spend no lease: a dry run never changes a live counter (VPC-02, register C4). The window's live use is read with
+  ``POST /v1/quota/take`` ``{"peek": true}`` (the plane answers from the dry-run row's SIMULATION counter, never the live one) and this worker adds the dry-run
+  calls IT has seen in that window, so the call is never refused and ``would_refuse`` is recorded when the quota would have been over. Another worker's dry-run
+  calls are in the plane's simulation counter only if that worker still takes (a released SDK); a worker of this SDK counts its own, so across several of them the
+  evidence is a lower bound.
 
 Order (tool-policy.md §2): blocked, session cap, **quota**, approval. Nothing here runs for a call that an
 earlier rule refused, so a refused call never consumes a unit.
@@ -54,6 +58,7 @@ class Leases:
         self._held: dict = {}  # tool -> {"start": str, "end": float, "units": int}
         self._exhausted: dict = {}  # (tool, key) -> epoch until which the window is known full
         self._open_budget: dict = {}  # tool -> [period_started_monotonic, spent]
+        self._simulated: dict = {}  # (tool, key) -> [window_start, calls a dry-run row saw in that window]
 
     def apply(self, leases: Any) -> None:
         """The hello reply's ``quota_leases``: add ``granted``; drop everything when ``window_start`` moved.
@@ -100,6 +105,18 @@ class Leases:
                 return True
             return False
 
+    def simulate(self, tool: str, key: str | None, window_start: Any) -> int:
+        """Count one call a dry-run row saw in the window that began at ``window_start`` and return how many calls it saw BEFORE this one (the count restarts when
+        the window moves). Only a number held here: it never reaches the plane and never touches a lease."""
+        with self._lock:
+            held = self._simulated.get((tool, key))
+            if held is None or held[0] != window_start:
+                held = [window_start, 0]
+            before = held[1]
+            held[1] = before + 1
+            self._simulated[(tool, key)] = held
+            return before
+
     def exhausted_for(self, tool: str, key: str | None) -> float | None:
         """Seconds until a window known full ends, or ``None``."""
         with self._lock:
@@ -139,6 +156,50 @@ def _warn_unverifiable(status: Any, tool: str) -> None:
                      "so the row's fail mode decides", tool, status)
 
 
+def _simulate(engine: Any, session: Any, call: Any, row: Any, quota: dict, key: str | None, tags: list | None) -> None:
+    """What a dry-run quota row says about this call: would a live row have refused it? Nothing is taken and nothing is leased (the plane's peek reads the counter,
+    never moves it); a dry run never refuses and never waits.
+
+    A plane that cannot be asked (the link is down, an answer that is not a peek's, no such quota) is read the way a live row reads it, as ``quota_plane_unavailable``
+    (recorded as would-refuse, as before). A plane that has no peek at all (one that predates ``cfg_hash``) would TAKE a unit for the same body, so it is never asked:
+    no unit, and no evidence from the plane's counter."""
+    from .policy_rows import _refuse
+
+    shared, leases = engine.shared, engine.shared.quota
+    limit = int(quota["limit"])
+    period = float(engine.config.control_plane_poll_s)
+
+    def unverifiable() -> None:
+        if row.fail_mode == "open" and leases.open_allows(call.name, limit, period):
+            return
+        _refuse(engine, session, call, row, "quota_plane_unavailable",
+                f"tool {call.name!r} could not be checked against its quota (a dry run: the call ran): the control plane could not be asked", tags, period)
+
+    if getattr(shared, "link_state", lambda: "connected")() != "connected":
+        unverifiable()
+        return
+    if not getattr(shared, "quota_peek_supported", lambda: True)():
+        return  # a plane with no peek would take a unit: a dry run never moves a live counter
+    body = {"tool": call.name, "service": engine.config.service, "peek": True}
+    if key is not None:
+        body["key"] = key
+    status, data = shared.approvals("POST", "/v1/quota/take", body, timeout=3.0)
+    if status != 200 or not isinstance(data, dict):
+        if status in (400, 404):
+            _warn_unverifiable(status, call.name)
+        unverifiable()
+        return
+    limit = int(data.get("limit") or limit)
+    remaining = data.get("remaining")
+    live_used = limit - remaining if isinstance(remaining, int) and not isinstance(remaining, bool) else 0
+    already = leases.simulate(call.name, key, data.get("window_start"))
+    if data.get("granted") is False or live_used + already + 1 > limit:
+        wait = data.get("retry_after_s")
+        wait = float(wait) if isinstance(wait, (int, float)) and not isinstance(wait, bool) else None
+        _refuse(engine, session, call, row, "quota_exceeded",
+                f"tool {call.name!r} would be over its quota of {limit} per {quota.get('window')} (a dry run: the call ran)", tags, wait)
+
+
 def admit(engine: Any, session: Any, call: Any, row: Any, will_ask_person: bool, tags: list | None) -> None:
     """The quota stage for one call. Raises (or, for a dry_run row, records ``would_refuse``) when over."""
     quota = getattr(row, "quota", None)
@@ -155,6 +216,9 @@ def admit(engine: Any, session: Any, call: Any, row: Any, will_ask_person: bool,
     if per_key and key is None:
         return  # no session key to count under: nothing to hold this call to
     limit = int(quota["limit"])
+    if getattr(row, "dry_run", False):
+        _simulate(engine, session, call, row, quota, key, tags)  # a dry run takes no unit and spends no lease
+        return
     if not per_key and leases.spend(call.name):
         return
     wait = leases.exhausted_for(call.name, key)

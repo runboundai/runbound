@@ -17,6 +17,10 @@ class Clock:
         return self.t
 
 
+#: What a plane serves a service that has nothing: an empty policy. A worker that reads it holds a policy (an empty one); one whose read fails holds none.
+EMPTY_POLICY = {"version": 0, "policy": None, "rows": [], "rows_hash": "h"}
+
+
 class FakeClient:
     """A plane double that is never reached: ``policy()`` serves ``served`` once, nothing else answers."""
 

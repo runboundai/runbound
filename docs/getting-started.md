@@ -8,7 +8,7 @@ console, quotas, approvals and a fleet-wide view.
 **1. Install.**
 
 ```bash
-pip install runbound --pre      # 1.0.0a3 is an alpha; without --pre you get 0.11.2, which ignores console rules
+pip install runbound --pre      # 1.0.0a4 is an alpha; without --pre you get 0.11.2, which ignores console rules
 ```
 
 There are no runtime dependencies: stdlib only. There are two optional extras:
@@ -112,9 +112,14 @@ runbound.init(
     token="rb_...",
     control_plane_url="https://plane.example",
     service="payments",
+    worker_id="payments-7f9c",   # a stable name: the pod or host name
     approval_secret="...",   # or RUNBOUND_APPROVAL_SECRET, for deferred approvals
 )
 ```
+
+Set `worker_id` to a stable name (a pod or host name) so a restart is recognised as
+the same worker; each process also has its own boot id, which tells the processes
+apart. Unset, it is `<hostname>:<pid>:<random>`, a new name on every start.
 
 The SDK says hello to the plane every `poll_s` seconds, fetches the policy when it
 changes, and keeps the last policy on disk so a restart is enforced before the

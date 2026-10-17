@@ -42,7 +42,7 @@ def test_the_hello_reports_exactly_the_features_the_sdk_enforces_on_every_hello(
     shared.apply_hello(HelloReply())
     later = shared._hello_payload()
     for payload in (first, later):
-        assert payload["policy_features"] == ["lines", "halt_tools_v1", "defaults_v1", "conditions_v1", "repetition_v1", "grants_v1"]
+        assert payload["policy_features"] == ["lines", "halt_tools_v1", "defaults_v1", "conditions_v1", "repetition_v1", "grants_v1", "acceptance_v1", "revisions_v1"]
         assert payload["policy_unsupported"] == []
     from runbound import lines
 

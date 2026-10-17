@@ -33,12 +33,20 @@ link to `connected`.
 |---|---|
 | `read`, `write` (with another tag), `external` | run in every mode, on the cache of any age, once the worker has had a first answered hello or loaded a sealed cache. Before that, nothing runs: they refuse `policy_unavailable` (retryable). |
 | a bare `write` (no other tag) | unclassified for fail mode: runs on a valid cache, refuses `plane_unavailable` once the worker holds no policy within 24 hours. |
-| `financial`, `destructive`, `privileged`, or no class at all | run until `consequential_grace_s` has passed since the last answered hello (or since `init()`), then refuse with `reason="plane_unavailable"`. Before the first hello is answered they also need a cache confirmed within the last 15 minutes; with none they refuse at once. The same holds for a worker whose hellos are answered but that has not been served the policy the plane announced (every policy fetch failed) and holds no cache: they refuse until the first policy arrives. A plane that announces no policy for the service gates nothing. |
+| `financial`, `destructive`, `privileged`, or no class at all | run until `consequential_grace_s` has passed since the last answered hello (or since `init()`), then refuse with `reason="plane_unavailable"`. Before the first hello is answered they also need a cache confirmed within the last 15 minutes; with none they refuse at once. The same holds for a worker whose hellos are answered but that has not been served the policy the plane announced (every policy fetch failed) and holds no cache: they refuse until the first policy arrives. The worker reads its policy on its first answered hello, whatever version that hello announced, so these tools are released only with the policy (and the service defaults) in hand; a service that really has no policy is served an empty one and gates nothing. |
 
 `consequential_grace_s` is an `init()` option from 15 to 60 seconds, default 60,
 so with the default these tools stop exactly when the mode becomes
 `unavailable`. A shorter grace stops them earlier, while the mode may still read
 `connected` or `degraded`.
+
+**A service with enforced service defaults** (every new service starts with the
+standard defaults enforced) does not use the grace: its sealed policy holds for
+its 24-hour validity window. A destructive tool that a console row **allows**
+keeps running while the plane is away; one with **no row** is decided by the
+defaults, which ask a person, so it is refused `approval_unavailable` because
+nobody can be asked. Give a tool an explicit row if it must stop, or keep
+running, on plane loss.
 
 A tool's classes here include a console row's `risk_class` (see
 [Per-tool policy](policy.md#console-rows)), so a row can make a `read` tool

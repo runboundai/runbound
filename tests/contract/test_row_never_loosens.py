@@ -97,12 +97,12 @@ def test_a_row_never_turns_a_capability_refusal_into_a_pass_for_any_declared_set
 
 def test_an_unclassified_tool_stays_refused_by_a_narrowed_capability_whatever_its_row_says(tmp_path):
     import runbound
-    from engine_support import Clock, engine_on_link, outcome_of
+    from engine_support import EMPTY_POLICY, Clock, engine_on_link, outcome_of
 
     from runbound.plane_types import HelloReply
 
     for risk_class in ("read", "write", "external"):
-        shared = engine_on_link(tmp_path / risk_class, clock=Clock(), capabilities={"destructive": "deny"})
+        shared = engine_on_link(tmp_path / risk_class, clock=Clock(), served=EMPTY_POLICY, capabilities={"destructive": "deny"})
         shared.apply_hello(HelloReply())
         shared._set_rows([{"tool": "send", "state": "enforced", "risk_class": risk_class}], "h")
 

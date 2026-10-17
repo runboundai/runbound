@@ -880,7 +880,8 @@ def _run(spec: dict, rows: list, plane_spec: dict, seq: list, init: dict) -> dic
         with tempfile.TemporaryDirectory(prefix="rb-legacy-") as cache_dir:
             runbound.init(service=SERVICE, control_plane_poll_s=3600, cache_dir=cache_dir, **init)
             envelope = {"version": 1, "policy": plane_spec.get("policy"), "dry_run": bool(plane_spec.get("policy_dry_run")),
-                        "rows": copy.deepcopy(rows), "rows_hash": "legacy"}
+                        "rows": copy.deepcopy(rows), "rows_hash": "legacy",
+                        "cfg_hash": "legacy"}  # a plane that shipped the quota peek (VPC B6b): a dry-run quota row is read with it, never with a take
             plane = FakePlane(envelope, plane_spec.get("take", "granted"), plane_spec.get("approve", "approved"))
             clock = [1000.0]
             shared = RemoteState(plane, None, api._ENGINE.config, now=lambda: clock[0])
@@ -913,7 +914,7 @@ def _run(spec: dict, rows: list, plane_spec: dict, seq: list, init: dict) -> dic
                 made = plane.snapshot()[before_calls:]
                 results = runbound.tool_results(1000)[before_results:]
                 asks = [b for _m, p, b in made if p == "/v1/approvals"]
-                takes = [b for _m, p, b in made if p == "/v1/quota/take"]
+                takes = [b for _m, p, b in made if p == "/v1/quota/take" and not b.get("peek")]  # a peek reads the counter: it takes nothing
                 outcome.update(
                     ran=len(ran) > before_ran,
                     would_refuse=sorted(t for r in results for t in (r.get("tags") or []) if str(t).startswith("would_refuse")),

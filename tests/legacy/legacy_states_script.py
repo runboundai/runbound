@@ -145,7 +145,9 @@ def run_case(state_id: str, class_name: str, defaults: "dict | None" = None) -> 
             path = cache_module.resolve(str(cache_dir), URL, SERVICE)
             cache_module.write(path, TOKEN, cache_module.body_for(SERVICE, 1, None, False, "h", rows or [], service_defaults=defaults))
         clock = _Clock()
-        served = None if defaults is None else {"version": 1, "policy": None, "rows": [], "rows_hash": "h", "service_defaults": defaults}
+        # A plane with nothing to serve a service answers the policy read with an EMPTY policy (the first answered hello reads the policy whatever version it announced);
+        # a read that fails would leave the worker holding none, which is a different state and not what these cases capture.
+        served = {"version": 0, "policy": None, "rows": [], "rows_hash": "h"} if defaults is None else {"version": 1, "policy": None, "rows": [], "rows_hash": "h", "service_defaults": defaults}
         shared = RemoteState(_Plane(served), None, config, now=clock)
         if age_s is not None:
             shared._cache_written_at = time.time() - age_s

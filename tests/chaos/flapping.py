@@ -66,8 +66,13 @@ class FlappingPlane:
     def events(self, batch):  # pragma: no cover - the exporter is not wired here
         return False
 
-    def policy(self, service):  # pragma: no cover - the cache carries the policy in these tests
-        return None
+    def policy(self, service):
+        """What a healthy plane serves a service with no rows and no defaults: an empty policy. (An unreachable one fails the read, as the hello fails.)
+        The first answered hello reads the policy whatever version it announced, and a worker that could not read one refuses consequential classes."""
+        phase = self.phase()
+        if phase.kind != "ok":
+            return None
+        return {"version": 0, "dry_run": False, "policy": None, "rows": [], "rows_hash": "empty", "cfg_hash": "empty"}
 
 
 class Rig:

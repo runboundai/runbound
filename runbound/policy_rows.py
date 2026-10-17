@@ -80,6 +80,10 @@ class Row:
     repetition: "int | None" = None
     #: A dry-run revision served beside this enforced one (WIRE-TR2 §3): evaluated only to record ``would_refuse``, never to decide.
     candidate: "Row | None" = None
+    #: The per-tool ordinal the plane served this row under (``rule_revision``, ``revisions_v1``), else ``None``; and, on a row the service defaults decided
+    #: (or on a defaults candidate), the defaults revision that did. They name what a decision record was made under; they decide nothing.
+    rule_revision: "int | None" = None
+    defaults_revision: "int | None" = None
 
     @property
     def dry_run(self) -> bool:
@@ -93,8 +97,11 @@ def _build(raw: dict, tool: str, state: str) -> Row:
     if has_lines:
         lines = lines_module.parse_lines(raw["lines"])
         decided = lines_module.plan(lines, raw.get("otherwise"), static=True)
-        if RANK_DECISION[lines_module.legacy_decision(raw)] > RANK_DECISION[decided.decision]:
-            # The legacy view is the plane's most restrictive reading of the lines; one stricter than the lines themselves means
+        # The strictest outcome the row can produce: the strictest line (the static reading treats every line as matching, so the row's ``otherwise`` never applies in it) AND
+        # the explicit ``otherwise``, which is what decides a call no line matches. "Allow when ... otherwise deny" can deny; its legacy view says so.
+        reachable = max(RANK_DECISION[decided.decision], RANK_DECISION.get(raw.get("otherwise"), 0))
+        if RANK_DECISION[lines_module.legacy_decision(raw)] > reachable:
+            # The legacy view is the plane's most restrictive reading of the lines and the otherwise; one stricter than both means
             # the lines payload is looser than the plane meant. Never run on it.
             raise lines_module.LineError(lines_module.LEGACY_VIEW_MISMATCH, "the legacy view of this row is stricter than its lines")
     else:
@@ -120,6 +127,7 @@ def _build(raw: dict, tool: str, state: str) -> Row:
         inherit=not lines and raw.get("otherwise") in (None, "inherit"),
         conditional=lines if any(line.conditional for line in lines) else (), otherwise=raw.get("otherwise") if has_lines else None,
         repetition=decided.repetition,
+        rule_revision=raw["rule_revision"] if isinstance(raw.get("rule_revision"), int) and not isinstance(raw.get("rule_revision"), bool) else None,
     )
     candidate = raw.get("candidate")
     if isinstance(candidate, dict):
@@ -152,7 +160,7 @@ def apply_defaults(row: "Row | None", tool: str, effects: "frozenset | None", sh
         base, blocked=base.blocked or resolved.decision == "deny", approval_required=base.approval_required or resolved.decision == "ask",
         approval_mode=base.approval_mode or ("sync" if resolved.decision == "ask" else None),
         approval_timeout_s=base.approval_timeout_s if resolved.wait_s is None else resolved.wait_s,
-        contributors=("default:service",), requirements=resolved.requirements, plan_reason="fallback")
+        contributors=("default:service",), requirements=resolved.requirements, plan_reason="fallback", defaults_revision=getattr(defaults, "revision", None))
     if defaults.state == "dry_run":
         return dataclasses.replace(base, candidate=dataclasses.replace(gate, state="dry_run", candidate=None))
     if defaults.candidate is not None and base.candidate is None:  # a dry-run revision beside the enforced one: record only
@@ -160,7 +168,8 @@ def apply_defaults(row: "Row | None", tool: str, effects: "frozenset | None", sh
         shadow = dataclasses.replace(
             base, blocked=base.blocked or seen.decision == "deny", approval_required=base.approval_required or seen.decision == "ask",
             approval_mode=base.approval_mode or ("sync" if seen.decision == "ask" else None), contributors=("default:service",),
-            requirements=seen.requirements, plan_reason="fallback", state="dry_run", candidate=None)
+            requirements=seen.requirements, plan_reason="fallback", state="dry_run", candidate=None,
+            defaults_revision=getattr(defaults.candidate, "revision", None))
         return dataclasses.replace(gate, candidate=shadow)
     return gate
 def resolve_call(row: "Row | None", args: "dict | None", context: dict) -> "Row | None":
@@ -299,6 +308,16 @@ def _refuse(engine: Any, session: Any, call: Any, row: Row, code: str, reason: s
     engine.refuse(session, anomaly, decision, reacted="blocked")
 
 
+def _would_ask(engine: Any, session: Any, call: Any, row: Row) -> None:
+    """File that a live row would have asked a person before this call (a dry run, or a candidate beside the enforced row). Nothing is asked and nothing is
+    refused; the event never pages anyone (its reaction stays ``dry_run``)."""
+    from .engine import _anomaly, _stamp_decision
+
+    reason = f"tool {call.name!r} would ask a person before it runs"
+    anomaly = _anomaly(session, "policy", "info", f"Dry run: would ask a person: {reason}{{whose}}", {"tool": call.name, "rule": "would_ask", "origin": "org", "state": row.state})
+    engine._alert(_stamp_decision(anomaly, admission.row("approval", reason), session=session), session, "dry_run", refusal=True)
+
+
 def enforce(engine: Any, session: Any, call: Any, row: "Row | None", tags: list | None) -> None:
     """``blocked`` then the session cap, in that order (tool-policy.md §2). Consumes nothing."""
     if row is None:
@@ -328,12 +347,46 @@ def enforce(engine: Any, session: Any, call: Any, row: "Row | None", tags: list 
             pass
         else:
             _refuse(engine, session, call, row, "repetition_exceeded", said, tags)
-    if row.dry_run and row.approval_required and tags is not None:
-        tags.append("would_ask:approval")  # a dry run asks nobody; it records that a live rule would have
+    if row.dry_run and row.approval_required:
+        # A dry run asks nobody; it records that a live rule would have, as evidence the console can count: the tag on this call's result, and an event filed the way a
+        # would-refuse is (reaction ``dry_run``, rule ``would_ask``) so the plane's evidence reads it (VPC-02: a dry run of an ask rule is not "0 evaluations").
+        _would_ask(engine, session, call, row)
+        if tags is not None:
+            tags.append("would_ask:approval")
     if row.candidate is not None and not row.dry_run:
         # A candidate (dry-run) revision beside the enforced one: what it would have refused is recorded, the call goes on. It never
         # decides, never moves a live counter and never asks anyone (its quota and approval are not evaluated: R3 simulates those).
         enforce(engine, session, call, row.candidate, tags)
+
+
+def supersede(engine: Any, session: Any, call: Any, row: "Row | None", tags: list | None) -> None:
+    """R5 (VPC-07): a call a person approved, or a grant admitted, re-checks the CURRENT accepted policy before it runs.
+
+    ``row`` is resolved afresh by the caller. Anything that now refuses the call (a block, a deny line, a rule this SDK cannot read, the
+    session cap) refuses it as ``approval_superseded``: an approval alone never runs a call the policy no longer allows. Consumes nothing.
+    """
+    if row is None or row.dry_run:
+        return
+    why = code = contributor = None
+    if row.unsupported is not None:
+        why, code = f"a console rule this SDK cannot interpret safely ({row.unsupported})", "policy_unsupported"
+    elif row.refuse is not None:
+        from .engine import _LIMIT_REFS
+
+        why, code = row.refuse[1], row.refuse[0]
+        contributor = _LIMIT_REFS.get(code) or next((c for c in row.contributors if c != "code:approval"), None)
+    elif row.blocked:
+        why, code = "it is now blocked by policy", "tool_blocked"
+        contributor = next((c for c in row.contributors if c != "code:approval"), None)
+    elif row.max_calls is not None:
+        used = session.counted_key(call.name, ",".join(row.matched)) if row.conditional else session.counted_calls(call.name)
+        if used > row.max_calls:
+            why, code, contributor = f"it has been called {used} times in this session; the limit is {row.max_calls}", "session_max_calls", "limit:session_cap"
+    if why is not None:
+        # WIRE-VPC 12e: the re-check phase names the refusal reason itself and the one contributor that refused (``reason_code`` stays approval_superseded).
+        engine.note_recheck(recheck_reason=code, recheck_contributor=contributor)
+        _refuse(engine, session, call, row, "approval_superseded",
+                f"tool {call.name!r} was approved, but the policy changed before it ran and now refuses it: {why}", tags)
 
 
 def rows_hash(rows: list) -> str:

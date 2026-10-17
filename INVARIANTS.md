@@ -174,12 +174,16 @@ Terms: a **consequential** tool carries a `financial`, `destructive` or `privile
     other tag) counts as unclassified and refuses `plane_unavailable` only when the worker holds no policy within
     24 h. (A quota or an approval on that tool still needs the plane: 23, 25.) Before that first handshake or cache
     load no governed call runs: `read`, `write` and `external` refuse `policy_unavailable`, the other classes
-    `plane_unavailable`.
-    Asserted by: `tests/test_cache.py::test_read_write_external_run_on_the_cache_in_every_state`, `tests/test_cache.py::test_a_bare_write_is_unclassified_for_fail_mode_so_it_refuses_when_the_policy_is_unavailable`, `tests/contract/test_enforcement_floor.py::test_o_flr_4_no_governed_call_runs_before_the_first_handshake_or_sealed_cache_load`, `tests/test_cache.py::test_through_the_decorator_a_consequential_tool_refuses_and_a_read_tool_runs`, `tests/test_session_sync.py::test_a_plane_that_is_down_never_stops_a_tool`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs`
+    `plane_unavailable`. After the plane is lost, a destructive tool follows the service: with NO service defaults
+    it is refused `plane_unavailable` once `consequential_grace_s` has passed (33); with enforced service defaults
+    the sealed policy holds for its validity window and the grace does not apply, so a destructive tool an
+    operator's row ALLOWS keeps running, while an UNRULED one is decided by the defaults' ask and is refused
+    `approval_unavailable` (a new approval needs a connected link); a `read` tool runs either way.
+    Asserted by: `tests/test_cache.py::test_read_write_external_run_on_the_cache_in_every_state`, `tests/test_cache.py::test_a_bare_write_is_unclassified_for_fail_mode_so_it_refuses_when_the_policy_is_unavailable`, `tests/contract/test_enforcement_floor.py::test_o_flr_4_no_governed_call_runs_before_the_first_handshake_or_sealed_cache_load`, `tests/test_cache.py::test_through_the_decorator_a_consequential_tool_refuses_and_a_read_tool_runs`, `tests/test_session_sync.py::test_a_plane_that_is_down_never_stops_a_tool`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_refuses_a_destructive_tool_after_the_grace_where_the_service_has_no_defaults_and_a_read_tool_runs`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_does_not_refuse_a_destructive_tool_a_row_allows_while_the_service_holds_its_defaults`, `tests/test_service_defaults.py::test_an_unruled_destructive_tool_the_defaults_ask_for_is_refused_approval_unavailable_when_the_plane_is_gone_and_its_body_never_runs`, `tests/integration/test_plane_loss_real.py::test_killing_the_plane_refuses_an_unruled_destructive_tool_approval_unavailable_while_the_service_holds_its_defaults`
 
 33. **Consequential and unclassified tools refuse `plane_unavailable`** once
     `consequential_grace_s` (15 to 60, default 60) has passed since the last answered hello (or
-    start), and, before the first hello, unless the cache was confirmed within 15 minutes.
+    start) where the service holds no enforced defaults (with them the grace is inert: see 32), and, before the first hello, unless the cache was confirmed within 15 minutes.
     Asserted by: `tests/test_cache.py::test_consequential_tools_follow_the_grace_period_and_the_cache`, `tests/test_cache.py::test_a_cache_confirmed_more_than_15_minutes_ago_is_not_trusted_by_consequential_tools_at_boot`, `tests/test_cache.py::test_consequential_grace_s_is_configurable_between_15_and_60`, `tests/integration/test_plane_loss_real.py::test_a_destructive_tool_waits_for_a_hello_when_there_is_neither_a_hello_nor_a_cache`
 
 34. **A process with no plane configured has no plane gate.**

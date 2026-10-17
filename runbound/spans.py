@@ -223,6 +223,21 @@ def facts(
         out[n.DECISION_MATCHED_RULE_IDS] = matched
         out[n.DECISION_SERVICE_DEFAULT_REVISION] = record.get("service_default_revision")
         out[n.DECISION_POLICY_STATE] = record.get("policy_state")
-        out[n.DECISION_CONTRIBUTORS] = tuple(record.get("contributors") or ())
+        contributors = record.get("contributors") or ()
+        stamped = getattr(decision, "evaluation", None)
+        if refused and isinstance(stamped, dict) and stamped.get("contributors"):
+            contributors = stamped["contributors"]  # the refusal's own record: it also names the limit that refused the call
+        out[n.DECISION_CONTRIBUTORS] = tuple(contributors)
         out[n.SDK_VERSION] = record.get("sdk_version")
+        # VPC (R1, R-C): the revision and configuration the call ran under, and what the revision being tried made of it. Absent when not served / not being tried.
+        out[n.DECISION_RULE_REVISION] = record.get("rule_revision")
+        out[n.DECISION_CFG_HASH] = record.get("cfg_hash")
+        out[n.DECISION_BOOT_ID] = record.get("boot_id")
+        out[n.DECISION_CANDIDATE_OUTCOME] = record.get("candidate_outcome")
+        out[n.DECISION_CANDIDATE_REVISION] = record.get("candidate_revision")
+        out[n.DECISION_CANDIDATE_OF] = record.get("candidate_of")
+        for name, key in ((n.DECISION_RECHECK_RULE_REVISION, "recheck_rule_revision"), (n.DECISION_RECHECK_CFG_HASH, "recheck_cfg_hash"),
+                          (n.DECISION_RECHECK_POLICY_VERSION, "recheck_policy_version"), (n.DECISION_RECHECK_SERVICE_DEFAULT_REVISION, "recheck_service_default_revision"),
+                          (n.DECISION_RECHECK_CONTRIBUTOR, "recheck_contributor"), (n.DECISION_RECHECK_REASON, "recheck_reason")):
+            out[name] = record.get(key)
     return out

@@ -38,11 +38,28 @@ def tools():
     return drop_table, look
 
 
-def test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs(private_plane):  # noqa: F811
-    start(private_plane)
+def start_without_defaults(plane, service):
+    """A service that never adopted the standard defaults (one that predates them): the plane gives a NEW service enforced defaults the moment its first hello creates it,
+    so create it with a hello of our own and take the defaults row away before the worker under test starts. Its worker then keeps today's per-class grace."""
+    import sqlite3
+
+    status, body = plane.request("POST", "/v1/hello", {"service": service, "worker_id": "seed", "sdk_version": "0.11.2", "tools_hash": "x", "tools": []},
+                                 headers={"X-Runbound-Service": service, "X-Runbound-Worker": "seed"})
+    assert status == 200, body
+    connection = sqlite3.connect(str(plane.db))
+    removed = connection.execute("DELETE FROM service_defaults WHERE service = ?", (service,)).rowcount
+    assert removed == 1, "the seed hello should have created the service with its standard defaults"
+    connection.commit()
+    connection.close()
+    start(plane, service)
+
+
+def test_killing_the_plane_refuses_a_destructive_tool_after_the_grace_where_the_service_has_no_defaults_and_a_read_tool_runs(private_plane):  # noqa: F811
+    start_without_defaults(private_plane, "plane-loss-legacy")
     drop_table, look = tools()
     _until(lambda: runbound.plane_status().mode == "connected", what="a hello")
-    assert drop_table("t") == "dropped" and look("t") == "found"
+    assert api._SHARED.defaults() is None
+    assert drop_table("t") == "dropped" and look("t") == "found"  # no defaults: nobody is asked, the old per-class rules apply
 
     private_plane.kill()
     _until(lambda: runbound.plane_status().mode == "degraded", 10, "three missed hellos")
@@ -58,6 +75,46 @@ def test_killing_the_plane_refuses_a_destructive_tool_and_a_read_tool_runs(priva
     caught = _until(refused, 30, "the grace to run out")  # 15 s of silence
     assert caught.reason == "plane_unavailable" and caught.retryable
     assert look("t") == "found"  # a read tool keeps running on what it has
+
+
+def test_killing_the_plane_does_not_refuse_a_destructive_tool_a_row_allows_while_the_service_holds_its_defaults(private_plane):  # noqa: F811
+    """A NEW service holds enforced standard defaults from its first hello (destructive: ask). Under them the sealed policy is enforced in full for its validity window
+    (24 h): a tool an operator's row allows keeps running after the plane is gone, past the 15 s grace, which applies only to a service without defaults."""
+    start(private_plane, "plane-loss-defaults")
+    drop_table, look = tools()
+    _until(lambda: runbound.plane_status().mode == "connected", what="a hello")
+    _until(lambda: api._SHARED.defaults() is not None, what="the standard defaults to be applied")
+    status, body = private_plane.request("POST", "/v1/admin/tool-policies", {"service": "plane-loss-defaults", "tool": "drop_table", "lines": [{"decision": "allow"}], "otherwise": "allow"})
+    assert status in (200, 201), body
+    status, body = private_plane.request("POST", "/v1/admin/tool-policies/plane-loss-defaults/drop_table/rollout", {"state": "enforced", "comment": "plane loss"})
+    assert status == 200, body
+    _until(lambda: api._SHARED.row_for("drop_table") is not None, what="the row for drop_table")
+    assert drop_table("t") == "dropped"
+
+    private_plane.kill()
+    _until(lambda: runbound.plane_status().mode == "degraded", 10, "three missed hellos")
+    time.sleep(18)  # past the 15 s grace
+    assert drop_table("t") == "dropped" and look("t") == "found"  # the sealed policy and its defaults are enforced in full
+
+
+def test_killing_the_plane_refuses_an_unruled_destructive_tool_approval_unavailable_while_the_service_holds_its_defaults(private_plane):  # noqa: F811
+    """Under the enforced defaults an unruled destructive tool ASKS; with the plane gone nobody can be asked, so it is refused at once (no grace involved) and its body never runs."""
+    start(private_plane, "plane-loss-unruled")
+    ran = []
+
+    @runbound.tool(effects={"destructive"}, reviewed=True)
+    def drop_table(name: str):
+        ran.append(name)
+        return "dropped"
+
+    _until(lambda: runbound.plane_status().mode == "connected", what="a hello")
+    _until(lambda: api._SHARED.defaults() is not None, what="the standard defaults to be applied")
+    private_plane.kill()
+    _until(lambda: runbound.plane_status().mode == "degraded", 10, "three missed hellos")
+
+    with pytest.raises(runbound.ExecutionRefused) as refused:
+        drop_table("t")
+    assert refused.value.reason == "approval_unavailable" and ran == []
 
 
 def test_a_restart_enforces_the_cached_rows_before_the_first_hello(private_plane, tmp_path):  # noqa: F811

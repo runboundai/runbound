@@ -121,11 +121,21 @@ def test_the_worker_is_governed_as_soon_as_the_plane_answers(plane):
     assert outcome("wire", ["read"]) == "refused:tool_blocked"
 
 
-def test_a_plane_that_announces_no_policy_does_not_gate_anything(plane):
-    plane.announce = 0
+def test_a_plane_that_announces_no_policy_and_serves_an_empty_one_does_not_gate_anything(plane):
+    plane.announce, plane.policy_status = 0, 200  # version 0 and an empty policy read: the service has nothing, and the worker has read that
     start(plane)
     time.sleep(0.5)
     assert outcome("fin", ["financial"]) == "ran"
+
+
+def test_a_plane_that_announces_version_zero_but_cannot_serve_the_policy_gates_the_classes_that_fail_closed(plane):
+    """Version 0 is not "no policy": a new service's standard defaults are served by the read (the defaults window). A read that fails leaves the worker holding none."""
+    plane.announce = 0  # policy_status stays 503
+    start(plane)
+    time.sleep(0.5)
+    assert outcome("fin", ["financial"]) == "refused:plane_unavailable"
+    plane.policy_status = 200  # the plane recovers: the next hello reads the policy
+    until(lambda: outcome("fin2", ["financial"]) == "ran", "the policy to be read")
 
 
 def test_a_worker_that_already_holds_rows_keeps_them_through_the_503(plane):

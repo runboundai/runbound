@@ -51,7 +51,7 @@ from .plane_types import PlaneStatus
 from .policy import ToolCall, ToolPolicy, ToolRules, Violation
 from .state import SessionState
 
-__version__ = "1.0.0a3"
+__version__ = "1.0.0a4"
 
 from ._check import check  # noqa: E402  (after __version__: the report prints it)
 

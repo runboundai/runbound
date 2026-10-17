@@ -417,7 +417,8 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
     if spec.requirement:
         body["requirement"] = spec.requirement
     record = info.get("record") or {}
-    for field in ("reason_code", "matched_rule_ids", "policy_version", "service_default_revision", "policy_state", "contributors", "sdk_version"):
+    for field in ("reason_code", "matched_rule_ids", "policy_version", "service_default_revision", "policy_state", "contributors", "sdk_version",
+                  "rule_revision", "cfg_hash", "boot_id"):
         if record.get(field) is not None:
             body[field] = record[field]  # the decision record rides on the request, so "why is this waiting" reads by approval id
     secret = config.approval_secret
@@ -598,6 +599,10 @@ def _post_report(shared: Any, record: dict, attempts: int = 1) -> bool:
     body = {"outcome": record["outcome"], "worker_id": record.get("worker_id")}
     if record.get("result_digest"):
         body["result_digest"] = record["result_digest"]
+    if record.get("reason"):
+        body["reason"] = record["reason"]
+    if isinstance(record.get("record"), dict) and record["record"]:
+        body["record"] = record["record"]  # a superseded call's decision record, both phases (WIRE-VPC 12e)
     for attempt in range(attempts):
         status, _ = shared.approvals("POST", f"/v1/approvals/{record['approval_id']}/report", body, timeout=5.0)
         if status in _SETTLED:
@@ -618,14 +623,33 @@ def drain_reports(shared: Any) -> None:
         _LOG.debug("runbound: could not drain the report queue", exc_info=True)
 
 
-def report_async(engine: Any, approval_id: str, outcome: str, result: Any = None) -> None:
-    """Tell the plane how an approved call went (``executed`` | ``failed`` | ``tampered`` | ``clock_skew``).
+_REPORT_RECORD_KEYS = ("reason_code", "matched_rule_ids", "policy_version", "service_default_revision", "policy_state", "contributors", "sdk_version", "rule_revision",
+                       "cfg_hash", "boot_id", "recheck_rule_revision", "recheck_cfg_hash", "recheck_policy_version", "recheck_service_default_revision",
+                       "recheck_contributor", "recheck_reason")
+
+
+def _report_record(record: dict) -> dict:
+    """The decision-record keys a ``superseded`` report carries (both phases); only what is known."""
+    return {key: record[key] for key in _REPORT_RECORD_KEYS if record.get(key) is not None}
+
+
+def report_async(engine: Any, approval_id: str, outcome: str, result: Any = None, reason: "str | None" = None, decision_record: "dict | None" = None) -> None:
+    """Tell the plane how an approved call went (``executed`` | ``failed`` | ``tampered`` | ``clock_skew`` | ``superseded``).
+
+    ``reason`` names why a ``superseded`` call did not run (the refusal code); the plane returns the quota unit it held.
+    ``decision_record`` is a ``superseded`` call's decision record, both phases (what it was approved under, what the execution-entry re-check read; WIRE-VPC 12e), so the
+    request keeps it and an explain by approval id shows it.
 
     Tried a few times; if the plane cannot take it, queued for the next connected hello. Never raises."""
 
     def run() -> None:
         try:
             record = {"approval_id": approval_id, "outcome": outcome, "worker_id": engine.config.resolved_worker_id()}
+            if reason:
+                record["reason"] = str(reason)[:64]
+            kept = _report_record(decision_record) if outcome == "superseded" and isinstance(decision_record, dict) else {}
+            if kept:
+                record["record"] = kept
             if result is not None:
                 record["result_digest"] = hashlib.sha256(
                     json.dumps(result, sort_keys=True, default=str).encode("utf-8", "replace")).hexdigest()

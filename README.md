@@ -13,7 +13,7 @@ argument leaves the process only when the tool asks a person (the approver must
 see it). It puts no gateway in your hot path, and never speaks to your users: when it
 refuses something it hands control straight back to your own code.
 
-> **1.0.0a3 is an alpha.** The detection, provider-wrapper and cost
+> **1.0.0a4 is an alpha.** The detection, provider-wrapper and cost
 > features of 0.11.x are gone; see [CHANGELOG.md](CHANGELOG.md) for what was
 > removed and how to migrate.
 
@@ -80,8 +80,12 @@ Rules come from two places and only ever tighten each other: the decorator
 (`blocked`, `max_calls`, `constraint`, `require_approval`, `effects`) and rows set
 in the console (blocked, session cap, approval, risk class, fail mode, quota). The
 most restrictive wins, field by field. A row starts as **dry run**: it evaluates
-everything, refuses nothing and records `would_refuse`, so you see what it would
-have stopped before you switch it to **enforced**.
+everything, refuses nothing and records `would_refuse` (or `would_ask` for a call
+it would have sent to a person), takes no quota unit and asks nobody, so you see
+what it would have stopped before you switch it to **enforced**. A tool with no row
+follows the service defaults: a new service starts with the standard defaults
+enforced, so a financial, destructive, privileged or unclassified tool asks a
+person until you give it a row.
 
 Console rows are enforced by runbound 1.x only: a worker on 0.x ignores them and keeps just
 its code rules (see [Upgrading from 0.11.x](docs/guides/upgrading-from-0-11.md)).
@@ -102,6 +106,11 @@ a tool that declares nothing stays unclassified, so it still fails closed. See
 approves, a worker verifies an HMAC **seal** (keyed by `RUNBOUND_APPROVAL_SECRET`,
 which never leaves your processes) and runs the tool with the approved arguments
 through the whole chain again. `runbound.current_request()` is the idempotency key.
+
+An approval never outlives the policy. When the answer arrives (sync, deferred or
+through a grant), the call is checked again against the policy the worker holds
+at that moment; if the tool is now blocked, denied or capped, the call is refused
+with `approval_superseded` (not retryable) and never runs on the approval alone.
 See [Approvals](docs/guides/approvals.md).
 
 ## When the plane is unreachable
@@ -111,8 +120,12 @@ The last policy is kept on disk and enforced before the first heartbeat after a
 restart. While the plane is away `read`, `write` and `external` tools keep running
 on it; `financial`, `destructive`, `privileged` and unclassified tools refuse with
 `reason="plane_unavailable"` once `consequential_grace_s` (default 60) has passed.
-A worker that has been told a policy exists but has not been served it (and holds
-no saved one) is treated the same way: those tools refuse until it arrives. See
+A new worker reads its policy on its first answered hello and releases those tools
+only once it holds the policy and the service defaults; until then, or while it
+holds neither a policy nor a saved one, they refuse. A service with enforced
+service defaults keeps its saved policy for 24 hours instead of using the grace:
+a tool a row allows keeps running, and a tool with no row asks, so it is refused
+`approval_unavailable` while nobody can be reached. See
 [Plane loss](docs/guides/plane-loss.md).
 
 A worker with `export_events=False` exports nothing, refusals included, so the
@@ -123,7 +136,15 @@ console will not show that worker's refusals.
 Each call is a span named `execute_tool {tool}`, scope `runbound`, sent to your
 OpenTelemetry provider or, with `init(otel_endpoint=...)`, posted as OTLP/JSON. It
 carries the tool, the outcome, the decision and a hash of the arguments, never the
-arguments. See [OpenTelemetry](docs/guides/opentelemetry.md) and
+arguments.
+
+Every refusal, span and approval request also says what decided it, when the
+worker knows it: the rule revision the row was served under (`rule_revision`, when
+a row decided), the configuration the worker held (`cfg_hash`) and the process that
+decided (`boot_id`). Each heartbeat reports
+the configuration the worker accepted, so the console can show which workers
+enforce a change. Set `init(worker_id=...)` to a stable name (a pod or host name)
+so a restart is recognised as the same worker. See [OpenTelemetry](docs/guides/opentelemetry.md) and
 [LangChain](docs/guides/langchain.md).
 
 ## What runbound does not do

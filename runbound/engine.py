@@ -163,6 +163,7 @@ class Engine:
             row = rows_module.apply_defaults(row, call.name, declared, self.shared)  # no line matched: the service defaults decide
         if row is not None and (row.conditional or row.candidate is not None):
             record.update(self._record(call, row, approval))  # the lines that matched on THIS call's arguments
+        record.update(_candidate_facts(row))  # R-C: what a revision being tried (a dry-run row, a candidate beside the enforced one) would have done with THIS call
         if row is not None and row.conditional and not row.unsupported:
             key = ",".join(row.matched)  # a conditional line's cap counts the calls that matched the same lines
             session.hold_key(call.name, key)
@@ -181,6 +182,7 @@ class Engine:
             if approval is not None:
                 held = {} if info is None else info
                 approvals_module.admit(self, session, call, approval, held)
+                self._recheck_after_approval(session, call, declared, effects, tags, held)  # first: a refused call must not spend a unit
                 if held.get("granted"):  # a grant admitted it and the plane took no quota unit: take our own, as for a call nobody is asked about
                     quota_module.admit(self, session, call, row, False, tags)
             if gate_hooks:
@@ -188,6 +190,48 @@ class Engine:
         except hooks_module.StageRefused as refused:
             self._refuse_stage(session, call, refused)
         return call
+
+    def _recheck_after_approval(self, session: SessionState, call: ToolCall, declared: Any, effects: Any, tags: "list | None", held: "dict | None" = None) -> None:
+        """R5: the approval (or grant) may be older than the policy. An approval never runs a call the current state forbids, so the
+        two doors that are state, not policy, are asked again (a fleet halt served during the wait, a policy that went unavailable),
+        then the tool's row is resolved again on the policy held NOW and refuses ``approval_superseded`` if it no longer lets the call
+        run. Nothing here asks a person or takes a quota unit.
+
+        VPC (RVPC-2, WIRE-VPC 12e): the record the call was decided under when it asked stays as it is (the approval phase); what this re-check read is added beside it
+        as ``recheck_*`` (the re-check phase), so the refusal, its span and the approval's report show both."""
+        try:
+            served_cfg = getattr(self.shared, "served_cfg", None)
+            self.note_recheck(recheck_cfg_hash=served_cfg() if callable(served_cfg) else None,
+                              recheck_policy_version=int(getattr(self.shared, "policy_version", 0) or 0) or None, recheck_service_default_revision=self._default_revision())
+            gates_module.halt(self, session, call.name)
+            gates_module.plane(self, session, call, effects)
+            row = getattr(self.shared, "row_for", lambda _tool: None)(call.name)
+            row = rows_module.apply_defaults(row, call.name, declared, self.shared)
+            row = rows_module.resolve_call(row, approvals_module.bound_arguments(call.name, call.args, call.kwargs), self._rule_context())
+            if row is not None and row.conditional and row.inherit:
+                row = rows_module.apply_defaults(row, call.name, declared, self.shared)
+            if row is not None and not row.unsupported:
+                self.note_recheck(recheck_rule_revision=row.rule_revision)
+            rows_module.supersede(self, session, call, row, tags)
+            self.note_recheck(clear=True)  # the re-check passed and the call goes on to run: what it read is not a refusal's evidence, so the record of a call that ran carries none of it
+        except Exception as refused:
+            approval_id = (held or {}).get("approval_id")
+            if approval_id:  # the plane holds a unit for the approved request: tell it the call did not run, so it gives the unit back
+                approvals_module.report_async(self, str(approval_id), "superseded", reason=getattr(refused, "reason", None) or "approval_superseded",
+                                              decision_record=_RECORD.get())
+            raise
+
+    def note_recheck(self, clear: bool = False, **facts: Any) -> None:
+        """Add what the execution-entry re-check read to the call's decision record (``recheck_*``; ``None`` adds nothing); ``clear`` removes every ``recheck_*`` key (a re-check
+        that passed)."""
+        record = _RECORD.get()
+        if record is None:
+            return
+        if clear:
+            for key in [k for k in record if k.startswith("recheck_")]:
+                del record[key]
+            return
+        record.update({key: value for key, value in facts.items() if value is not None})
 
     def _record(self, call: ToolCall, row: Any, approval: Any) -> dict:
         """The decision record of one call (TPD §4c.6, §12 item 6): why, under which policy, in which state. Never raises."""
@@ -208,10 +252,20 @@ class Engine:
             contributors.extend(row.contributors if usable else ())
             if not contributors:
                 contributors.append("default:service")
-            return {
+            served_cfg = getattr(self.shared, "served_cfg", None)
+            record = {
                 "policy_state": policy_state, "policy_version": version, "matched_rule_ids": matched,
                 "service_default_revision": self._default_revision(), "contributors": contributors, "sdk_version": __version__,
             }
+            # VPC (R1): the rule revision the row was served under (the per-tool ordinal) and the configuration hash this worker held, so a call can be traced to the
+            # exact content it ran under. ``policy_version`` is the distribution generation, ``service_default_revision`` the defaults revision. Present only when
+            # known: a worker served neither (no plane, an older plane) records exactly what it always did.
+            boot_id = getattr(self.shared, "boot_id", None)
+            for key, value in (("rule_revision", row.rule_revision if usable else None), ("cfg_hash", served_cfg() if callable(served_cfg) else None),
+                               ("boot_id", boot_id() if callable(boot_id) else None)):
+                if value is not None:
+                    record[key] = value
+            return record
         except Exception:
             _LOG.debug("runbound could not build a decision record", exc_info=True)
             return {}
@@ -653,7 +707,13 @@ def _stamp_decision(
     details = anomaly.details if isinstance(anomaly.details, dict) else {}
     record = _RECORD.get()
     if record:  # the decision record rides the Decision's evaluation and the anomaly (WIRE-TR2 §7, §10f)
-        record = {**record, "reason_code": _reason_code(anomaly, decision)}
+        code = _reason_code(anomaly, decision)
+        if "recheck_reason" not in record and code != "approval_superseded" and any(key.startswith("recheck_") for key in record):
+            record["recheck_reason"] = code  # the re-check refused it for this reason itself (a halt, the plane's door); a superseded row names its own in ``supersede``
+        record = {**record, "reason_code": code}
+        limit = _LIMIT_REFS.get(code)
+        if limit and isinstance(record.get("contributors"), list) and limit not in record["contributors"]:
+            record["contributors"] = [*record["contributors"], limit]  # the limit that refused the call is a restriction that contributed to it
         decision = dataclasses.replace(decision, evaluation={**decision.evaluation, **record})
         details = {**details, **record}
     return dataclasses.replace(
@@ -666,6 +726,31 @@ _RECORD: "contextvars.ContextVar[dict | None]" = contextvars.ContextVar("runboun
 #: The repetition counts the call being admitted holds, given back if it does not clear the chain.
 _KEYS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("runbound_keys", default=None)
 _REPEATS: "contextvars.ContextVar[list | None]" = contextvars.ContextVar("runbound_repeats", default=None)
+
+
+def _candidate_facts(row: Any) -> dict:
+    """What the revision being tried made of this call (VPC R-C), for every call it was evaluated on, not only the ones it would have refused.
+
+    ``candidate_outcome`` is its decision from its own lines: ``allow``, ``ask``, ``deny``, or ``unknown`` (a condition that could not be judged, the call it would
+    have refused as unevaluable). ``candidate_revision`` is the revision it is (the rule's per-tool ordinal, or the defaults revision when the candidate is the
+    service defaults: ``candidate_of`` says which). Nothing here decides anything: the candidate never does. ``{}`` when no revision is being tried, or when it
+    could not be read (it is not evaluated at all)."""
+    if row is None or row.unsupported:
+        return {}
+    tried = row if row.dry_run else row.candidate
+    if tried is None or tried.unsupported:
+        return {}
+    outcome = "unknown" if tried.refuse is not None else "deny" if tried.blocked else "ask" if tried.approval_required else "allow"
+    facts: dict = {"candidate_outcome": outcome}
+    if tried.rule_revision is not None:
+        facts.update(candidate_revision=tried.rule_revision, candidate_of="rule")
+    elif tried.defaults_revision is not None:
+        facts.update(candidate_revision=tried.defaults_revision, candidate_of="defaults")
+    return facts
+
+
+#: The limit a refusal's reason code names, as the contributor it adds to the record (``limit:<what>``): the quota, the session cap, the repetition control.
+_LIMIT_REFS = {"quota_exceeded": "limit:quota", "session_max_calls": "limit:session_cap", "repetition_exceeded": "limit:repetition"}
 
 
 def _reason_code(anomaly: Anomaly, decision: Decision) -> str:

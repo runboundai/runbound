@@ -241,7 +241,7 @@ Each is the same object as its replacement; the first use in a process emits one
 
 ## Metadata
 
-- `__version__` — `1.0.0a3`.
+- `__version__` — `1.0.0a4`.
 
 ## Removed in S1
 

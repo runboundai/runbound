@@ -98,7 +98,7 @@ def test_every_entry_has_exactly_the_ten_agreed_keys_in_order():
 
     assert list(item) == [
         "name", "decorated", "params", "doc", "module", "rules", "effects",
-        "polling", "idempotent", "retryable",
+        "polling", "idempotent", "retryable", "deferred",
     ]
     assert item["rules"] == {}, "a tool that states no rule reports no rules"
     assert item["doc"] == "Look something up."
@@ -118,6 +118,22 @@ def test_polling_idempotent_and_retryable_are_reported_when_set():
     assert item["polling"] is True
     assert item["idempotent"] is True
     assert item["retryable"] is True
+
+
+def test_deferred_is_true_only_when_the_decorator_registered_deferred_mode():
+    @runbound.tool(effects={"external"}, approval="required", mode="deferred")
+    def later(x: int): ...
+
+    @runbound.tool(effects={"external"}, approval="required")
+    def now(x: int): ...
+
+    @runbound.tool(effects={"read"})
+    def plain(x: int): ...
+
+    items = runbound.tools()
+    assert entry(items, "later")["deferred"] is True
+    assert entry(items, "now")["deferred"] is False  # sync approval is not deferred
+    assert entry(items, "plain")["deferred"] is False
 
 
 def test_a_model_requested_undeclared_tool_reports_the_three_flags_false():
@@ -263,6 +279,7 @@ def test_a_requested_tool_nobody_decorated_is_reported_undecorated():
             "polling": False,
             "idempotent": False,
             "retryable": False,
+            "deferred": False,
         }
     ]
 

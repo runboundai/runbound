@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0a4] - 2026-10-18
+
+What this release is for: the SDK half of Verified Policy Changes. A worker now says honestly which configuration it holds and which process it is, every decision names the revision it was made under, and an approval can no longer run a call that the policy of the moment forbids.
+
+**What a team gets**
+
+- **Honest acceptance.** Every hello carries `boot_id`, `seq` and `accepted_cfg` (the hash the plane served, echoed and never computed here, and `null` unless every row and the defaults were read and applied). The plane can tell a worker-reported acceptance from a version-only report.
+- **A decision record that names its revision.** `rule_revision`, `cfg_hash`, `boot_id` on refusals, spans and approval requests; `otherwise:<decision>` and `limit:*` contributors; `candidate_outcome` on every call a revision being tried was evaluated on.
+- **An approval never outlives the policy.** A call a person approved, or a grant admitted, re-checks the policy held at that moment and refuses `approval_superseded` (halt, unavailable policy, block, deny, cap). Its record carries both phases (`recheck_*`), and the plane gets the quota unit back through the `superseded` report.
+- **Dry runs touch nothing live.** A dry-run quota row takes no unit (it asks the plane's peek); a dry run of an ask rule is counted (`would_ask`) and asks nobody.
+- **The tool report says `deferred`** only for a tool whose code registered it.
+- **No window after a start.** A destructive tool of a brand-new service no longer runs unasked in the first seconds after the worker connects (see Fixed).
+
+**What to check before upgrading**
+
+- `exc.reason` has a new value, `approval_superseded` (not retryable). A handler that switches on the closed set needs a branch or a default.
+- Code that parses the `contributors` of a record: an explicit tool-level `otherwise` is now `otherwise:<decision>`, no longer `default:service`; a limit that refused the call adds `limit:quota`, `limit:session_cap` or `limit:repetition`.
+- Ten legacy fixtures changed deliberately (the dry-run quota rows listed under "A dry-run quota row takes no live unit" below); every other legacy case is byte-identical.
+- A served row carrying a key this SDK does not know still refuses only that tool (`policy_unsupported`); `rule_revision` is a known key from this release, and a plane serves it only to a worker that reports `revisions_v1`.
+- Set `worker_id` to a stable name (a pod or host name) so a restart is recognised as the same worker; `boot_id` tells the processes apart.
+
+**Compatibility.** Against the plane at the VPC exit, 1.0.0a2 and 1.0.0a3 keep enforcing what they understood and report `version_only`; the tool-call overhead is a few microseconds at most over 1.0.0a3, not measurably different. The older-plane legs were run once during the VPC build and have not been re-run since.
+
+The detail follows.
+
+### Fixed
+
+- **A destructive tool of a brand-new service no longer runs unasked in the first seconds after the worker connects.** A new service starts with enforced standard defaults (destructive: ask), but the plane's first hello announces `policy_version: 0` because writing those defaults does not bump the live version. The worker read 0 as "this service has no policy, so there is nothing to hold" and lifted its refusal of consequential classes on that hello with no defaults applied, so the call ran, until a later hello (about two seconds on) announced the policy. The worker now reads its policy once on its first answered hello, whatever version it announced, **before** that hello counts as answered, so the startup floor lifts only with the policy and its defaults in hand; and a worker that holds no policy (the read failed) keeps refusing financial, destructive, privileged and unclassified tools until a read succeeds. A service that really has nothing still answers the read with an empty policy and behaves as before.
+- **An `async` tool that the service defaults ask for no longer freezes the event loop while it waits for the approval.** Only a tool with a dashboard row that asks (or takes a quota unit) had its pre-chain run off the loop; a tool with no row that the service defaults ask for (a destructive-only or unclassified tool) waited on the loop, so every other coroutine in the process stopped until a person answered or the wait ran out. The wrapper now also hands the pre-chain to a thread when the service defaults ask for the tool (or for a conditional row whose lines may all miss the call). Defaults that allow or deny, a service without defaults and a tool with no row stay on the loop, and no decision changes.
+- **A rule that allows only when a condition holds and says what happens otherwise now works** ("allow when `amount > 1000`, otherwise deny"). The plane serves such a row with a legacy view of `blocked: true` (the strictest reading, the `otherwise` included), but the SDK's static check compared it with the lines alone, saw only `allow`, called the legacy view "stricter than its lines" and refused the whole tool as `policy_unsupported`, even for a call the allow line matches. The check now compares the legacy view with the strictest of the lines **and** the row's explicit `otherwise`; a legacy view stricter than both is still refused.
+- **A call that passed the execution-entry re-check and ran no longer carries `recheck_*` on its record or span.** The re-check's facts were added to the record before its outcome was known, so an approved call that was re-checked and then ran (for example after a promote that still let it through) showed a re-check phase, which reads as a refusal. The keys are now removed when the re-check passes; a refused call is unchanged.
+
+### Added
+
+- `approval_superseded` (not retryable): a call a person approved, or a grant admitted, re-checks the policy the worker holds when the approval arrives. If that policy now blocks, denies or caps the call, it is refused with this reason and never runs on the approval alone. Also applies to the execution of an approved deferred request.
+- The tool report carries `deferred: bool` per tool: `true` only when the decorator registered `mode="deferred"`, `false` for any other decorated tool, never inferred. The plane stores it and refuses a row that asks for deferred approval on a tool that reported `false`.
+
+- **Acceptance evidence on the hello (`acceptance_v1`).** Every heartbeat now carries `boot_id` (a uuid drawn once when the process starts, so a restart is a new boot), `seq` (this boot's hello number, from 1, strictly increasing) and `accepted_cfg`: the configuration hash the plane served (`cfg_hash` in the policy envelope, falling back to `rows_hash`), echoed exactly as served and **never computed in the SDK**, and only once every row and the service defaults were read and applied. It is `null` while any served row or the defaults is unreadable or unsupported (the worker is not enforcing what was served, so it says nothing is accepted), left out until a policy has been applied, and `""` for a policy that carried no hash. With them the plane keeps the newest report of a worker and can tell "worker-reported acceptance" from a version-only report. `policy_features` gains `acceptance_v1` and `revisions_v1`.
+- **`rule_revision` on served rows (`revisions_v1`).** A served row, and its `candidate`, may carry `rule_revision` (the tool row's per-tool ordinal, a whole number from 1): it names the revision a decision record was made under and decides nothing. Any other key this SDK does not know still refuses the tool (`policy_unsupported`), and a `rule_revision` that is not a whole number does too. The plane serves the key only to a worker that reported `revisions_v1`.
+
+- **An approved call that is refused at execution entry carries its record in two phases.** A promote, a restore or a defaults change that lands while a person decides now leaves both: what the call was approved under (`rule_revision`, `cfg_hash`, `policy_version`, `service_default_revision`, as before) and what the execution-entry re-check read (`recheck_rule_revision`, `recheck_cfg_hash`, `recheck_policy_version`, `recheck_service_default_revision`) with the one contributor that refused it (`recheck_contributor`, e.g. `row:L2`, `default:service`, `limit:session_cap`) and the reason it returned (`recheck_reason`, e.g. `tool_blocked`). They ride the refusal's record, its span (`runbound.decision.recheck_*`) and the `record` of the `superseded` approval report, so the request keeps them and an explain by approval id shows both. `reason_code` stays `approval_superseded`; each key is present only when known.
+- **The decision record names the revision and configuration, and says what decided.**
+  - `rule_revision` (the per-tool ordinal the row was served under, `revisions_v1`), `cfg_hash` (the configuration hash the worker held) and `boot_id` (which process decided the call) ride on every refusal, span and approval request, only when known (a worker served neither records exactly what it did). `policy_version` stays the distribution generation and `service_default_revision` the defaults revision. Span attributes: `runbound.decision.rule_revision`, `runbound.decision.cfg_hash`.
+  - **A row's explicit `otherwise` is now the contributor `otherwise:<decision>`**, no longer `default:service`: `default:service` is said only when the service defaults decide (or nothing did), so Explain can tell the tool's own fallback from an inherited one.
+  - **A limit that refused the call is a contributor**: `limit:quota`, `limit:session_cap`, `limit:repetition`.
+  - **`candidate_outcome` on every call a revision being tried was evaluated on** (`allow`, `ask`, `deny`, or `unknown` when a condition could not be judged), with `candidate_revision` and `candidate_of` (`rule` or `defaults`); span attributes `runbound.decision.candidate_outcome`, `.candidate_revision`, `.candidate_of`. The candidate never decides. Present for a row served in dry run, a candidate beside an enforced row, and a defaults candidate; absent when nothing is being tried.
+
+- **A dry-run quota row takes no live unit and spends no lease**: the SDK reads the window with the plane's quota peek (`POST /v1/quota/take {"peek": true}`) and adds the dry-run calls this worker has seen in it, so `would_refuse:quota_exceeded` is still recorded when a live row would have been over, and the call runs. Evidence from several workers is therefore a lower bound. A plane that cannot be asked is read as a live row reads it (`quota_plane_unavailable`, recorded); a plane with no peek (one that serves no `cfg_hash`) is never asked, so no unit moves and no evidence comes from its counter. Registered change to ten legacy fixtures (O-LEG-ROW-69, -328, -329, -411, -430, -438, -443, -457, -489, -500): the dry-run row's `quota_takes` no longer lists a take, and O-LEG-ROW-457 now records `would_refuse:quota_exceeded` on its 2nd and 3rd calls.
+
+- **A dry run of an ask rule is counted.** A dry-run row, or a candidate beside the enforced row, that would have asked a person now files an event for every such call (reaction `dry_run`, rule `would_ask`, with the decision record, capped per session like every dry-run record), besides the `would_ask:approval` tag: nobody is asked, nothing is refused, nobody is paged. The plane's evidence counts these as `would_ask`; before, a dry run of an ask rule read "0 evaluations".
+
 ## [1.0.0a3] - 2026-10-14
 
 ### Added
@@ -1481,7 +1532,6 @@ re-meaning one after real customers hold a version would break them.
   output rate. What you get back is the split — how much of an answer was
   thinking. Found by replaying a real recorded response; no test could
   have caught it, because every test built its own usage object.
-
 
 ### Changed
 

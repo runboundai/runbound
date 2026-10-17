@@ -11385,11 +11385,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -11404,11 +11400,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -11423,11 +11415,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -11541,11 +11529,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -11560,11 +11544,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -11579,11 +11559,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -14159,11 +14135,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -14178,11 +14150,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -14197,11 +14165,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -16807,11 +16771,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -16826,11 +16786,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -16845,11 +16801,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -17885,11 +17837,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -17904,11 +17852,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -17923,11 +17867,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -18703,11 +18643,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -18722,11 +18658,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -18741,11 +18673,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -20978,11 +20906,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -20997,17 +20921,15 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
        "retryable": null,
        "rule": null,
-       "would_refuse": []
+       "would_refuse": [
+        "would_refuse:quota_exceeded"
+       ]
       },
       {
        "approval_raised": [],
@@ -21016,17 +20938,15 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
        "retryable": null,
        "rule": null,
-       "would_refuse": []
+       "would_refuse": [
+        "would_refuse:quota_exceeded"
+       ]
       }
      ],
      "link": "connected",
@@ -25296,11 +25216,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -25315,11 +25231,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -25334,11 +25246,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -27118,11 +27026,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -27137,11 +27041,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -27156,11 +27056,7 @@
        "detector": null,
        "exception": null,
        "lease_spent": false,
-       "quota_takes": [
-        {
-         "keyed": false
-        }
-       ],
+       "quota_takes": [],
        "ran": true,
        "reason": null,
        "retry_after_ceil_s": null,
@@ -29684,11 +29580,7 @@
       "detector": null,
       "exception": null,
       "lease_spent": false,
-      "quota_takes": [
-       {
-        "keyed": false
-       }
-      ],
+      "quota_takes": [],
       "ran": true,
       "reason": null,
       "retry_after_ceil_s": null,

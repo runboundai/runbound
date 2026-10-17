@@ -147,6 +147,7 @@ def test_on_tool_start_puts_the_tool_in_the_report_as_undecorated(handler):
             "polling": False,
             "idempotent": False,
             "retryable": False,
+            "deferred": False,
         }
     ]
 

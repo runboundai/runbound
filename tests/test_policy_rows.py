@@ -454,6 +454,7 @@ def test_a_dry_run_quota_is_counted_and_records_would_refuse_without_refusing():
                               take=lambda b: (200, {"granted": False, "retry_after_s": 9})))
     look, _, ran = tools()
     assert look() == "ok" and ran == ["look"] and len(shared.takes()) == 1
+    assert shared.takes()[0][2]["peek"] is True, "a dry run reads the counter; it takes nothing (VPC B6b)"
     assert "would_refuse:quota_exceeded" in runbound.tool_results()[-1]["tags"]
 
 
@@ -557,7 +558,7 @@ def test_a_non_asking_call_on_a_tool_whose_row_would_ask_takes_synchronously_wit
     # a dry_run approval row asks nobody; the tool's quota is then an ordinary one with no lease to spend
     shared = start(FakeShared([row("look", state="dry_run", quota=QUOTA, approval_required=True)]))
     look, _, _ = tools()
-    assert look() == "ok" and len(shared.takes()) == 1 and shared.takes()[0][2]["tool"] == "look"
+    assert look() == "ok" and len(shared.takes()) == 1 and shared.takes()[0][2]["tool"] == "look" and shared.takes()[0][2]["peek"] is True
     assert [c[1] for c in shared.calls if c[1] == "/v1/approvals"] == []
 
 

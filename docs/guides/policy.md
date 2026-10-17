@@ -254,8 +254,11 @@ for any other reason does not count. In a dry run a candidate rule records `woul
 
 ### `dry_run`, then `enforced`
 
-A `dry_run` row evaluates everything and refuses nothing. When it would have
-refused, the call runs and the SDK records `would_refuse`:
+A `dry_run` row evaluates everything and refuses nothing, and it **changes no live
+counter**: a dry-run quota takes no unit and spends no lease (the SDK reads the plane's
+counter with a peek and adds the dry-run calls this worker has seen in the window, so the
+evidence counts what this worker could see, a lower bound across several workers). When
+it would have refused, the call runs and the SDK records `would_refuse`:
 
 - the call's `tool_result` gets the tag `would_refuse:<reason>`, for example
   `would_refuse:tool_blocked` (read it with `runbound.tool_results()`);

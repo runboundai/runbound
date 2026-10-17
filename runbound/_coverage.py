@@ -129,6 +129,7 @@ def tool_declared(
     polling: bool = False,
     idempotent: bool = False,
     retryable: bool = False,
+    deferred: bool = False,
 ) -> None:
     """Remember a tool the code declares, with its signature. Never raises.
 
@@ -140,13 +141,16 @@ def tool_declared(
     ``polling``, ``idempotent`` and ``retryable`` are the decorator's
     own metadata, not rules — they carry no ``ToolRules`` and are reported
     here purely for a human or the plane to read (see :meth:`_tool_entry`).
+
+    ``deferred`` is the mode the decorator registered (``mode="deferred"``), never inferred from a row.
     """
     global _TOOL_RULES_VERSION
     try:
         if not isinstance(name, str) or not name:
             return
         entry = _tool_entry(
-            name, func, rules, polling=polling, idempotent=idempotent, retryable=retryable
+            name, func, rules, polling=polling, idempotent=idempotent, retryable=retryable,
+            deferred=deferred,
         )
         with _LOCK:
             _TOOLS[name] = entry
@@ -239,6 +243,7 @@ def tool_requested(name: str) -> None:
                 "polling": False,
                 "idempotent": False,
                 "retryable": False,
+                "deferred": False,
             }
     except Exception:  # pragma: no cover
         _LOG.debug("runbound: could not record the request for %r", name, exc_info=True)
@@ -308,8 +313,9 @@ def _tool_entry(
     polling: bool = False,
     idempotent: bool = False,
     retryable: bool = False,
+    deferred: bool = False,
 ) -> dict:
-    """The ten keys the plane reads, in the order it reads them.
+    """The eleven keys the plane reads, in the order it reads them.
 
     ``rules`` is what the decorator stated, rendered by
     :meth:`runbound.policy.ToolRules.as_report` — a predicate as its
@@ -331,6 +337,7 @@ def _tool_entry(
         "polling": bool(polling),
         "idempotent": bool(idempotent),
         "retryable": bool(retryable),
+        "deferred": bool(deferred),
     }
 
 

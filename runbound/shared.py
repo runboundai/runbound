@@ -28,6 +28,7 @@ lifts it (the enforcement floor, F1), whether or not the plane keeps answering.
 import logging
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from typing import Any
 
@@ -161,6 +162,14 @@ class RemoteState:
         #: The dashboard's per-tool rows (T1a) and their hash; the leases this worker holds (T1b).
         self._rows: dict = {}
         self._rows_hash: str | None = None
+        #: The plane's own hash of what it served (``cfg_hash`` in the policy envelope; the same value as ``rows_hash``). Held as served, never computed here:
+        #: the plane is the only one that hashes (WIRE-VPC 3). ``None`` until an envelope carries it (a cache load, an older plane).
+        self._cfg_hash: str | None = None
+        #: Who this PROCESS is, for the acceptance evidence (WIRE-VPC 2): drawn once when it starts, so a restart is a new boot and a late or duplicated
+        #: hello of an old boot can be told from a new one. ``seq`` counts this boot's hellos from 1.
+        self._boot_id = str(uuid.uuid4())
+        self._hello_seq = 0
+        self._hello_seq_lock = threading.Lock()
         self._rows_raw: list | None = None
         self._unreadable_rows = 0
         self._halted_tools: dict = {}  # tool -> reasons the plane halted it for (halt_tools_v1); refused with policy_halted
@@ -220,6 +229,20 @@ class RemoteState:
                 self._defaults_problem = (error.code, str(error))
         self._defaults_enforced = (self._defaults is not None and self._defaults.state == "enforced") or (
             self._defaults_problem is not None and self._defaults_raw.get("state", "enforced") == "enforced")
+
+    def boot_id(self) -> str:
+        """Which process this is (drawn once at construction): a decision record names it, so a call can be traced to the process that decided it."""
+        return self._boot_id
+
+    def quota_peek_supported(self) -> bool:
+        """Does the plane answer ``POST /v1/quota/take`` with ``"peek": true`` as a peek (read the counter, take nothing)? A plane that serves a ``cfg_hash`` shipped the
+        peek with it; an older one would ignore the key and TAKE a unit, so it is never sent one."""
+        return self._cfg_hash is not None
+
+    def served_cfg(self) -> "str | None":
+        """The configuration hash this worker holds (the plane's ``cfg_hash``, else its ``rows_hash``), or ``None`` with no rows: what a decision record names as the
+        configuration the call was decided under. Held as served, never computed here."""
+        return self._cfg_hash or self._rows_hash or None
 
     def defaults(self) -> Any:
         """The service defaults this worker holds (``lines.Defaults``), or ``None`` when the service has not adopted any."""
@@ -301,7 +324,7 @@ class RemoteState:
 
         with self._lock:
             now = self._now()
-            serving = self._last_success is not None and (self._policy_held or not self._announced_version)
+            serving = self._last_success is not None and self._policy_held
             served_at = self._last_success if serving else None
             sealed_ages = [age for age in (self.cache_age_s(), None if served_at is None else now - served_at) if age is not None]
         sealed = states.Cache(sealed_at=now - min(sealed_ages)) if sealed_ages else None
@@ -344,7 +367,7 @@ class RemoteState:
             reference = self._last_success if self._last_success is not None else self._started_at
             if self._now() - reference >= self._grace:
                 return "the control plane has not answered for %d s" % self._grace
-            if self._last_success is not None and (self._policy_held or not self._announced_version):
+            if self._last_success is not None and self._policy_held:  # a hello answered AND the policy it announced (or its absence) read: not the hello alone
                 return None
             age = self.cache_age_s()  # no hello yet, or told a policy exists while holding none: the cache decides
         if age is not None and age <= cache_module.FRESH_FOR_CONSEQUENTIAL_S:
@@ -435,6 +458,13 @@ class RemoteState:
             mode = getattr(reply, "halt_mode", "stop")
             mode = mode if mode in ("stop", "narrow") else "stop"
             halt_moved = halted_moved = False
+            first_read = False
+            if not unavailable and not self._policy_held:
+                # The FIRST answered hello, whatever version it announced: a new service starts with enforced standard defaults the plane has not announced yet (it says
+                # version 0), and a worker that read 0 as "no policy" ran consequential tools unasked until a later hello announced one. The policy is read BEFORE the
+                # hello counts as answered, so the startup floor lifts only with the policy (and its defaults) in hand.
+                self._fetch_policy(version)
+                first_read = self._policy_held
             with self._lock:
                 if unavailable:
                     if not self._fleet_state_unavailable:
@@ -451,7 +481,7 @@ class RemoteState:
                     self._halt = bool(getattr(reply, "halt", False))
                     self._halt_mode = mode if self._halt else "stop"
                     halt_moved = halt_before != self._halt
-                    changed = version != self._policy_version
+                    changed = version != self._policy_version and not first_read  # a policy just read is not read again for the same hello
                     self._announced_version = version
                 self._notice = notice if isinstance(notice, str) else None
                 said = getattr(reply, "plane_degraded", None)
@@ -528,6 +558,8 @@ class RemoteState:
             # refusal profiles): replace them only when their hash differs from the one held.
             if isinstance(data, dict):
                 self._set_defaults(data.get("service_defaults"))  # the envelope carries them every time; absent = not adopted
+                served_cfg = data.get("cfg_hash")
+                self._cfg_hash = served_cfg if isinstance(served_cfg, str) and served_cfg else None
             if isinstance(digest, str) and digest != self._rows_hash:
                 self._set_rows(rows, digest)
             elif not isinstance(digest, str) and rows is None:
@@ -602,7 +634,12 @@ class RemoteState:
             # hello without it resets the worker to the legacy fields (stricter or equal).
             "policy_features": list(policy_features()),
             "policy_unsupported": self._unsupported_payload(),
+            "boot_id": self._boot_id,
+            "seq": self._next_seq(),
         }
+        accepted = self._accepted_cfg()
+        if accepted is not False:
+            payload["accepted_cfg"] = accepted
         if self._rows_hash is not None:
             payload["rows_hash"] = self._rows_hash  # the rows held: the plane (T2) compares it to what it serves
         held = self.quota.report()
@@ -613,6 +650,25 @@ class RemoteState:
             payload["renew_claims"] = executing[:20]  # approvals being run here: the plane extends their claims
         payload.update(self._tools_payload())
         return payload
+
+    def _next_seq(self) -> int:
+        """This boot's next hello number: 1, 2, 3 ... strictly increasing, one per hello built (a hello that never reached the plane leaves a gap, which is fine:
+        the plane only needs each number to be larger than the last it kept)."""
+        with self._hello_seq_lock:
+            self._hello_seq += 1
+            return self._hello_seq
+
+    def _accepted_cfg(self) -> "str | None | bool":
+        """What the hello says this worker is enforcing NOW (WIRE-VPC 2): the configuration hash the plane served, echoed only once every row is parsed and applied.
+
+        ``False`` when no policy has been applied yet (nothing to claim: the key is left out); ``None`` when any row or the service defaults was unreadable or
+        unsupported (the worker is NOT enforcing what was served, so it must not say it is); ``""`` when a policy was applied that carried no rows hash (an older
+        plane); otherwise the hash. Never recomputed here."""
+        if not self._policy_held:
+            return False
+        if self.policy_unsupported():
+            return None
+        return self._cfg_hash or self._rows_hash or ""
 
     def _unsupported_payload(self) -> list:
         """``policy_unsupported`` as the hello carries it: ``[{tool, reason}]`` for each tool this worker refuses as unreadable."""

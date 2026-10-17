@@ -1,4 +1,4 @@
-"""The dry-run contract (TPD §4c.5, §12 item 5; named test 3). Ids O-DRY-*. O-DRY-1 passes since TR2-O2; O-DRY-2 is R3.
+"""The dry-run contract (TPD §4c.5, §12 item 5; named test 3). Ids O-DRY-*. O-DRY-1 passes since TR2-O2; O-DRY-2 passes since VPC B6b (a dry run takes no unit, it peeks).
 
 Vocabulary does not grow in R0: the TPD's ``would_deny`` is today's ``would_refuse:<code>`` tag (here
 ``would_refuse:tool_blocked`` for a deny), so these tests use the tag the engine already writes.
@@ -59,7 +59,6 @@ def test_o_dry_1a_a_candidate_never_moves_a_live_counter_or_asks_anyone():
     assert shared.takes() == [] and [c for c in shared.calls if c[1] == "/v1/approvals"] == []
 
 
-@pytest.mark.xfail(strict=True, raises=AssertionError, reason="C4: a dry_run quota row takes a live unit (quota.py:18); R3 simulates")
 @pytest.mark.contract(item="§12.5", ships="R3")
 def test_o_dry_2_a_dry_run_line_over_a_limit_leaves_the_live_counter_unchanged_and_creates_no_approval_row():
     shared = start(FakeShared([row("look", state="dry_run", quota=QUOTA, approval_required=True)]))
@@ -69,7 +68,8 @@ def test_o_dry_2_a_dry_run_line_over_a_limit_leaves_the_live_counter_unchanged_a
         return "ok"
 
     assert look() == "ok"
-    assert shared.takes() == []  # no live unit taken
+    assert [c for c in shared.takes() if not c[2].get("peek")] == []  # no live unit taken: the plane is only ever PEEKED (read, never moved)
+    assert shared.quota.report() == {}  # and no lease spent
     assert [c for c in shared.calls if c[1] == "/v1/approvals"] == []  # no approval row
 
 

@@ -67,6 +67,7 @@ anything else.
 | `approval_denied` | `ExecutionRefused` | a person denied the request. | no |
 | `approval_timeout` | `ExecutionRefused` | nobody decided within `timeout_s`, the request expired, or the plane could not be reached to file it before the deadline. | no |
 | `approval_unavailable` | `ExecutionRefused` | a new approval cannot be asked: no plane, the link is not `connected`, the arguments are not JSON, or the plane refused or stopped answering the request. | no |
+| `approval_superseded` | `ExecutionRefused` | a person approved the call (or a grant admitted it), but the policy the worker holds now refuses it: the tool was blocked, a deny line or an unreadable rule now applies, or the session cap is reached. The approval never overrides the policy; ask again under the new one. | no |
 | `approval_tampered` | never raised | a deferred request whose seal does not verify. Nothing runs; `on_deferred_result` gets `outcome="tampered"` and `error="approval_tampered"`. | |
 | `plane` | not raised | in the closed set for older handlers; no check in this release produces it. | yes |
 

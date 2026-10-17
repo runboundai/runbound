@@ -21,7 +21,7 @@ from ._rules.conditions import Cond, Group
 from ._rules.evaluator import Ceiling, Rule, evaluate
 
 #: The R2 policy features this SDK enforces; it reports exactly these on every hello. ``defaults_v1`` joins them in TR2-O3.
-FEATURES = ("lines", "halt_tools_v1", "defaults_v1", "conditions_v1", "repetition_v1", "grants_v1")
+FEATURES = ("lines", "halt_tools_v1", "defaults_v1", "conditions_v1", "repetition_v1", "grants_v1", "acceptance_v1", "revisions_v1")
 
 DECISIONS = evaluator.DECISIONS
 LINE_KEYS = frozenset({"id", "decision", "approval", "limits", "when", "unless", "repetition"})
@@ -191,7 +191,10 @@ def plan(lines: tuple, otherwise: "str | None" = None, *, args: Any = None, cont
             for line in live if line.decision == "ask"]
     reqs = approvals_rules.requirements(outcome, None, asks, fallback_operative=not outcome.matched_rule_ids)
     repeats = [line.repetition["max"] for line in live if line.repetition]
-    contributors = [_contributor(c) for c in outcome.contributors]
+    explicit = otherwise in ("allow", "ask", "deny")
+    # The row's OWN otherwise decided when no line matched: it is the tool's rule, not the service default (VPC-05: never mislabelled as inherited). An inherit (or
+    # no otherwise) leaves the decision to the service defaults, which is what "default:service" says.
+    contributors = [f"otherwise:{c.effect}" if explicit and c.kind == "fallback" else _contributor(c) for c in outcome.contributors]
     return Plan(
         decision=outcome.decision, reason=outcome.primary_reason, matched=tuple(outcome.matched_rule_ids),
         contributors=tuple(contributors), approval=None if ask is None else (ask.approval or {}),
