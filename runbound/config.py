@@ -64,7 +64,7 @@ class RunboundConfig:
     unclassified tools keep running on the cache after the plane last answered) and ``cache_dir`` (where the last policy the plane served is kept so a restart enforces it before the first
     heartbeat; ``RUNBOUND_CACHE_DIR``, else the platform cache dir, else the temp dir) and ``approval_secret`` (the per-service secret that seals deferred approvals; ``RUNBOUND_APPROVAL_SECRET``
     when unset; never sent to the plane), ``on_deferred_result`` (called with the outcome of each deferred
-    approval this worker executes) and ``otel_endpoint`` (an OTLP/HTTP collector base URL: spans are posted there as OTLP/JSON when no
+    approval this worker executes), ``offline_execution_s`` (60 to 86400: how long consequential tools keep running on the last policy confirmation while the plane is away; it may only SHORTEN the window the plane serves), ``approval_bind`` (default False: ask the plane for approval requests that can be BOUND to one execution attempt, so a replay cannot run the body twice; a plane that does not know it files a legacy request), ``provide`` (``{type or parameter name: zero-argument callable}``: what supplies a tool parameter marked ``runbound.Injected`` when an approved deferred request runs) and ``otel_endpoint`` (an OTLP/HTTP collector base URL: spans are posted there as OTLP/JSON when no
     OpenTelemetry provider is configured, with ``token`` as the Bearer key) and ``hook_timeout_s`` (a user hook still running after
     this many seconds counts as raising; ``None`` waits forever).
 
@@ -95,6 +95,9 @@ class RunboundConfig:
     consequential_grace_s: float = 60.0
     approval_secret: str | None = field(default=None, repr=False)  # secret
     on_deferred_result: Callable[[dict], None] | None = None
+    provide: dict | None = None
+    offline_execution_s: int | None = None
+    approval_bind: bool = False
     on_event: Callable[[dict], None] | None = None
     max_sessions: int = 10_000
     _plane_mode: str | None = field(default=None, init=False, repr=False)
@@ -181,6 +184,14 @@ class RunboundConfig:
             raise ValueError("approval_secret must be a non-empty string")
         if self.on_deferred_result is not None and not callable(self.on_deferred_result):
             raise ValueError(f"on_deferred_result must be callable, got {self.on_deferred_result!r}")
+        if self.provide is not None:
+            if not isinstance(self.provide, dict) or not all(isinstance(key, (str, type)) and callable(value) for key, value in self.provide.items()):
+                raise ValueError("provide must be a dict of a parameter name or a type to a zero-argument callable that supplies it")
+        if not isinstance(self.approval_bind, bool):
+            raise ValueError(f"approval_bind must be True or False, got {self.approval_bind!r}")
+        window = self.offline_execution_s
+        if window is not None and (isinstance(window, bool) or not isinstance(window, int) or not 60 <= window <= 86400):
+            raise ValueError(f"offline_execution_s must be an integer between 60 and 86400 (it may only shorten the window the plane serves), got {window!r}")
         timeout = self.hook_timeout_s
         if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0):
             raise ValueError(f"hook_timeout_s must be positive or None, got {timeout!r}")

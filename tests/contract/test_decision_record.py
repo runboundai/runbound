@@ -92,3 +92,30 @@ def test_o_rec_3_a_fallback_decision_has_an_empty_matched_list_and_a_refusal_may
     assert len(refused.value.decision.evaluation.get("contributors", ())) >= 2
     assert refused.value.decision.evaluation["contributors"] == ["code:blocked", "row:L1"]
     assert by_tool["plain"][SPAN["reason_code"]] == "fallback" and by_tool["plain"][SPAN["contributors"]] == ["default:service"]
+
+
+class _UnversionedShared(FakeShared):
+    policy_version = 0  # no policy held yet (FakeShared holds generation 7)
+
+
+def test_o_rec_4_jrec1_one_refusal_tells_one_story_on_the_span_and_in_the_event(collector):
+    """J-REC-1 / AAI-01 (AT-02): the span and the event of ONE refusal agree on the reason code and the policy version. The event's legacy
+    ``decision.policy_version`` used to stay null while the record beside it carried the version; it now carries the same value."""
+    start(FakeShared([row("wire", blocked=True)]), otel_endpoint=collector.url)  # FakeShared holds generation 7
+    with pytest.raises(runbound.ExecutionRefused) as refused:
+        _blocked_tool()()
+    spans.exporter().flush(5.0)
+    (span,) = collector.spans()
+    attrs = attrs_of(span)
+    details = refused.value.anomaly.details  # what the plane stores as the refusal event
+    assert attrs[SPAN["reason_code"]] == details["reason_code"] == "tool_blocked"
+    assert int(attrs[SPAN["policy_version"]]) == details["policy_version"] == details["decision"]["policy_version"] == 7  # OTLP JSON carries ints as strings
+    assert refused.value.decision.policy_version == 7
+
+
+def test_o_rec_5_without_a_held_version_the_legacy_field_stays_null_never_invented():
+    """FR-2 truthful absence: with no policy version held, nothing is invented in the legacy field."""
+    start(_UnversionedShared([row("wire", blocked=True)]))
+    with pytest.raises(runbound.ExecutionRefused) as refused:
+        _blocked_tool()()
+    assert refused.value.anomaly.details["decision"]["policy_version"] is None

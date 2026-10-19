@@ -30,12 +30,12 @@ def test_defaults_match_spec():
     assert cfg.max_sessions == 10_000
 
 
-def test_config_has_exactly_the_twenty_five_public_fields():
+def test_config_has_exactly_the_twenty_eight_public_fields():
     names = {f.name for f in dataclasses.fields(RunboundConfig) if f.init}
     assert names == {
         "token", "control_plane_url", "service", "worker_id", "control_plane_poll_s",
         "export_events", "send_session_keys", "on_halt", "tool_policy", "capabilities",
-        "require_rules", "max_actions_per_run", "pre_hooks", "gate_hooks", "hook_timeout_s", "post_hooks", "redact_keys", "result_limits", "otel_endpoint", "consequential_grace_s", "cache_dir", "approval_secret", "on_deferred_result", "on_event", "max_sessions",
+        "require_rules", "max_actions_per_run", "pre_hooks", "gate_hooks", "hook_timeout_s", "post_hooks", "redact_keys", "result_limits", "otel_endpoint", "consequential_grace_s", "cache_dir", "approval_secret", "on_deferred_result", "provide", "offline_execution_s", "approval_bind", "on_event", "max_sessions",
     }
 
 
@@ -153,7 +153,7 @@ def test_runbound_tripped_is_catchable_as_raised():
 
 
 def test_package_exports_version_and_core_names():
-    assert runbound.__version__ == "1.0.0a4"
+    assert runbound.__version__ == "1.0.0a5"
     assert runbound.Event is Event
     assert runbound.Anomaly is Anomaly
     assert runbound.RunboundConfig is RunboundConfig

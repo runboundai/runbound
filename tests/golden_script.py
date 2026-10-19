@@ -142,7 +142,9 @@ def _session_summary(state: Any) -> dict:
 def _anomalies(recorder: _Recorder) -> list:
     hidden = ("session_id", "anomaly_id", "key_hash", "decision",
               # the decision record (TR2-O2) rides every anomaly; the contract tests pin it, the golden stays what it was
-              "reason_code", "policy_state", "policy_version", "matched_rule_ids", "service_default_revision", "contributors", "sdk_version")
+              "reason_code", "policy_state", "policy_version", "matched_rule_ids", "service_default_revision", "contributors", "sdk_version",
+              # AAI-1 FR-1: random ids of the call, different on every run
+              "action_id", "attempt_id", "evaluation_id", "parent_action_id", "trace_id", "span_id")
     return [
         [
             anomaly.detector,

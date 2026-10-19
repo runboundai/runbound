@@ -401,7 +401,7 @@ def test_registration_rejects_a_deferred_tool_with_arguments_that_are_not_json()
     with pytest.raises(ValueError, match="deferred"):
 
         @runbound.tool(approval="required", mode="deferred")
-        def schedule(when: datetime.datetime): ...
+        def schedule(when: set): ...  # a datetime has a codec since DEF-1
 
     with pytest.raises(ValueError):
 

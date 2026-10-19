@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runbound"
-version = "1.0.0a4"
+version = "1.0.0a5"
 description = "A policy boundary around the tools an AI agent can call: per-tool policy, quotas, human approvals, fail-closed on plane loss, OpenTelemetry spans."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -43,6 +43,14 @@ Changelog = "https://github.com/runboundai/runbound/blob/main/CHANGELOG.md"
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
 langchain = ["langchain-core"]
+# AAI-04-5: the real-framework test harness (tests/integration/lc_harness.py). EXACT versions, recorded here and printed by the harness; the supported ranges are the RFC section 9 pins
+# (langchain >=1.0,<2, langgraph >=1.2,<2, Python >=3.11). Not a runtime dependency.
+langchain-test = [
+    "langchain==1.4.6; python_version >= '3.11'",
+    "langchain-core==1.6.12; python_version >= '3.11'",
+    "langgraph==1.2.16; python_version >= '3.11'",
+    "langgraph-checkpoint-sqlite==3.1.2; python_version >= '3.11'",
+]
 otel = ["opentelemetry-api>=1.39,<2", "opentelemetry-sdk>=1.39,<2"]
 
 [tool.setuptools]

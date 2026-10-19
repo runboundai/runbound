@@ -22,7 +22,8 @@ from runbound.policy import ToolCall
 from runbound.shared import LocalState
 from runbound.state import SessionState
 
-RECORD_KEYS = {"reason_code", "policy_state", "policy_version", "matched_rule_ids", "service_default_revision", "contributors", "sdk_version"}
+IDENTITY_KEYS = {"action_id", "attempt_id", "evaluation_id", "parent_action_id", "trace_id", "span_id"}  # AAI-1 FR-1: the call's identities ride the record like the rest of it
+RECORD_KEYS = IDENTITY_KEYS | {"reason_code", "policy_state", "policy_version", "matched_rule_ids", "service_default_revision", "contributors", "sdk_version"}
 KNOWN_EVALUATION_KEYS = {"limit", "used", "count", "rule", "denied_class"} | RECORD_KEYS  # the decision record rides the evaluation (TR2-O2)
 SECRET = "sk-do-not-log-me-42"
 

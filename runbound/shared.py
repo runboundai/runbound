@@ -53,6 +53,13 @@ UNAVAILABLE_AFTER_S = 60.0
 #: without enforced defaults).
 GRACE_DEFAULT_S = 60.0
 
+#: The offline-execution window (a service with enforced defaults): how long consequential tools keep running on the last POLICY CONFIRMATION while the plane is away.
+#: The plane serves it (``service_defaults.offline.execution_s``, 60 to 86400); a worker that cannot read what it was served uses the SHORTEST of ``OFFLINE_SAFE_S`` and the
+#: legacy behaviour; with nothing served the behaviour is today's, exactly (the 24 h validity window). ``init(offline_execution_s=)`` may only shorten it.
+OFFLINE_MIN_S, OFFLINE_MAX_S, OFFLINE_SAFE_S = 60, 86400, 900
+#: A wall-clock disagreement larger than this (a confirmation in the future, a wall clock that moved back against the monotonic one) counts as an expired window.
+OFFLINE_SKEW_S = 5.0
+
 
 class LocalState:
     """No control plane: the single-process behavior, and it asks nothing."""
@@ -125,6 +132,14 @@ class RemoteState:
         self._defaults: Any = None  # lines.Defaults, when readable
         self._defaults_problem: "tuple | None" = None  # (reason code, text) when served defaults cannot be read safely
         self._last_success: float | None = None
+        #: The evidence-coverage body the plane last ANSWERED a hello for: ``(digest, monotonic time)``; ``_evidence_inflight`` is the one on the hello being built.
+        self._evidence_sent: tuple = (None, None)
+        self._evidence_inflight: "tuple | None" = None
+        #: The last POLICY CONFIRMATION (not any answered hello): an authenticated, whole hello after which this worker held the policy the plane announced. Monotonic for this
+        #: process; wall clock for the cache (a restart resumes from the file's ``confirmed_at``, never from boot).
+        self._confirmed_mono: float | None = None
+        self._confirmed_wall: float | None = None
+        self._wall: Callable[[], float] = time.time
         self._last_attempt: float | None = None
         self._halt = False
         self._halt_mode = "stop"
@@ -200,6 +215,11 @@ class RemoteState:
         self._halted_tools = _halted_tools([{"tool": t, "reasons": r} for t, r in (body.get("halted_tools") or {}).items()]) if isinstance(body.get("halted_tools"), dict) else {}
         written = body.get("written_at")
         self._cache_written_at = float(written) if isinstance(written, (int, float)) else None
+        if "confirmed_at" in body:  # a cache written since the offline window: None means it never held a confirmation
+            confirmed = body.get("confirmed_at")
+            self._confirmed_wall = float(confirmed) if isinstance(confirmed, (int, float)) and not isinstance(confirmed, bool) else None
+        else:  # written by an older SDK: the file's age is all there is
+            self._confirmed_wall = self._cache_written_at
         age = self.cache_age_s()
         if age is not None and age > cache_module.STALE_AFTER_S:
             cache_module._warn_once(("stale",), "runbound: the policy cache is %.0f h old and the plane has not answered", age / 3600)
@@ -281,7 +301,7 @@ class RemoteState:
             self._cache_saved_mono = now
             body = cache_module.body_for(self._config.service, self._policy_version, self._policy, self._policy_dry_run,
                                          self._rows_hash, self._rows_raw, halt=self._halt_mode if self._halt else None,
-                                         halted_tools=self._halted_tools, service_defaults=self._defaults_raw)
+                                         halted_tools=self._halted_tools, service_defaults=self._defaults_raw, confirmed_at=self._confirmed_wall)
         if cache_module.write(self._cache_path, getattr(self._config, "token", None), body):
             self._cache_written_at = body["written_at"]
 
@@ -331,6 +351,67 @@ class RemoteState:
         fresh_s = max(30.0, 2.0 * float(getattr(self._config, "control_plane_poll_s", 5.0)))
         return states.state(now, served_at, sealed, states.Validity(fresh_s=fresh_s, cache_s=cache_module.STALE_AFTER_S))
 
+    # --- the offline-execution window ------------------------------------------------
+
+    def _offline_bound(self) -> "int | None":
+        """The window (seconds) that bounds consequential execution on the last policy confirmation, or ``None`` when today's behaviour applies unchanged.
+
+        Only a service with ENFORCED defaults has one. The served ``offline.execution_s`` applies when it is an integer 60..86400; a served value this SDK cannot read uses the
+        shortest of 900 s and the legacy behaviour (never longer); nothing served is today's behaviour. ``init(offline_execution_s=)`` may only shorten it.
+        """
+        if not self._defaults_enforced:
+            return None
+        raw = self._defaults_raw if isinstance(self._defaults_raw, dict) else {}
+        window: "int | None" = None
+        if "offline" in raw:
+            served = raw["offline"].get("execution_s") if isinstance(raw["offline"], dict) else None
+            ok = isinstance(served, int) and not isinstance(served, bool) and OFFLINE_MIN_S <= served <= OFFLINE_MAX_S
+            window = served if ok else OFFLINE_SAFE_S
+        own = getattr(self._config, "offline_execution_s", None)
+        if own is not None:
+            ceiling = cache_module.STALE_AFTER_S if window is None else window  # nothing served: the legacy 24 h is what it may shorten
+            if own < ceiling:
+                window = own
+            elif own > ceiling:
+                from .hooks import _warn_once
+
+                _warn_once(("offline-longer",), "runbound: init(offline_execution_s=%d) is longer than the %d s window in force; ignored (it may only shorten it)", own, ceiling)
+        return window
+
+    def offline_window_s(self) -> "int | None":
+        """The window this worker reports and applies, in seconds: ``None`` without enforced defaults; the legacy 24 h when nothing shorter is served or configured."""
+        if not self._defaults_enforced:
+            return None
+        bound = self._offline_bound()
+        return bound if bound is not None else cache_module.STALE_AFTER_S
+
+    def offline_deadline(self) -> "float | None":
+        """An ESTIMATE of when consequential execution on the last confirmation ends (wall-clock epoch seconds), or ``None`` without a window or a confirmation."""
+        window = self.offline_window_s()
+        return None if window is None or self._confirmed_wall is None else self._confirmed_wall + window
+
+    def _confirmation_expired(self, window: int) -> bool:
+        """Has the last policy confirmation outlived ``window``? Expiry only ever refuses MORE, so every doubt counts as expired: no confirmation at all, one dated in the future
+        (more than 5 s), a wall clock that moved back against the monotonic clock, and the larger of the two ages."""
+        wall = self._confirmed_wall
+        if wall is None:
+            return True
+        wall_age = self._wall() - wall
+        if wall_age < -OFFLINE_SKEW_S:
+            return True
+        age = max(wall_age, 0.0)
+        if self._confirmed_mono is not None:
+            mono_age = self._now() - self._confirmed_mono
+            if wall_age < mono_age - OFFLINE_SKEW_S:
+                return True
+            age = max(age, mono_age)
+        return age > window
+
+    def _confirm(self) -> None:
+        """A policy confirmation: stamp now (monotonic and wall clock). Caller holds no lock."""
+        with self._lock:
+            self._confirmed_mono, self._confirmed_wall = self._now(), self._wall()
+
     def plane_refusal(self, effects: "frozenset | None") -> str | None:
         """Why a tool carrying ``effects`` must be refused because the plane is gone, else ``None``.
 
@@ -349,6 +430,9 @@ class RemoteState:
         from .hooks import fails_closed, fails_closed_unavailable
 
         if self._defaults_enforced:
+            bound = self._offline_bound()
+            if bound is not None and fails_closed(effects) and self._confirmation_expired(bound):
+                return "the offline-execution window of %d s has ended and the plane has not confirmed the policy" % bound
             if self.policy_state() != "unavailable":
                 return None  # fresh and cached: the sealed policy, defaults included, is enforced in full
             if self._defaults is not None:
@@ -438,6 +522,8 @@ class RemoteState:
                 reason=reason,
                 applied_policy_version=self._policy_version if self._policy is not None else None,
                 plane_degraded=self._plane_degraded,
+                offline_window_s=self.offline_window_s(),
+                offline_deadline=self.offline_deadline(),
             )
 
     # --- the heartbeat ------------------------------------------------------------
@@ -458,12 +544,12 @@ class RemoteState:
             mode = getattr(reply, "halt_mode", "stop")
             mode = mode if mode in ("stop", "narrow") else "stop"
             halt_moved = halted_moved = False
-            first_read = False
+            first_read = fetched_ok = False
             if not unavailable and not self._policy_held:
                 # The FIRST answered hello, whatever version it announced: a new service starts with enforced standard defaults the plane has not announced yet (it says
                 # version 0), and a worker that read 0 as "no policy" ran consequential tools unasked until a later hello announced one. The policy is read BEFORE the
                 # hello counts as answered, so the startup floor lifts only with the policy (and its defaults) in hand.
-                self._fetch_policy(version)
+                fetched_ok = self._fetch_policy(version)
                 first_read = self._policy_held
             with self._lock:
                 if unavailable:
@@ -491,6 +577,8 @@ class RemoteState:
                 self._last_success = self._now()
                 self._failures = 0
                 self._misses = 0
+                if self._evidence_inflight is not None:  # the plane answered the hello that carried it: it has the body
+                    self._evidence_sent, self._evidence_inflight = self._evidence_inflight, None
                 self._settle_tools_hash(reply)
             if moved:  # once per change, never per hello
                 from . import local_events
@@ -500,9 +588,13 @@ class RemoteState:
             if self._poller is not None and isinstance(poll_s, (int, float)) and poll_s > 0:
                 self._poller.set_interval(poll_s)
             if changed:
-                self._fetch_policy(version)
-            elif not unavailable and self._policy_version:
-                self._save_cache()  # keep the cache fresh: its age is what consequential tools trust
+                fetched_ok = self._fetch_policy(version)
+            if not unavailable and said is None and self._policy_held and (fetched_ok or self._policy_version == version):
+                self._confirm()  # an authenticated, whole hello after which this worker holds the policy the plane announced: the only thing that renews the offline window
+                if fetched_ok:
+                    self._save_cache(force=True)  # the fetch wrote the file before this hello was a confirmation
+            if not changed and not unavailable and self._policy_version:
+                self._save_cache()  # keep the cache fresh (its confirmed_at is carried, never advanced by an unconfirmed hello)
             if not unavailable and (halt_moved or halted_moved):
                 self._save_cache(force=True)  # a halt put on or lifted is on disk at once
             if not unavailable:
@@ -533,11 +625,11 @@ class RemoteState:
             self._tools_sent_hash = self._tools_pending_hash
         self._tools_pending_hash = None
 
-    def _fetch_policy(self, version: int) -> None:
-        """Pull the org policy for this service; keep the old one on failure."""
+    def _fetch_policy(self, version: int) -> bool:
+        """Pull the org policy for this service; keep the old one on failure. ``True`` when it was applied."""
         data = self._attempt(lambda: self._client.policy(self._config.service), "policy")
         if data is None:
-            return
+            return False
         rows, digest = (data.get("rows"), data.get("rows_hash")) if isinstance(data, dict) else (None, None)
         if digest == "":
             # The plane's read-error marker: it could not read its rows, so this is not an answer. Apply nothing (the
@@ -545,7 +637,7 @@ class RemoteState:
             # (register C12: a transient plane error must never erase every rule on every worker that polls during it).
             self._record(False)
             _warn_policy_unread()
-            return
+            return False
         body, resolved, dry_run = _policy_envelope(data, version)
         if body is not None:
             _warn_legacy_document()
@@ -569,6 +661,7 @@ class RemoteState:
             local_events.note_runtime_value("policy_version", resolved)
         except Exception:
             _LOG.warning("runbound: could not note the policy_version", exc_info=True)
+        return True
 
     def _attempt(self, call: Callable[[], Any], what: str) -> Any:
         """Make one call to the plane. Never raises; ``None`` when it failed or the key is rejected."""
@@ -636,7 +729,11 @@ class RemoteState:
             "policy_unsupported": self._unsupported_payload(),
             "boot_id": self._boot_id,
             "seq": self._next_seq(),
+            "offline_window_s": self.offline_window_s(),  # the window this worker applies; null when it applies none
         }
+        payload.update(self._evidence_payload())
+        if getattr(self._config, "approval_bind", False):
+            payload["capabilities"] = ["bind_v1"]  # this worker binds an approved request to an attempt before it runs it (D2); absent otherwise
         accepted = self._accepted_cfg()
         if accepted is not False:
             payload["accepted_cfg"] = accepted
@@ -650,6 +747,52 @@ class RemoteState:
             payload["renew_claims"] = executing[:20]  # approvals being run here: the plane extends their claims
         payload.update(self._tools_payload())
         return payload
+
+    #: How often the telemetry counters ride the hello when nothing about the coverage STATE changed.
+    EVIDENCE_STATS_EVERY_S = 3600.0
+
+    def _evidence_state(self) -> dict:
+        """Where this worker's evidence can go (AAI-1 FR-5, RFC section 7), as STATE, not counters: whether ``otel_endpoint`` is set, whether the customer has their own
+        ``TracerProvider`` (read now, so a provider installed after ``init()`` is seen), and the events lane (``open``, ``stopped`` by a rejected key or the plan, or ``disabled`` by
+        the customer's ``export_events=False``)."""
+        from . import delivery, spans
+
+        exporter = self._exporter
+        if exporter is None or not getattr(exporter, "customer_events", getattr(exporter, "include_events", True)):
+            lane = "disabled"
+        elif not getattr(exporter, "include_events", True) or "events" in delivery.snapshot()["stopped_lanes"]:
+            lane = "stopped"
+        else:
+            lane = "open"
+        return {"otel_endpoint_set": bool(getattr(self._config, "otel_endpoint", None)), "tracer_provider_detected": spans._provider() is not None, "events_lane_state": lane}
+
+    def _evidence_stats(self) -> dict:
+        from . import delivery, spans
+
+        mine = spans.exporter()
+        events_dropped = sum(delivery.snapshot()["dropped"].get("events", {}).values())
+        return {"sent": getattr(mine, "sent", 0), "dropped": getattr(mine, "dropped", 0), "rejected": getattr(mine, "rejected", 0), "pending": getattr(mine, "pending", 0), "events_dropped": events_dropped}
+
+    def _evidence_payload(self) -> dict:
+        """``coverage_digest`` on every hello (a hash of the three state fields only, so it moves when the state does and never when a counter does) and ``evidence_coverage``
+        (the state plus ``telemetry_stats``) on the first hello, when the digest changes, and at most hourly: a plane stores a row on a change and the counters hourly. Reads
+        local state only: no new network call, no decision. Never raises."""
+        try:
+            import hashlib
+            import json
+
+            state = self._evidence_state()
+            digest = hashlib.sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+            now = self._now()
+            sent_digest, sent_at = self._evidence_sent
+            out: dict = {"coverage_digest": digest}
+            if digest != sent_digest or sent_at is None or now - sent_at >= self.EVIDENCE_STATS_EVERY_S:
+                out["evidence_coverage"] = {**state, "telemetry_stats": self._evidence_stats()}
+                self._evidence_inflight = (digest, now)
+            return out
+        except Exception:
+            _LOG.debug("runbound: could not build the evidence coverage", exc_info=True)
+            return {}
 
     def _next_seq(self) -> int:
         """This boot's next hello number: 1, 2, 3 ... strictly increasing, one per hello built (a hello that never reached the plane leaves a gap, which is fine:

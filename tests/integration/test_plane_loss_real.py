@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import time
 
 import pytest
@@ -21,9 +22,26 @@ def _clean():
     api._teardown_for_tests()
 
 
-def start(plane, service="plane-loss"):
+def start(plane, service="plane-loss", **config):
     runbound.init(control_plane_url=plane.url, token=KEY, service=service, control_plane_poll_s=0.2,
-                  consequential_grace_s=15)  # the shortest grace, so the test does not wait a minute
+                  consequential_grace_s=15, **config)  # the shortest grace, so the test does not wait a minute
+
+
+def bounded(fn, seconds, what):
+    """Run ``fn`` on a daemon thread and give it ``seconds``: a call that waits for an answer nobody can give FAILS the test instead of hanging the run. Returns ``("ok", value)`` or ``("raised", exception)``."""
+    box = []
+
+    def run():
+        try:
+            box.append(("ok", fn()))
+        except BaseException as exc:  # noqa: BLE001 - the test inspects whatever the call raised
+            box.append(("raised", exc))
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(seconds)
+    assert box, f"{what} did not return within {seconds} s (a call that waits for an approval nobody can give)"
+    return box[0]
 
 
 def tools():
@@ -112,9 +130,9 @@ def test_killing_the_plane_refuses_an_unruled_destructive_tool_approval_unavaila
     private_plane.kill()
     _until(lambda: runbound.plane_status().mode == "degraded", 10, "three missed hellos")
 
-    with pytest.raises(runbound.ExecutionRefused) as refused:
-        drop_table("t")
-    assert refused.value.reason == "approval_unavailable" and ran == []
+    outcome, caught = bounded(lambda: drop_table("t"), 10, "the unruled destructive call")
+    assert outcome == "raised" and isinstance(caught, runbound.ExecutionRefused), f"the call must be refused, got {outcome}: {caught!r}"
+    assert caught.reason == "approval_unavailable" and ran == []
 
 
 def test_a_restart_enforces_the_cached_rows_before_the_first_hello(private_plane, tmp_path):  # noqa: F811
@@ -140,13 +158,14 @@ def test_a_restart_enforces_the_cached_rows_before_the_first_hello(private_plane
     assert refused.value.reason == "tool_blocked"
 
 
-def test_a_destructive_tool_waits_for_a_hello_when_there_is_neither_a_hello_nor_a_cache(private_plane):  # noqa: F811
-    start(private_plane, "plane-loss-nocache")
-    drop_table, _ = tools()
+def test_a_destructive_tool_waits_for_a_hello_when_there_is_neither_a_hello_nor_a_cache(private_plane, tmp_path):  # noqa: F811
+    # The precondition is made, not hoped for: the plane is dead before the worker starts (so no hello can ever be answered) and its cache directory is this test's own (so no
+    # earlier run's cache can be loaded). It used to start the worker and kill the plane at once, which a loaded machine could lose: the first hello and policy landed first.
     private_plane.kill()
-    api._teardown_for_tests()
-    start(private_plane, "plane-loss-nocache")  # a restart with the plane dead and no policy ever served
+    start(private_plane, "plane-loss-nocache", cache_dir=str(tmp_path))
     drop_table, _ = tools()
+    shared = api._SHARED
+    assert shared.awaiting_first_policy() is True and shared._last_success is None and not shared._sealed_cache_loaded
     with pytest.raises(runbound.ExecutionRefused) as caught:
         drop_table("t")
     assert caught.value.reason == "plane_unavailable"

@@ -8,7 +8,7 @@ console, quotas, approvals and a fleet-wide view.
 **1. Install.**
 
 ```bash
-pip install runbound --pre      # 1.0.0a4 is an alpha; without --pre you get 0.11.2, which ignores console rules
+pip install runbound --pre      # 1.0.0a5 is an alpha; without --pre you get 0.11.2, which ignores console rules
 ```
 
 There are no runtime dependencies: stdlib only. There are two optional extras:

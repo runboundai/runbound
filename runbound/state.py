@@ -50,6 +50,7 @@ class SessionState:
         self._repeats: dict[tuple, int] = {}  # (tool, argument digest) -> calls counted by a repetition control
         self._key_cleared: dict[tuple, int] = {}  # (tool, matched lines) -> calls that cleared the chain: what a conditional line's cap counts
         self._key_in_chain: dict[tuple, int] = {}
+        self._reserved_actions = 0  # resume entries that hold a max_actions_per_run slot until they start or are released
         self.total_errors = 0
         self.started_at = time.monotonic()
         self.tripped_by: Anomaly | None = None
@@ -120,6 +121,54 @@ class SessionState:
             key = (tool, digest)
             if self._repeats.get(key, 0) > 0:
                 self._repeats[key] -= 1
+
+    @property
+    def reserved_actions(self) -> int:
+        with self.lock:
+            return self._reserved_actions
+
+    def reserve_resume(self, tool: str, digest: str, *, max_calls: "int | None" = None, key: "str | None" = None, key_cap: "int | None" = None,
+                       repeat: "int | None" = None, actions: "int | None" = None) -> "str | None":
+        """Reserve, ATOMICALLY with the check of the current limits, what a resumed (approved) call holds the way a fresh pass would: the ``max_calls`` unit (and the matched
+        lines' cap ``key``), the repetition count and a ``max_actions_per_run`` slot. ``None`` when all were taken; otherwise the refusal code (``session_max_calls``,
+        ``repetition_exceeded`` or ``max_actions_per_run``) and NOTHING was taken. One lock section: two concurrent resumes can never both pass on the last unit, and a
+        read-only check followed by a separate take is exactly what this is not."""
+        with self.lock:
+            if max_calls is not None and self.counted_calls(tool) >= max_calls:
+                return "session_max_calls"
+            if key is not None and key_cap is not None and self.counted_key(tool, key) >= key_cap:
+                return "session_max_calls"
+            if repeat is not None and self._repeats.get((tool, digest), 0) >= repeat:
+                return "repetition_exceeded"
+            if actions is not None and self.executed_actions + self._reserved_actions >= actions:
+                return "max_actions_per_run"
+            self.enter_chain(tool)
+            if key is not None:
+                self.hold_key(tool, key)
+            if repeat is not None:
+                self._repeats[(tool, digest)] = self._repeats.get((tool, digest), 0) + 1
+            self._reserved_actions += 1
+            return None
+
+    def commit_resume(self, tool: str, key: "str | None") -> None:
+        """The resumed call started (its start marker was emitted locally): the units become the executed call's."""
+        with self.lock:
+            self._reserved_actions = max(0, self._reserved_actions - 1)
+            self.leave_chain(tool, True)
+            if key is not None:
+                self.leave_key(tool, key, True)
+            self.admitted_actions += 1
+            self.executed_actions += 1
+
+    def release_resume(self, tool: str, digest: str, key: "str | None", repeat_taken: bool) -> None:
+        """The resumed call was refused before it started: everything it reserved goes back."""
+        with self.lock:
+            self._reserved_actions = max(0, self._reserved_actions - 1)
+            self.leave_chain(tool, False)
+            if key is not None:
+                self.leave_key(tool, key, False)
+            if repeat_taken:
+                self.release_repeat(tool, digest)
 
     def mark_action_refused(self) -> None:
         """Count one tool attempt that admission or the policy refused."""

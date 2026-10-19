@@ -47,7 +47,7 @@ class Event:
     tokens_estimated: bool = False  # a partial call's tokens_out is chars/4, not real usage
     provider: str | None = None  # the endpoint label, "openai@api.openai.com"; model calls only
     # --- tool_result only: what the tool returned, never the result itself ---
-    outcome: str | None = None  # "ok" | "error" | "refused" | "pending_approval" | "withheld"
+    outcome: str | None = None  # "ok" | "error" | "refused" | "pending_approval" | "withheld" | "cancelled"
     flags: tuple = ()  # scan pattern names that matched (never the matched text)
     flag_score: float = 0.0  # the summed weights of those patterns
     flagged: bool = False  # flag_score >= 1.0

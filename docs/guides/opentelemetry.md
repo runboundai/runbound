@@ -23,6 +23,23 @@ pip install "runbound[otel]"   # opentelemetry-api and opentelemetry-sdk (option
   `boundary`, `level`, `reason`, `policy_version`), `.result.flags` (pattern
   names only), `.result.flag_score` and, for an approval, `.approval.request_id`.
   The strings are pinned in `runbound/otel_names.py`.
+- **Identities and the record of one call.** `runbound.action_id`, `.attempt_id` and
+  `.evaluation_id` (random, carrying nothing about the call), `.parent_action_id` for a
+  governed call made inside another's body, `runbound.boundary` (`sdk-decorator`) and
+  `runbound.contract_version`. A refused span carries `runbound.anomaly_id`, and the
+  refusal's anomaly names the span back (`span_id`, `trace_id`). A call that was approved
+  and re-checked carries `runbound.recheck.evaluation_id`, `.outcome`, `.reason` and what
+  the re-check read. `runbound.capability_source`, `.capability_effective` and
+  `runbound.service_version` say where the capability declaration came from.
+- **The start marker.** Just before the tool's own code runs, a zero-length child span
+  `execution_started` is ended, once per attempt: never for a refused call, one parked for
+  an approval, or one the re-check refuses. It carries the attempt's identity and
+  `runbound.marker.tool` (never `gen_ai.tool.name`) and no argument or decision. A receiver
+  that counts every span counts it as a span of its own: Runbound's ingest excludes it by
+  name, and must be deployed before an SDK that emits it. A death inside the exporter's
+  one-second window loses it; under your own `TracerProvider` it goes to your tracer.
+- **Cancellation.** A task cancelled while the body runs ends the span with outcome
+  `cancelled` (the `tool_result` says `cancelled`, not an error).
 - **Status:** an exception from the body is ERROR with `error.type`. A refusal is
   not a failure of the tool: status stays UNSET with `runbound.outcome=refused` and
   `error.type=runbound.refused`.
@@ -36,7 +53,21 @@ pip install "runbound[otel]"   # opentelemetry-api and opentelemetry-sdk (option
 2. **`init(otel_endpoint="http://collector:4318")`.** Otherwise the span is posted
    as OTLP/JSON to `/v1/traces` (stdlib `json`, `gzip` and `urllib`; no extra
    needed), with `token` as the bearer key, batched, with backoff. A 400, 401, 403
-   or 413 drops the batch; a network error or 5xx is retried.
+   or 415 drops the batch; a 413 splits it (below); a network error or 5xx is retried.
+
+   **Batch identity.** Every post carries `X-Runbound-Batch: <boot_id>.<exporter_id>.<seq>`
+   (`boot_id` is drawn once per process, `exporter_id` is 8 random hex characters per
+   exporter instance, `seq` counts that exporter's batches from 0), so an ingest that
+   understands it can drop a retried insert instead of counting it twice; an ingest that
+   does not simply ignores the header. A batch whose post fails retryably is kept as an
+   *immutable* unit, the token plus the exact compressed bytes, and is resent first, byte
+   for byte, until it is accepted or dropped. Spans that arrive meanwhile queue behind it
+   and the drop-oldest rule never touches it. A 413 *halves* the unit: each half is a
+   part with its own bytes and a token made of the parent's plus `.p0` or `.p1`, so a
+   part refused again halves again (`<token>(.p<N>)*`), down to four levels (200 spans, then
+   100, 50, 25, 12); the parent token is retired. A part refused at the limit, or a single
+   span, is dropped, counted once, with one warning that says so. Only one flusher touches a unit at a time. Dedupe is bounded, not
+   exactly-once: it covers a retry that reaches the endpoint, not a span lost with the process.
 
 With neither, no span is made and a call pays one lookup.
 

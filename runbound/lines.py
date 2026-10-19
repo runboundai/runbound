@@ -275,12 +275,16 @@ class Resolved:
 
 
 def _decision_keys(effects: "frozenset | None") -> tuple:
+    """The keys a tool's classes are judged by. A class this reader does not know (a served class from a newer plane or console) is never ignored and never judged looser than
+    anything the tool DID state: the set is judged as its KNOWN classes PLUS ``unclassified``, strictest wins per key (a set of only unknown classes is just ``unclassified``)."""
     classes = frozenset(effects or ())
     if not classes:
         return ("unclassified",)
     ops = tuple(k for k in OPERATIONS if k in classes)
     tags = tuple(k for k in TAGS if k in classes)
-    return ops + tags  # an unknown operation contributes nothing: the tags decide (K4)
+    if classes - set(OPERATIONS) - set(TAGS) - {"unclassified"} or "unclassified" in classes:
+        return ops + tags + ("unclassified",)  # an unplaceable class: the strictest of its known classes and unclassified (was: ignored, K4)
+    return ops + tags
 
 
 def _fail_keys(effects: "frozenset | None") -> tuple:

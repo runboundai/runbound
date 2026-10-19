@@ -20,9 +20,11 @@ never an argument, a result or prompt text. Status: an exception from the body i
 from __future__ import annotations
 
 import logging
+import os
 import time
 from typing import Any
 
+from . import ids as ids_module
 from . import otel_names as n
 from . import otlp
 from .plane_types import redact_key
@@ -106,7 +108,7 @@ def begin(tool_name: str, run_id: str | None, version: str, call_id: str | None 
     try:
         provider = _provider()
         if provider is not None:
-            return CallSpan(tool_name, call_id, provider=provider, version=version)
+            return CallSpan(tool_name, call_id, provider=provider, version=version, run_id=run_id)
         if _EXPORTER is not None:
             return CallSpan(tool_name, call_id, run_id=run_id)
     except Exception:
@@ -122,18 +124,60 @@ class CallSpan:
     ) -> None:
         self.tool = tool_name
         self.call_id = call_id
+        self.run_id = run_id
         self.args_digest: str | None = None
         self._ended = False
+        self._marked = False
         self._start_ns = time.time_ns()
-        self._span = self._token = None
+        self._span = self._token = self._tracer = None
         if provider is not None:
             trace, context = _otel()
-            tracer = provider.get_tracer(n.SCOPE_NAME, version)
+            tracer = self._tracer = provider.get_tracer(n.SCOPE_NAME, version)
             self._span = tracer.start_span(n.SPAN_NAME.format(tool=tool_name), kind=trace.SpanKind.INTERNAL)
             self._token = context.attach(trace.set_span_in_context(self._span))
         else:
             self._trace_id = otlp.new_trace_id(run_id)
             self._span_id = otlp.new_span_id()
+
+    def mark_started(self, ids: "dict | None" = None, config: Any = None) -> None:
+        """Record that the tool body is about to run: a zero-length child span ``execution_started``, once per call. Never raises.
+
+        It goes where the call's own span goes (the stdlib exporter, or the customer's tracer under their provider), so it is exported on the exporter's tick: a death inside that window,
+        or during an outage of the receiver, loses it. The call span is exported only when the call ENDS, so a crash in the body loses exactly the span that carries the attempt's
+        identity; the marker therefore carries it too: the action, attempt and evaluation ids, the boundary and the declared target, the tool (as ``runbound.marker.tool``, never
+        ``gen_ai.tool.name``), the service, the worker and the run id. No argument, digest, decision or reason.
+        """
+        if self._marked or self._ended:
+            return
+        self._marked = True
+        try:
+            attrs = {n.BOUNDARY: ids_module.BOUNDARY_DECORATOR, n.DECLARED_TARGET: ids_module.BOUNDARY_DECORATOR, n.CONTRACT_VERSION: ids_module.CONTRACT_VERSION, n.MARKER_TOOL: self.tool,
+                     n.RUN_ID: self.run_id, n.SERVICE: getattr(config, "service", None), n.WORKER_ID: config.resolved_worker_id() if config is not None else None,
+                     n.SERVICE_VERSION: _service_version()}
+            for name, key in ((n.ACTION_ID, "action_id"), (n.ATTEMPT_ID, "attempt_id"), (n.EVALUATION_ID, "evaluation_id")):
+                attrs[name] = (ids or {}).get(key)
+            attrs = {k: v for k, v in attrs.items() if v is not None}
+            if self._span is not None:
+                now = time.time_ns()
+                marker = self._tracer.start_span(n.START_MARKER_NAME, start_time=now)
+                for key, value in attrs.items():
+                    marker.set_attribute(key, value)
+                marker.end(end_time=now)
+            elif _EXPORTER is not None:
+                now = time.time_ns()
+                _EXPORTER.add(otlp.span_json(self._trace_id, otlp.new_span_id(), n.START_MARKER_NAME, now, now, attrs, parent_span_id=self._span_id))
+        except Exception:
+            _LOG.debug("runbound: could not mark an execution start", exc_info=True)
+
+    def context_ids(self) -> dict:
+        """The span's own ``trace_id`` and ``span_id`` (lower-case hex), so the refusal that call raises can name the span that records it. ``{}`` if unknown."""
+        try:
+            if self._span is not None:
+                context = self._span.get_span_context()
+                return {"trace_id": format(context.trace_id, "032x"), "span_id": format(context.span_id, "016x")}
+            return {"trace_id": self._trace_id, "span_id": self._span_id}
+        except Exception:
+            return {}
 
     def end(self, facts: dict, exc: BaseException | None = None) -> None:
         """Finish the span with ``facts`` (already the attribute dict). Never raises."""
@@ -173,12 +217,18 @@ def error_type(exc: BaseException) -> str:
     return cls.__qualname__ if cls.__module__ == "builtins" else f"{cls.__module__}.{cls.__qualname__}"
 
 
+def _service_version() -> "str | None":
+    """``RUNBOUND_SERVICE_VERSION`` (what the deployment says it is running), or ``None``: a comparison label, never a decision input."""
+    value = os.environ.get("RUNBOUND_SERVICE_VERSION")
+    return value if isinstance(value, str) and value else None
+
+
 def facts(
     tool: str, outcome: str, *, config: Any, run_id: str | None, key: str | None, effects: frozenset,
     call_id: str | None, args_digest: str | None, exc: BaseException | None, decision: Any,
     policy_version: int | None, flags: tuple, flag_score: float, result_chars: int,
     approval_request_id: str | None = None, would_refuse: str | None = None, record: "dict | None" = None,
-    reason_code: str | None = None,
+    reason_code: str | None = None, ids: "dict | None" = None, anomaly_id: str | None = None, effects_source: str | None = None,
 ) -> dict:
     """The attribute dict of one finished call (RS-3 / otel-clickhouse.md §1.2)."""
     refused = outcome == "refused"
@@ -191,6 +241,9 @@ def facts(
         n.WORKER_ID: config.resolved_worker_id() if config is not None else None,
         n.RUN_ID: run_id,
         n.CAPABILITY: ",".join(sorted(effects)) or None,
+        n.CAPABILITY_SOURCE: effects_source or ("decorator" if effects else "undeclared"),
+        n.CAPABILITY_EFFECTIVE: (record or {}).get("effective_effects"),
+        n.SERVICE_VERSION: _service_version(),
         n.OUTCOME: outcome,
         n.ARGS_DIGEST: args_digest,
         n.RESULT_BYTES: result_chars or None,
@@ -199,9 +252,14 @@ def facts(
         n.APPROVAL_REQUEST_ID: approval_request_id,
         n.DECISION_VERDICT: "refuse" if refused else "would_refuse" if would_refuse else "allow",
         n.DECISION_KIND: "action",
+        n.BOUNDARY: ids_module.BOUNDARY_DECORATOR,
+        n.CONTRACT_VERSION: ids_module.CONTRACT_VERSION,
     }
+    for name, key in ((n.ACTION_ID, "action_id"), (n.ATTEMPT_ID, "attempt_id"), (n.EVALUATION_ID, "evaluation_id"), (n.PARENT_ACTION_ID, "parent_action_id")):
+        out[name] = (ids or {}).get(key)
     if refused:
         out[n.ERROR_TYPE] = n.ERROR_TYPE_REFUSED
+        out[n.ANOMALY_ID] = anomaly_id  # the refusal event this span records: the same refusal, provably (AT-02)
         if decision is not None:
             reason = decision.reason
             out[n.DECISION_BOUNDARY] = decision.boundary
@@ -236,6 +294,10 @@ def facts(
         out[n.DECISION_CANDIDATE_OUTCOME] = record.get("candidate_outcome")
         out[n.DECISION_CANDIDATE_REVISION] = record.get("candidate_revision")
         out[n.DECISION_CANDIDATE_OF] = record.get("candidate_of")
+        rechecked = record.get("rechecked")
+        if isinstance(rechecked, dict):
+            for field in n.RECHECK_FIELDS:
+                out[n.RECHECK_PREFIX + field] = rechecked.get(field)
         for name, key in ((n.DECISION_RECHECK_RULE_REVISION, "recheck_rule_revision"), (n.DECISION_RECHECK_CFG_HASH, "recheck_cfg_hash"),
                           (n.DECISION_RECHECK_POLICY_VERSION, "recheck_policy_version"), (n.DECISION_RECHECK_SERVICE_DEFAULT_REVISION, "recheck_service_default_revision"),
                           (n.DECISION_RECHECK_CONTRIBUTOR, "recheck_contributor"), (n.DECISION_RECHECK_REASON, "recheck_reason")):

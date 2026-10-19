@@ -147,6 +147,7 @@ class StageRefused(Exception):
         self.reason = reason
         self.hook = hook
         self.retry_after_s = retry_after_s
+        self.http_status: int | None = None  # set by approvals._file when the plane answered with a status that refused the request
 
 
 # --- warn once ---------------------------------------------------------------------

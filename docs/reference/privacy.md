@@ -105,7 +105,7 @@ Only for a tool decorated with `approval="required"`. See [Approvals](../guides/
 |---|---|
 | `POST /v1/approvals` | `tool`, `request_id`, `args` (the final arguments, as one JSON object), `mode`, `timeout_s`, `service`, `worker_id`, `run_id` (the local session id); `key` (the session key's hash) when the session has a key; `requested_for` (the email or user id you passed to `runbound.session(requested_for=...)`, in the clear: it is what the plane compares the decider with) when the block names one; `seal` for a deferred request when an approval secret is set; `args_digest` (a sha256 of the tool name and the arguments, which the plane recomputes), `requirement` (the id of the rule that asks) and the decision record (rule ids, policy version, policy state, contributors, SDK version; no argument values). |
 | `GET /v1/approvals/{id}?wait_s=N` | No body. |
-| `POST /v1/approvals/{id}/report` | `outcome` (`executed`, `failed`, `tampered`, `clock_skew`), `worker_id`, and `result_digest` when a deferred request ran and returned a result. |
+| `POST /v1/approvals/{id}/report` | `outcome` (`executed`, `failed`, `tampered`, `clock_skew`, `superseded`), `worker_id`, and `result_digest` when a deferred request ran and returned a result. |
 
 ### `POST /v1/quota/take`
 
@@ -125,7 +125,13 @@ One `execute_tool {tool}` span per call, only when something receives it. See
 | `error.type` | The exception's class name for a body that raised; `runbound.refused` for a refusal. |
 | `runbound.service`, `runbound.worker_id`, `runbound.run_id` | The service, the worker id, the local session id. |
 | `runbound.capability` | The tool's classes, comma-separated. |
-| `runbound.outcome` | `ok`, `error`, `refused`, `withheld` or `pending_approval`. |
+| `runbound.capability_source` | Where that declaration came from: `decorator`, `mcp_annotation` (an integration said so with `@tool(effects_source="mcp_annotation")`) or `undeclared`. |
+| `runbound.capability_effective` | The classes the call was held to, only when a console row raised the tool's own (`risk_class`); absent otherwise. |
+| `runbound.service_version` | `RUNBOUND_SERVICE_VERSION` when the deployment sets it; a label to compare the same tool across releases, never a decision input. |
+| `runbound.action_id`, `runbound.attempt_id`, `runbound.evaluation_id`, `runbound.parent_action_id` | Random identities of the action, this attempt and this evaluation, and the parent action of a nested governed call. Carry nothing about the call. |
+| `runbound.boundary`, `runbound.contract_version` | `sdk-decorator`; the version of this record contract. |
+| `runbound.anomaly_id` | On a refused span: the id of the refusal it records (the anomaly names the span back). |
+| `runbound.outcome` | `ok`, `error`, `refused`, `withheld`, `cancelled` or `pending_approval`. |
 | `runbound.args_digest` | The salted argument digest. |
 | `runbound.result_bytes` | The result's serialized size before the post chain. |
 | `runbound.result.flags`, `runbound.result.flag_score` | The names of the injection patterns that matched, and their summed weight. Never the matched text. |

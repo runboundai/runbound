@@ -25,7 +25,7 @@ not empty, `Authorization: Bearer <token>`.
 
 ## The endpoints
 
-The SDK calls seven endpoints on the plane and nowhere else.
+The SDK calls ten endpoints on the plane and nowhere else.
 
 | Call | Sent by | When | What it carries |
 |---|---|---|---|
@@ -36,6 +36,9 @@ The SDK calls seven endpoints on the plane and nowhere else.
 | `POST /v1/approvals` | `approvals.py` | a call that needs a person | `tool`, `request_id`, `args`, `mode`, `timeout_s`, `service`, `worker_id`, `run_id`, `key` when keyed, `args_digest`, `requirement` when a rule asks, the decision record (`reason_code` when known, `matched_rule_ids`, `policy_version`, `service_default_revision`, `policy_state`, `contributors`, `sdk_version`, and `rule_revision` / `cfg_hash` when the worker was served them), `seal` when deferred and a secret is set. A `granted: true` answer admits the call with no request |
 | `GET /v1/approvals/{id}` | `approvals.py` | a sync approval waiting for its answer | `?wait_s=` (at most 25): a long poll |
 | `POST /v1/approvals/{id}/report` | `approvals.py` | after an approved call ran | `outcome` (`executed`, `failed`, `tampered`, `clock_skew`, `superseded`), `worker_id`, `result_digest` (a sha256 of the result) for an executed call, and `reason` (the refusal code) for a `superseded` one |
+| `POST /v1/approvals/{id}/bind` | `approvals.py` | a bind-required approval (only with `approval_bind=True` against a plane that files one), after it is approved and before its body runs | `attempt_id`, `action_id`, `args_digest`, and the `claim_token` a deferred execution was given. `first: true` lets the body run; `first: false`, any 409 or a lost claim ends `prior_outcome_unknown` without running it; no answer ends `approval_unavailable` |
+| `GET /v1/approvals/by-request/{id}` | `approvals.py` | `approvals.resolve_replay`, one bounded (1 s) lookup before a replayed call is admitted | nothing but the request id; the answer decides whether the call is a first run, a resume, or refused (`replay_unavailable`) |
+| `POST /v1/approvals/{id}/withdraw` | `approvals.py` | `approvals.withdraw`, the caller gave up on a PENDING request | `reason` when given. A transport failure leaves the call withdrawn locally and never dispatched |
 
 The hello, the policy fetch and the events batch run on background threads,
 never on a tool call. The other four are made from the call that needs the
@@ -73,6 +76,10 @@ What a hello carries:
 | `policy_features` | what this SDK enforces (`lines`, `halt_tools_v1`, `defaults_v1`, `conditions_v1`, `repetition_v1`, `grants_v1`, and `acceptance_v1` and `revisions_v1`: it sends `boot_id`/`seq`/`accepted_cfg`, and it accepts `rule_revision` on a served row and its candidate), on **every** hello and before the first policy fetch: the plane serves decision lines only to a worker that said so on its latest hello, and a hello without it resets the worker to the legacy fields |
 | `boot_id`, `seq` | which PROCESS this is and which hello of it: `boot_id` is drawn once when the process starts (a restart is a new boot), `seq` counts that boot's hellos from 1 and only goes up. With them the plane keeps the newest report of a worker and ignores an older or out-of-order one |
 | `accepted_cfg` | the configuration hash (`cfg_hash` of the policy envelope) this worker is enforcing, echoed as served and never computed here, and only once every row and the service defaults were read and applied. `null` when any row was unreadable or unsupported (it is not enforcing what was served); left out until a policy has been applied; `""` for a policy that carried no hash. The plane counts a worker's acceptance only when `boot_id` and `accepted_cfg` come together (`acceptance_v1`) |
+| `offline_window_s` | the offline-execution window this worker applies, in seconds, or `null` when it applies none (a service without enforced defaults): `service_defaults.offline.execution_s` as served (shortened by `init(offline_execution_s=)`), 15 minutes if the served value could not be read, 24 hours (`86400`) when the plane served none. Sent on every hello; absent from SDKs before 1.0.0a5, which the plane must read as "unsupported or unknown", never infer from the version |
+| `capabilities` | `["bind_v1"]` when `init(approval_bind=True)`: this worker binds an approved request to an attempt before it runs it (D2). Left out otherwise; the plane records it per worker and offers a bind-required deferred request only to a worker that sent it |
+| `coverage_digest` | sha256 of the canonical JSON of the three coverage STATE fields below (not the counters), on every hello: it moves when the state does, so the plane stores a row on a change |
+| `evidence_coverage` | where this worker's evidence can go: `otel_endpoint_set`, `tracer_provider_detected` (read at each hello, so a provider installed after `init()` is seen), `events_lane_state` (`open`, `stopped` by a rejected key or the plan, `disabled` by `export_events=False`) and `telemetry_stats` (`sent`, `dropped`, `rejected`, `pending` of the span exporter, `events_dropped`). Sent on the first hello, when the digest changes, and at most hourly; a plane that does not know the keys ignores them. It reads local state only |
 | `policy_unsupported` | `[{tool, reason}]` for each tool whose console rule this SDK cannot read safely and so refuses (`row_unparseable`, `unknown_restriction_key`, `invalid_body`, `legacy_view_mismatch`) |
 
 What the SDK reads from the reply: `halt` and `halt_mode`, `policy_version`,

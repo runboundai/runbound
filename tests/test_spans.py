@@ -43,7 +43,7 @@ class Collector:
         self.url = f"http://127.0.0.1:{self.server.server_port}"
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
-    def spans(self) -> list:
+    def all_spans(self) -> list:
         return [
             span
             for _, body in self.requests
@@ -51,6 +51,10 @@ class Collector:
             for ss in rs["scopeSpans"]
             for span in ss["spans"]
         ]
+
+    def spans(self) -> list:
+        """The call spans: the start markers (AAI-1 03c, ``execution_started``) are counted separately, by :meth:`all_spans`."""
+        return [span for span in self.all_spans() if span["name"] != "execution_started"]
 
     def close(self) -> None:
         self.server.shutdown()
@@ -264,7 +268,7 @@ def test_a_down_collector_never_blocks_or_raises_and_a_400_drops(collector):
     for _ in range(3):
         assert look() == 1
     flush()
-    assert spans.exporter().pending == 0 and spans.exporter().dropped == 3  # 400: not retried
+    assert spans.exporter().pending == 0 and spans.exporter().dropped == 6  # 400: not retried; each call is its span and its start marker (AAI-1 03c)
 
     collector.close()
     api._teardown_for_tests()
@@ -276,7 +280,7 @@ def test_a_down_collector_never_blocks_or_raises_and_a_400_drops(collector):
 
     assert look2() == 2
     spans.exporter().flush(1.0)
-    assert spans.exporter().pending == 1  # unreachable: kept for a retry, caller unaffected
+    assert spans.exporter().pending == 2  # unreachable: kept for a retry (the span and its start marker), caller unaffected
 
 
 def test_a_full_queue_drops_the_oldest_and_counts():
@@ -366,7 +370,11 @@ def test_with_a_provider_configured_spans_go_there_and_the_stdlib_emitter_stays_
         flush()
 
         done = {s.name: s for s in exporter.get_finished_spans()}
-        assert set(done) == {"execute_tool look", "child", "execute_tool broken"}
+        names_done = [s.name for s in exporter.get_finished_spans()]
+        assert set(done) == {"execute_tool look", "child", "execute_tool broken", "execution_started"}
+        assert names_done.count("execution_started") == 2, "one start marker per call that reached its body, on the customer's tracer (AAI-1 03c)"
+        marker = next(s for s in exporter.get_finished_spans() if s.name == "execution_started" and s.parent.span_id == done["execute_tool look"].context.span_id)
+        assert marker.start_time == marker.end_time and "gen_ai.tool.name" not in marker.attributes
         assert done["child"].parent.span_id == done["execute_tool look"].context.span_id  # the span is current
         assert done["execute_tool look"].instrumentation_scope.name == "runbound"
         assert done["execute_tool look"].attributes[names.OUTCOME] == "ok"
@@ -397,7 +405,7 @@ def test_the_body_round_trips_through_opentelemetry_protos_json_decoding(collect
                 span["traceId"] = __import__("base64").b64encode(bytes.fromhex(span["traceId"])).decode()
                 span["spanId"] = __import__("base64").b64encode(bytes.fromhex(span["spanId"])).decode()
     message = json_format.ParseDict(body, service.ExportTraceServiceRequest())
-    span = message.resource_spans[0].scope_spans[0].spans[0]
+    span = next(s for s in message.resource_spans[0].scope_spans[0].spans if s.name.startswith("execute_tool"))  # the start marker (03c) is a sibling span; pick the tool span by name
     assert len(span.trace_id) == 16 and len(span.span_id) == 8 and span.name == "execute_tool look"
     assert span.start_time_unix_nano > 0 and span.kind == 1
 

@@ -13,7 +13,7 @@ argument leaves the process only when the tool asks a person (the approver must
 see it). It puts no gateway in your hot path, and never speaks to your users: when it
 refuses something it hands control straight back to your own code.
 
-> **1.0.0a4 is an alpha.** The detection, provider-wrapper and cost
+> **1.0.0a5 is an alpha.** The detection, provider-wrapper and cost
 > features of 0.11.x are gone; see [CHANGELOG.md](CHANGELOG.md) for what was
 > removed and how to migrate.
 
@@ -106,6 +106,10 @@ a tool that declares nothing stays unclassified, so it still fails closed. See
 approves, a worker verifies an HMAC **seal** (keyed by `RUNBOUND_APPROVAL_SECRET`,
 which never leaves your processes) and runs the tool with the approved arguments
 through the whole chain again. `runbound.current_request()` is the idempotency key.
+A parameter your app supplies (a DB session, a client, the tenant) is marked `Annotated[Session, runbound.Injected]`: it is never stored or shown, and
+`init(provide={Session: make_session})` supplies it again when the approved request runs. Pydantic models, `datetime`, `Decimal`, `UUID` and `Path` arguments are
+supported when their JSON form gives the value back (checked before the approval is opened). Type hints must resolve at decoration: a `TYPE_CHECKING`-only hint refuses registration unless the parameter is marked `runbound.Injected`
+(then it is supplied by parameter name or default, not by type). `init(approval_bind=True)` (off by default) asks the plane to bind an approved request to one execution attempt, so it cannot run twice. See [Injected parameters](docs/guides/approvals.md#injected-parameters) and [Supported argument types](docs/guides/approvals.md#supported-argument-types).
 
 An approval never outlives the policy. When the answer arrives (sync, deferred or
 through a grant), the call is checked again against the policy the worker holds
@@ -123,9 +127,12 @@ on it; `financial`, `destructive`, `privileged` and unclassified tools refuse wi
 A new worker reads its policy on its first answered hello and releases those tools
 only once it holds the policy and the service defaults; until then, or while it
 holds neither a policy nor a saved one, they refuse. A service with enforced
-service defaults keeps its saved policy for 24 hours instead of using the grace:
-a tool a row allows keeps running, and a tool with no row asks, so it is refused
-`approval_unavailable` while nobody can be reached. See
+service defaults does not use the grace: it keeps running on its last policy
+confirmation for the *offline window* (15 minutes for a new service; an existing one
+keeps 24 hours until an operator changes it; `init(offline_execution_s=)` may only shorten
+it). Inside it a tool a row allows keeps running, and a tool with no row asks, so it is
+refused `approval_unavailable` while nobody can be reached; after it every
+`financial`, `destructive`, `privileged` and unclassified tool refuses `plane_unavailable`. See
 [Plane loss](docs/guides/plane-loss.md).
 
 A worker with `export_events=False` exports nothing, refusals included, so the
@@ -144,7 +151,15 @@ a row decided), the configuration the worker held (`cfg_hash`) and the process t
 decided (`boot_id`). Each heartbeat reports
 the configuration the worker accepted, so the console can show which workers
 enforce a change. Set `init(worker_id=...)` to a stable name (a pod or host name)
-so a restart is recognised as the same worker. See [OpenTelemetry](docs/guides/opentelemetry.md) and
+so a restart is recognised as the same worker.
+
+Every governed call also carries random identities (`action_id`, `attempt_id`,
+`evaluation_id`), and just before the tool's own code runs the SDK ends a
+zero-length `execution_started` marker span, so a call whose own span was lost
+can still be seen to have started. A receiver that counts every span counts the
+marker too; Runbound's ingest excludes it by name. Span batches carry an
+`X-Runbound-Batch` token so a retried insert is not counted twice, and the hello
+says where this worker's evidence can go. See [OpenTelemetry](docs/guides/opentelemetry.md) and
 [LangChain](docs/guides/langchain.md).
 
 ## What runbound does not do

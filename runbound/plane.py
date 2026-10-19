@@ -54,6 +54,10 @@ POLLER_JOIN_TIMEOUT_S = 1.0
 
 #: HTTP statuses that mean "your key is no good", as opposed to "try later".
 REJECTED_STATUSES = frozenset({401, 403})
+#: Statuses on which the plane has judged a telemetry batch and sending the same bytes again cannot change the answer (413 is answered by sending it in halves).
+ANSWERED_NO_RETRY = frozenset({400, 404, 409, 413, 422})
+#: The plane's non-retryable code for a build with no ledger to store into: ``{"error": "ledger_unavailable"}`` with status 501 (never 503, which would be retried forever). Keyed on the body.
+LEDGER_UNAVAILABLE = "ledger_unavailable"
 
 #: The ``"error"`` value every SDK-path 503 carries, whether or not the
 #: plane can say more about why — see :class:`~runbound.plane_types.
@@ -163,6 +167,24 @@ class PlaneClient:
         data, _kind = self._call("POST", "/v1/events", batch, EVENTS_TIMEOUT_S)
         return data is not None
 
+    def events_verdict(self, batch: dict) -> str:
+        """Ship one batch and say what became of it, so the exporter can tell a plane that is down from a plane that said no.
+
+        ``"ok"`` (accepted); ``"retry"`` (the plane could not be reached, or failed: send the same batch again); ``"split"`` (413: too big, send it in halves);
+        ``"drop:<reason>"`` (the plane answered and retrying the same bytes cannot help: ``http_400``, ``http_404``, ``http_409``, ``http_422``, or ``ledger_unavailable``,
+        the plane's own non-retryable code for a build that stores nothing).
+        """
+        answered: list = []
+        data, _kind = self._call("POST", "/v1/events", batch, EVENTS_TIMEOUT_S, answered)
+        if data is not None:
+            return "drop:ledger_unavailable" if data.get("error") == LEDGER_UNAVAILABLE else "ok"
+        if not answered:
+            return "retry"
+        status, code = answered[0]
+        if code == LEDGER_UNAVAILABLE:
+            return "drop:ledger_unavailable"
+        return "split" if status == 413 else f"drop:http_{status}"
+
     def policy(self, service: str) -> dict | None:
         """Fetch the org policy for ``service``. ``None`` on failure."""
         path = "/v1/policy?" + urlencode({"service": service})
@@ -204,7 +226,7 @@ class PlaneClient:
     # --- the transport ----------------------------------------------------
 
     def _call(
-        self, method: str, path: str, body: dict | None, timeout: float
+        self, method: str, path: str, body: dict | None, timeout: float, answered: "list | None" = None
     ) -> tuple[dict | None, str | None]:
         """One request. Returns ``(decoded object, None)`` on success, or
         ``(None, kind)`` for any failure -- ``kind`` is this call's own
@@ -236,6 +258,15 @@ class PlaneClient:
             if getattr(error, "code", None) in REJECTED_STATUSES:
                 self._rejected()
                 return None, "error"
+            if answered is not None and getattr(error, "code", None) != 503:
+                # The plane is up and may have judged this request: when it did, retrying the same bytes cannot help. The caller classifies it (``answered`` gets
+                # ``(status, error code)``); the link is not counted as failing. Judged = one of the statuses below, or the plane's own non-retryable code in the body
+                # (the no-ledger build answers 501 ``ledger_unavailable``): the code is read from the body, not the status. Every other 5xx stays retryable.
+                code = self._error_code(error)
+                if error.code in ANSWERED_NO_RETRY or code == LEDGER_UNAVAILABLE:
+                    answered.append((error.code, code))
+                    self._succeeded()
+                    return None, "refused"
             kind = self._plane_loss_kind(error)
             self._failed(path, exc_info=True, kind=kind)
             return None, kind
@@ -251,6 +282,16 @@ class PlaneClient:
             return None, "error"
         data = self._decode(raw, path)
         return data, (None if data is not None else "error")
+
+    @staticmethod
+    def _error_code(error: HTTPError) -> "str | None":
+        """The ``error`` string of a plane error body (``{"error": "..."}``), or ``None``."""
+        try:
+            body = json.loads(error.read().decode("utf-8"))
+            code = body.get("error") if isinstance(body, dict) else None
+            return code if isinstance(code, str) else None
+        except Exception:
+            return None
 
     def _plane_loss_kind(self, error: HTTPError) -> str:
         """``"plane_loss"`` for a 503 whose body names

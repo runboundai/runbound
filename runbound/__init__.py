@@ -37,7 +37,7 @@ from .api import (  # noqa: E402
     tool_results,
     tools,
 )
-from .approvals import current_request
+from .approvals import Injected, current_request
 from .config import RunboundConfig, deprecated_alias as _deprecated_alias
 from .events import Anomaly, Decision, Event
 from .exceptions import (
@@ -51,7 +51,7 @@ from .plane_types import PlaneStatus
 from .policy import ToolCall, ToolPolicy, ToolRules, Violation
 from .state import SessionState
 
-__version__ = "1.0.0a4"
+__version__ = "1.0.0a5"
 
 from ._check import check  # noqa: E402  (after __version__: the report prints it)
 
@@ -80,6 +80,7 @@ __all__ = [
     "assert_guarded",
     "check",
     "current_request",
+    "Injected",
     "coverage",
     "current_session",
     "decisions",

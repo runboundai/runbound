@@ -16,6 +16,7 @@ each name removed in S1 raises `AttributeError`.
 - `assert_guarded` — raise `RuntimeError` when nothing is decorated with `@runbound.tool`.
 - `session` — run/key context for traces and per-session `max_calls`; `session(key, tags=None, requested_for=None)`: `requested_for` (an email or user id, at most 128 characters) rides the approval request of a tool that asks a person inside the block, and the plane answers 409 `self_approval` when that same person decides it.
 - `current_request` — the request id of the deferred approval being executed right now, else `None`.
+- `Injected` — marker for a tool parameter the app supplies (`Annotated[Session, runbound.Injected]`): never stored, sealed, digested or shown in a deferred approval, and supplied again from `init(provide={type or name: callable})` (else its default, else the request ends `failed`, `injected_unavailable:<param>`) when the request runs.
 - `current_session` — the active session, if any.
 - `events` — recorded anomalies, refusals and runtime changes.
 - `tool_results` — recorded `tool_result` records (one per call: `tool`, `outcome`, `duration_s`, `flags`, `flag_score`, `flagged`, `truncated`, sizes, `tags`; never the result). Its own ring, apart from `events`, because it grows with every call and would push the refusals out; `on_event` receives the same records as they happen.
@@ -180,7 +181,8 @@ No plane connected: the call is refused at once (`reason="approval_unavailable"`
   calls `init(on_deferred_result=fn)` with `{request_id, tool, outcome, result | error}`.
   `runbound.current_request()` names the request while it runs. A rewrite that would change the
   arguments at that point is a hook error. Registration raises `ValueError` for a deferred tool whose
-  arguments are not JSON-friendly (`*args`, `datetime`, unresolvable hints, ...).
+  arguments are not JSON-friendly (`*args`, a file, a callable, a class with no codec, unresolvable hints, ...), naming the parameter and the fix. pydantic v2 models, `datetime`/`date`/`time`, `Decimal`, `UUID` and `Path` are encoded to JSON when filed and decoded when run.
+- **bound approvals** (`init(approval_bind=True)`, off by default): the plane can file the request so it is *bound* to one execution attempt before the body runs; a repeated or lost bind refuses `prior_outcome_unknown` (new reason, not retryable), no answer refuses `approval_unavailable`. Integrations also get `runbound.approvals.resolve_replay`, `runbound.approvals.withdraw` and `engine.resume_admit` with its `Reservation`. See the approvals guide.
 - **reports survive an outage**: if `/report` cannot be delivered (a few retries), the outcome is appended
   to `<service>.reports.jsonl` beside the policy cache (`0600`, fsynced; approval id, outcome, digest, worker
   id: never an argument or a result; memory only without a cache directory) and sent on the next connected
@@ -241,7 +243,7 @@ Each is the same object as its replacement; the first use in a process emits one
 
 ## Metadata
 
-- `__version__` — `1.0.0a4`.
+- `__version__` — `1.0.0a5`.
 
 ## Removed in S1
 

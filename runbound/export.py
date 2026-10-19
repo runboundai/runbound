@@ -36,7 +36,7 @@ from collections import deque
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from . import local_events
+from . import delivery, local_events
 from .plane import WARN_INTERVAL_S, _PeriodicWarning, warn_periodically
 from .plane_types import (
     anomaly_to_wire,
@@ -57,6 +57,9 @@ DRAIN_TIMEOUT_S = 3.0
 #: dead plane is polled less and less often instead of hammered.
 _BACKOFF_INITIAL_S = 0.5
 _BACKOFF_MAX_S = 10.0
+
+#: A lane that stopped because the plane rejected our key is tried again this often (one batch is the probe); a still-bad key stops it again.
+LANE_REPROBE_S = 3600.0
 
 #: Wall clock used for the ISO-8601 stamps. Read off the module namespace at
 #: call time, so a test can freeze it.
@@ -174,6 +177,10 @@ class Exporter:
         #: exactly its own surviving counts rather than reassembling a
         #: batch from scratch. See :meth:`_take`'s own docstring.
         self._resend: dict | None = None
+        #: After a 413 the batch size is halved until batches land again (``None`` = the configured size).
+        self._split_to: int | None = None
+        self._too_big_at: int | None = None  # the smallest batch size a 413 was seen at: never grown back to
+        self._probe_at: float | None = None
         self._lock = threading.Lock()
         self._wake = threading.Event()
         self._stopped = threading.Event()
@@ -334,6 +341,7 @@ class Exporter:
             return False
         with self._lock:
             self.dropped += 1
+        delivery.dropped("events", "key_rejected")
         return True
 
     def _unencodable(self) -> None:
@@ -377,7 +385,7 @@ class Exporter:
                 events = self._pop_n(self._events, pending["events_n"])
             else:
                 batch_id = fresh_batch_id()
-                budget = self._batch_size
+                budget = min(self._batch_size, self._split_to or self._batch_size)
                 priority = []
                 while self._priority and budget:
                     priority.append(self._priority.popleft())
@@ -416,7 +424,9 @@ class Exporter:
     def _abandon_queue(self) -> None:
         """Throw the queue away, counting it, when the key has been rejected."""
         with self._lock:
-            self.dropped += len(self._events) + len(self._anomalies) + len(self._priority)
+            gone = len(self._events) + len(self._anomalies) + len(self._priority)
+            self.dropped += gone
+            delivery.dropped("events", "key_rejected", gone)
             self._events.clear()
             self._anomalies.clear()
             self._priority.clear()
@@ -483,39 +493,87 @@ class Exporter:
         deadline = time.monotonic() + max(timeout, 0.0)
         while True:
             if getattr(self._client, "key_state", None) == "invalid":
+                delivery.lane_stopped("events", "key_rejected")  # visible in the counters; one batch is sent again every LANE_REPROBE_S
                 self._abandon_queue()
+                self._maybe_reprobe()
                 return
             taken = self._take()
             if taken is None:
                 return
             batch, priority, anomalies, events = taken
-            if self._post(batch):
+            verdict = self._post(batch)
+            if verdict == "ok":
                 self._on_success()
-            else:
+                self._grow()
+            elif verdict == "retry":
                 self._requeue(batch["batch_id"], priority, anomalies, events)
                 self._on_failure()
                 self._warn_pending()
                 return
+            elif verdict == "split":
+                self._split(batch["batch_id"], priority, anomalies, events)
+            else:  # "drop:<reason>": the plane answered and the same bytes cannot succeed
+                self._drop(verdict.partition(":")[2] or "dropped", len(priority) + len(anomalies) + len(events))
             if time.monotonic() >= deadline:
                 return
 
-    def _post(self, batch: dict) -> bool:
-        """Post one batch. Never raises.
+    def _grow(self) -> None:
+        """A batch landed: win back the size a 413 took away (doubling until the configured size is reached), and the lane is open."""
+        with self._lock:
+            if self._split_to is not None:
+                grown = self._split_to * 2
+                if self._too_big_at is not None:
+                    grown = min(grown, self._too_big_at - 1)
+                self._split_to = grown if grown < self._batch_size and grown > self._split_to else (None if self._too_big_at is None else self._split_to)
+        delivery.lane_open("events")
 
-        ``True`` means the batch is gone — delivered, or dropped because the
-        client broke its documented no-raise contract (a client bug, not a
-        down plane, so it is warned about and dropped rather than retried
-        forever). ``False`` means the plane simply refused it and it must be
-        requeued.
+    def _split(self, batch_id: str, priority: list, anomalies: list, events: list) -> None:
+        """413: the plane says this request is too big. Put it back and send halves; a single record that is still too big is dropped, counted ``too_large``."""
+        total = len(priority) + len(anomalies) + len(events)
+        if total <= 1:
+            self._drop("too_large", total)
+            return
+        self._requeue(batch_id, priority, anomalies, events)
+        with self._lock:
+            self._resend = None  # fresh batches at the smaller size, not the same oversized one again
+            self._too_big_at = total if self._too_big_at is None else min(self._too_big_at, total)
+            self._split_to = max(1, total // 2)
+
+    def _drop(self, reason: str, count: int) -> None:
+        """The plane judged a batch and retrying cannot help: gone, counted by reason, loudly once in a while."""
+        with self._lock:
+            self.dropped += count
+        delivery.dropped("events", reason, count)
+        warn_periodically(self._warning, "runbound: the control plane refused %d telemetry record(s) (%s); dropped, not retried", count, reason)
+
+    def _maybe_reprobe(self) -> None:
+        """A lane stopped by a rejected key is tried again once an hour: forget the rejection, and the next batch is the probe."""
+        now = self._now()
+        if self._probe_at is None:
+            self._probe_at = now
+            return
+        if now - self._probe_at >= LANE_REPROBE_S:
+            self._probe_at = now
+            reset = getattr(self._client, "reset_key", None)
+            if callable(reset):
+                reset()
+
+    def _post(self, batch: dict) -> str:
+        """Post one batch. Never raises. ``"ok"``, ``"retry"`` (requeue it), ``"split"`` (413) or ``"drop:<reason>"``.
+
+        A client that cannot tell these apart (only ``events(batch) -> bool``) gets the old reading: ``True`` is delivered, ``False`` is requeued. A client that raises broke its
+        documented no-raise contract (a client bug, not a down plane): the batch is dropped and warned about rather than retried forever.
         """
         try:
-            delivered = self._client.events(batch)
+            verdict = getattr(self._client, "events_verdict", None)
+            if callable(verdict):
+                return verdict(batch)
+            return "ok" if self._client.events(batch) else "retry"
         except Exception:
             warn_periodically(
                 self._warning, "runbound: export batch could not be sent", exc_info=True
             )
-            return True
-        return bool(delivered)
+            return "ok"
 
     def _on_success(self) -> None:
         with self._lock:

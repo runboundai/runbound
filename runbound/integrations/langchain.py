@@ -45,6 +45,36 @@ _HANDLER_CLASS: type | None = None
 #: The old name warns on its first use in a process, not on every access.
 _ALIAS_WARNED = False
 
+#: Migration notes already given in this process (AAI-04-5a): at most one, and only when the replacement path is switched on here.
+_NOTICED: set = set()
+
+
+def _is_graph_control_flow(error: BaseException) -> bool:
+    """Whether ``error`` is LangGraph's own control flow (an interrupt, a parent command), which is not a tool failure.
+
+    ``isinstance`` against ``langgraph.errors.GraphBubbleUp`` (the base of ``GraphInterrupt`` and ``ParentCommand``) when LangGraph is importable; the class NAME along the MRO is only the
+    fallback for a process without it, so ``langgraph`` stays an optional import."""
+    try:
+        from langgraph.errors import GraphBubbleUp
+    except Exception:
+        return any(cls.__name__ == "GraphBubbleUp" for cls in type(error).__mro__)
+    return isinstance(error, GraphBubbleUp)
+
+
+def _note_migration() -> None:
+    """One INFO line, once per process, and only when the replacement path (``langchain_early``) has been enabled here. A process that never opts in sees nothing new."""
+    import sys
+
+    early = sys.modules.get(__package__ + ".langchain_early")
+    try:
+        on = early is not None and early._check_enabled() is None
+    except Exception:
+        on = False
+    if on and "handler" not in _NOTICED:
+        _NOTICED.add("handler")
+        _LOG.info("runbound: to migrate off RunboundCallbackHandler use RunboundMiddleware / govern_tools (runbound.integrations.langchain_early); "
+                  "when both guard a tool the innermost governs and duplicate_installs() lists it. The handler is unchanged and not removed.")
+
 
 # --- reading what LangChain hands us ----------------------------------------
 
@@ -115,6 +145,7 @@ def _build_handler_class() -> type:
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             super().__init__(*args, **kwargs)
+            _note_migration()
             #: run_id -> (tool name, monotonic start), for the ``tool_result`` event's duration.
             self._started: dict = {}
 
@@ -172,6 +203,10 @@ def _build_handler_class() -> type:
         def on_tool_error(self, error: BaseException, **kwargs: Any) -> None:
             """Record a failed tool call. The tool's own error stays the one raised."""
             name = kwargs.get("name") or _tool_name(kwargs.get("serialized"))
+            if _is_graph_control_flow(error):  # an interrupt or a parent command: the call did not complete, but nothing failed (AAI-04-5a)
+                _name, started = self._started.pop(kwargs.get("run_id"), (None, time.monotonic()))
+                api._emit_result(_as_model(name) or _UNKNOWN_TOOL, "cancelled", started, [])
+                return
             api._record_tool_error(_as_model(name) or _UNKNOWN_TOOL, error)
             _name, started = self._started.pop(kwargs.get("run_id"), (None, time.monotonic()))
             api._emit_result(_as_model(name) or _UNKNOWN_TOOL, "error", started, [], exc=error)

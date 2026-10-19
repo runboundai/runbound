@@ -16,7 +16,7 @@ REASONS = (
     "approval_denied", "approval_timeout", "approval_tampered", "approval_unavailable", "quota_exceeded", "plane_unavailable",
     "tool_blocked", "session_max_calls", "quota_plane_unavailable", "policy_unsupported",
     "policy_unavailable", "policy_expired_restricted", "policy_halted", "condition_unevaluable", "repetition_exceeded",
-    "approval_superseded",
+    "approval_superseded", "prior_outcome_unknown",
 )
 
 #: ``exc.reason`` values a bare retry can safely repeat: the dependency said

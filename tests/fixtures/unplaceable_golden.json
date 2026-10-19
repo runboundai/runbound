@@ -1,0 +1,249 @@
+{
+ "about": "Shared golden fixture (R0 style): the plane (policy/defaults.resolve) and the SDK (runbound/lines.resolve) must both give these answers. A set with a class the reader does not know is judged as its KNOWN classes plus unclassified, strictest wins per key; a set with no unknown class is unchanged. Generated from the plane at aai-unplaceable-tighten and then reviewed by hand; do not regenerate to make a suite pass.",
+ "cases": [
+  {
+   "decision": "ask",
+   "defaults": "standard",
+   "effects": [
+    "financial",
+    "teleport"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "financial",
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "deny",
+   "defaults": "unclassified_looser",
+   "effects": [
+    "financial",
+    "teleport"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "financial",
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "ask",
+   "defaults": "standard",
+   "effects": [
+    "read",
+    "teleport"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "read",
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "allow",
+   "defaults": "unclassified_looser",
+   "effects": [
+    "read",
+    "teleport"
+   ],
+   "fail_mode": "open",
+   "keys": [
+    "read",
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "ask",
+   "defaults": "standard",
+   "effects": [
+    "teleport"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "allow",
+   "defaults": "unclassified_looser",
+   "effects": [
+    "teleport"
+   ],
+   "fail_mode": "open",
+   "keys": [
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "ask",
+   "defaults": "standard",
+   "effects": [
+    "destructive",
+    "write",
+    "teleport"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "destructive",
+    "unclassified",
+    "write"
+   ]
+  },
+  {
+   "decision": "deny",
+   "defaults": "unclassified_looser",
+   "effects": [
+    "destructive",
+    "write",
+    "teleport"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "destructive",
+    "unclassified",
+    "write"
+   ]
+  },
+  {
+   "decision": "allow",
+   "defaults": "standard",
+   "effects": [
+    "read"
+   ],
+   "fail_mode": "open",
+   "keys": [
+    "read"
+   ]
+  },
+  {
+   "decision": "allow",
+   "defaults": "unclassified_looser",
+   "effects": [
+    "read"
+   ],
+   "fail_mode": "open",
+   "keys": [
+    "read"
+   ]
+  },
+  {
+   "decision": "ask",
+   "defaults": "standard",
+   "effects": [
+    "financial"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "financial"
+   ]
+  },
+  {
+   "decision": "deny",
+   "defaults": "unclassified_looser",
+   "effects": [
+    "financial"
+   ],
+   "fail_mode": "closed",
+   "keys": [
+    "financial"
+   ]
+  },
+  {
+   "decision": "ask",
+   "defaults": "standard",
+   "effects": [],
+   "fail_mode": "closed",
+   "keys": [
+    "unclassified"
+   ]
+  },
+  {
+   "decision": "allow",
+   "defaults": "unclassified_looser",
+   "effects": [],
+   "fail_mode": "open",
+   "keys": [
+    "unclassified"
+   ]
+  }
+ ],
+ "defaults": {
+  "standard": {
+   "approval": {
+    "destructive": {
+     "approvers": [],
+     "wait_s": null
+    },
+    "financial": {
+     "approvers": [],
+     "wait_s": null
+    },
+    "privileged": {
+     "approvers": [],
+     "wait_s": null
+    },
+    "unclassified": {
+     "approvers": [],
+     "wait_s": null
+    }
+   },
+   "decision": {
+    "destructive": "ask",
+    "external": "allow",
+    "financial": "ask",
+    "privileged": "ask",
+    "read": "allow",
+    "unclassified": "ask",
+    "write": "allow"
+   },
+   "fail_mode": {
+    "destructive": "closed",
+    "external": "open",
+    "financial": "closed",
+    "privileged": "closed",
+    "read": "open",
+    "unclassified": "closed",
+    "write": "open"
+   }
+  },
+  "unclassified_looser": {
+   "approval": {
+    "destructive": {
+     "approvers": [],
+     "wait_s": null
+    },
+    "financial": {
+     "approvers": [],
+     "wait_s": null
+    },
+    "privileged": {
+     "approvers": [],
+     "wait_s": null
+    },
+    "unclassified": {
+     "approvers": [],
+     "wait_s": null
+    }
+   },
+   "decision": {
+    "destructive": "deny",
+    "external": "allow",
+    "financial": "deny",
+    "privileged": "deny",
+    "read": "allow",
+    "unclassified": "allow",
+    "write": "ask"
+   },
+   "fail_mode": {
+    "destructive": "closed",
+    "external": "open",
+    "financial": "closed",
+    "privileged": "closed",
+    "read": "open",
+    "unclassified": "open",
+    "write": "open"
+   }
+  }
+ }
+}

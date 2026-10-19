@@ -156,7 +156,8 @@ def run_job(job):
   not run. Once a person approves, a worker runs the tool and calls
   `init(on_deferred_result=fn)` with `{"request_id", "tool", "outcome", "result"
   | "error"}`, where `outcome` is `executed`, `failed` (`error` is the exception
-  type name), `tampered` or `clock_skew`. A denied or expired deferred request
+  type name), `tampered`, `clock_skew` or `superseded` (the policy moved after the approval and the
+  re-check refused the call; `error` is `approval_superseded`). A denied or expired deferred request
   never runs and raises nothing in the original caller. See
   [Approvals](approvals.md).
 

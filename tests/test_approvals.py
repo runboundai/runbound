@@ -116,7 +116,10 @@ def test_the_keywords_are_validated():
 def test_a_deferred_tool_must_have_json_friendly_arguments():
     with pytest.raises(ValueError, match="deferred"):
         @runbound.tool(approval="required", mode="deferred")
-        def when(at: datetime.datetime): ...
+        def when(at: set): ...  # a datetime has a codec since DEF-1; a set has none
+
+    @runbound.tool(approval="required", mode="deferred")
+    def when_dt(at: datetime.datetime): ...
 
     with pytest.raises(ValueError):
         @runbound.tool(approval="required", mode="deferred")

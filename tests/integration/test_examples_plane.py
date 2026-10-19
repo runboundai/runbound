@@ -94,7 +94,17 @@ def test_langchain_otel_runs_connected(plane, tmp_path):  # noqa: F811
     probe = subprocess.run([python, "-c", "import langchain_core, opentelemetry.sdk"], capture_output=True, timeout=60)
     if probe.returncode != 0:
         pytest.skip(f"{python} lacks langchain-core / opentelemetry-sdk (set RUNBOUND_EXAMPLES_PYTHON)")
-    out, err = _finish(_start("langchain_otel", _env(plane, tmp_path), python))
+    # A LangChain tool declares no effects, so a new service's plane defaults ASK before it runs (requirement default:unclassified; a console row can
+    # raise how a tool is judged, never relax it). The example blocks on that approval, as in production: a person approves it, here with the admin API.
+    proc = _start("langchain_otel", _env(plane, tmp_path), python)
+    try:
+        (waiting,) = _until(lambda: pending(plane, "orders"), 60, "the example's pending approval for lookup_order")
+        assert waiting["tool"] == "lookup_order" and waiting["requirement"] == "default:unclassified", waiting
+        decide(plane, waiting["id"], "approve")
+        out, err = _finish(proc)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
     lines = out.splitlines()
     assert lines == ["order A-7: shipped", "refused tool_blocked", "span execute_tool lookup_order ok",
                      "span execute_tool delete_order refused"], out + err

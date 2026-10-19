@@ -15,7 +15,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from . import _coverage, admission, approvals as approvals_module, gates as gates_module, hooks as hooks_module, local_events
-from . import policy_rows as rows_module, quota as quota_module
+from . import ids as ids_module, policy_rows as rows_module, quota as quota_module
 from .capabilities import _RANK as _CAPABILITY_RANK, class_rules
 from .config import RunboundConfig
 from .events import Anomaly, Decision, Event
@@ -49,6 +49,32 @@ ERROR_MAX_CHARS = 500
 
 
 
+
+
+class Reservation:
+    """What :meth:`Engine.resume_admit` holds for a resumed call: its session units. ``commit()`` makes them the executed call's; ``release()`` gives them back. The first of the
+    two wins; a second call of either is a no-op."""
+
+    def __init__(self, session: SessionState, tool: str, digest: str, key: "str | None", repeat_taken: bool, approval_ref: Any = None) -> None:
+        self.session, self.tool, self.digest, self.key, self.repeat_taken, self.approval_ref = session, tool, digest, key, repeat_taken, approval_ref
+        self.state = "held"
+        self._lock = threading.Lock()
+
+    def commit(self) -> bool:
+        with self._lock:
+            if self.state != "held":
+                return False
+            self.state = "committed"
+        self.session.commit_resume(self.tool, self.key)
+        return True
+
+    def release(self) -> bool:
+        with self._lock:
+            if self.state != "held":
+                return False
+            self.state = "released"
+        self.session.release_resume(self.tool, self.digest, self.key, self.repeat_taken)
+        return True
 
 
 class Engine:
@@ -142,12 +168,19 @@ class Engine:
         declared = effects  # the code's own effects: what the service defaults are resolved from
         row = rows_module.apply_defaults(row, call.name, effects, self.shared)  # the service defaults are the fallback of a tool no line decides
         record = self._record(call, row, approval)
+        ids = None if info is None else info.get("ids")
+        if ids is not None:
+            ids["evaluation_id"] = ids_module.mint()  # once per admission: the second record build below (after a conditional row resolves) must not mint another
+            record.update(ids)  # the span, the refusal's anomaly and the approval request carry the identities through the record
         _RECORD.set(record)  # every refusal and the span of this call carry it (TPD §12 item 6)
         if info is not None:
             info["record"] = record
         gates_module.halt(self, session, call.name)
         unclassified = not effects  # the code declared nothing: a row's class may raise it, never relax how it is judged
-        effects = rows_module.effective_effects(row, effects)  # a row's risk_class can only raise the tool's
+        raised = rows_module.effective_effects(row, effects)  # a row's risk_class can only raise the tool's
+        if raised != effects and raised:
+            record["effective_effects"] = ",".join(sorted(raised))  # PS-AAI-03j: the classes the call was held to, when a row raised the tool's own
+        effects = raised
         gates_module.plane(self, session, call, effects)
         timeout = self.config.hook_timeout_s
         try:
@@ -182,7 +215,10 @@ class Engine:
             if approval is not None:
                 held = {} if info is None else info
                 approvals_module.admit(self, session, call, approval, held)
+                approvals_module.bind(self, call, held)  # a bind-required request is bound to THIS attempt first: a refused or repeated bind never reaches the body
                 self._recheck_after_approval(session, call, declared, effects, tags, held)  # first: a refused call must not spend a unit
+                if held.get("quota_held") is False and held.get("bind_required"):  # the plane holds no unit for this request: the existing quota contract applies (fail mode), never a second unit
+                    quota_module.admit(self, session, call, row, False, tags)
                 if held.get("granted"):  # a grant admitted it and the plane took no quota unit: take our own, as for a call nobody is asked about
                     quota_module.admit(self, session, call, row, False, tags)
             if gate_hooks:
@@ -190,6 +226,44 @@ class Engine:
         except hooks_module.StageRefused as refused:
             self._refuse_stage(session, call, refused)
         return call
+
+    def resume_admit(self, session: SessionState, call: ToolCall, approval_ref: Any = None, *, effects: "frozenset | None" = None) -> "Reservation":
+        """The resume-entry operation (RFC 0a.2): a call whose approval already exists re-enters AFTER a lookup says it is approved and not yet bound.
+
+        Today's re-check (``_recheck_after_approval``) reads RESTRICTIONS only and reserves nothing, so a resumed call would hold none of the session's units. This takes, ONCE and
+        ATOMICALLY with the check of the CURRENT limits (reserve-and-check under the session lock, never a read-only check and then a take): the ``max_calls`` unit (and the
+        matched lines' cap), the repetition count and a ``max_actions_per_run`` slot, exactly as a fresh pass would hold them. A limit that filled while the approval waited refuses
+        now (``session_max_calls``, ``repetition_exceeded``, the action limit) and nothing was taken. It does NOT ask, create or look up an approval, and takes no plane quota unit.
+
+        Returns a :class:`Reservation`: ``commit()`` when the start marker has been emitted LOCALLY (the dispatch commitment; it does not wait for delivery, and a marker lost in
+        export never releases it), ``release()`` on any refusal before the start (a limit, a failed or ``first:false`` bind, a superseded re-check, a cancelled resume).
+        """
+        row = getattr(self.shared, "row_for", lambda _tool: None)(call.name)
+        row = rows_module.apply_defaults(row, call.name, effects, self.shared)
+        row = rows_module.resolve_call(row, approvals_module.bound_arguments(call.name, call.args, call.kwargs), self._rule_context())
+        if row is not None and row.conditional and row.inherit:
+            row = rows_module.apply_defaults(row, call.name, effects, self.shared)
+        live = row if row is not None and not row.dry_run and not row.unsupported else None  # a dry run counts apart and never refuses
+        policy = self._policy()
+        caps = [c for c in (None if policy is None else policy.max_calls.get(call.name), None if live is None or live.conditional else live.max_calls) if c is not None]
+        key = ",".join(live.matched) if live is not None and live.conditional and live.max_calls is not None else None
+        digest = self.call_digest(call)
+        repeat = None if live is None else live.repetition
+        code = session.reserve_resume(call.name, digest, max_calls=min(caps) if caps else None, key=key, key_cap=None if key is None else live.max_calls,
+                                      repeat=repeat, actions=self.config.max_actions_per_run)
+        if code is not None:
+            if code == "max_actions_per_run":
+                with session.lock:
+                    executed = session.executed_actions + session.reserved_actions
+                decision = admission.actions(executed, self.config.max_actions_per_run)
+                anomaly = _anomaly(session, FANOUT_DETECTOR, "critical", f"Action limit reached{{whose}}: {decision.reason}",
+                                   {"rule": "max_actions_per_run", "limit": self.config.max_actions_per_run, "executed": executed})
+                self.refuse(session, anomaly, decision, reacted="door")
+            said = (f"tool {call.name!r} was already called {repeat} times with these arguments in this session" if code == "repetition_exceeded"
+                    else f"tool {call.name!r} has used its session limit of calls while the approval waited")
+            anomaly = _anomaly(session, "policy", "critical", f"Refused tool {call.name!r}{{whose}}: {said}", {"tool": call.name, "rule": code, "origin": "org"})
+            self.refuse(session, anomaly, admission.row(code, said), reacted="blocked")
+        return Reservation(session, call.name, digest, key, repeat is not None, approval_ref)
 
     def _recheck_after_approval(self, session: SessionState, call: ToolCall, declared: Any, effects: Any, tags: "list | None", held: "dict | None" = None) -> None:
         """R5: the approval (or grant) may be older than the policy. An approval never runs a call the current state forbids, so the
@@ -213,13 +287,32 @@ class Engine:
             if row is not None and not row.unsupported:
                 self.note_recheck(recheck_rule_revision=row.rule_revision)
             rows_module.supersede(self, session, call, row, tags)
+            self._note_rechecked("passed")  # AAI-1 D1: the passed re-check is kept as its own entry (``runbound.recheck.*``), beside and never inside the old ``recheck_*`` keys
             self.note_recheck(clear=True)  # the re-check passed and the call goes on to run: what it read is not a refusal's evidence, so the record of a call that ran carries none of it
         except Exception as refused:
+            self._note_rechecked("refused", getattr(refused, "reason", None))
             approval_id = (held or {}).get("approval_id")
             if approval_id:  # the plane holds a unit for the approved request: tell it the call did not run, so it gives the unit back
                 approvals_module.report_async(self, str(approval_id), "superseded", reason=getattr(refused, "reason", None) or "approval_superseded",
                                               decision_record=_RECORD.get())
             raise
+
+    def _note_rechecked(self, outcome: str, reason: "str | None" = None) -> None:
+        """Keep the execution-entry re-check as an evaluation of its own on the call's record (AAI-1 D1): ``rechecked = {evaluation_id, outcome, ...what it read}``.
+
+        Additive: the ``recheck_*`` keys keep their contract (a refusal carries them, a call that ran carries none), WIRE-VPC 12e. Whatever the re-check read is copied before a
+        pass clears those keys. Never raises."""
+        record = _RECORD.get()
+        if record is None:
+            return
+        try:
+            read = {key[len("recheck_"):]: value for key, value in record.items() if key.startswith("recheck_") and key != "recheck_reason" and value is not None}
+            entry = {"evaluation_id": ids_module.mint(), "outcome": outcome, **read}
+            if reason:
+                entry["reason"] = str(reason)
+            record["rechecked"] = entry
+        except Exception:
+            _LOG.debug("runbound could not keep the re-check evaluation", exc_info=True)
 
     def note_recheck(self, clear: bool = False, **facts: Any) -> None:
         """Add what the execution-entry re-check read to the call's decision record (``recheck_*``; ``None`` adds nothing); ``clear`` removes every ``recheck_*`` key (a re-check
@@ -394,7 +487,7 @@ class Engine:
         if limit is None:
             return
         with session.lock:
-            executed = session.executed_actions
+            executed = session.executed_actions + session.reserved_actions  # a resume entry's slot is held, not yet run
         decision = admission.actions(executed, limit)
         if decision.verdict == "allow":
             return
@@ -714,7 +807,9 @@ def _stamp_decision(
         limit = _LIMIT_REFS.get(code)
         if limit and isinstance(record.get("contributors"), list) and limit not in record["contributors"]:
             record["contributors"] = [*record["contributors"], limit]  # the limit that refused the call is a restriction that contributed to it
-        decision = dataclasses.replace(decision, evaluation={**decision.evaluation, **record})
+        # J-REC-1 (AAI-01): the legacy ``policy_version`` field carries the version the record names, so one refusal never says a version and null at once.
+        version = decision.policy_version if decision.policy_version is not None else record.get("policy_version")
+        decision = dataclasses.replace(decision, policy_version=version, evaluation={**decision.evaluation, **record})
         details = {**details, **record}
     return dataclasses.replace(
         anomaly, details={**details, "decision": decision.as_dict(), "key_hash": key_hash}

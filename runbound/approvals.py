@@ -38,23 +38,30 @@ Accepted limit: a compromised plane can still *approve* a real pending request.
 from __future__ import annotations
 
 import asyncio
+import collections.abc
 import contextvars
 import dataclasses
 import enum
 import hashlib
 import hmac
 import inspect
+import io
 import json
 import logging
 import os
+import pathlib
+import sys
 import threading
 import time
 import typing
 import uuid
 from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, time as dt_time, timedelta, timezone
+from decimal import Decimal
 from typing import Any, Callable
 
+from . import delivery
+from . import ids as ids_module
 from .hooks import StageRefused, _warn_once
 from .plane_types import key_hash
 
@@ -76,6 +83,10 @@ PENDING_RESULT_STATUS = "pending_approval"
 #: ``ExecutionRefused.reason`` for each way a request can end badly.
 DENIED, TIMEOUT, TAMPERED, UNAVAILABLE = "approval_denied", "approval_timeout", "approval_tampered", "approval_unavailable"
 QUOTA_EXCEEDED = "quota_exceeded"
+PLANE_TOO_OLD = "plane_too_old"
+#: A bind that reports the request was already bound (``first: false``) or refuses it: another attempt, or this one earlier, may have started the body, so it is NOT dispatched again.
+PRIOR_OUTCOME_UNKNOWN = "prior_outcome_unknown"
+BIND_TIMEOUT_S = 5.0
 
 #: ``verify_seal``'s answer when the MAC holds but ``not_after`` has passed by more than the tolerance: the arguments are
 #: what was sealed, so this is a clock problem, not tampering, and is reported as outcome ``clock_skew``.
@@ -105,6 +116,17 @@ class Deferred(Exception):
         self.request_id = result.get("request_id")
 
 
+class Suspended(Exception):
+    """Raised out of slot 5 for a SUSPENDED request (AAI-04-4b, the LangChain resume path only): the plane holds a bind-required request and the caller interrupts its graph.
+
+    Raised BEFORE any body runs and before any wait. The call is pending approval: not refused, not executed, no ``max_calls`` or repetition unit kept (``resume_admit`` reserves them
+    when the approval is used); the plane's quota unit stays as the create took it."""
+
+    def __init__(self, request_id: str, approval_id: "str | None", args_digest: "str | None", attempt_id: "str | None") -> None:
+        super().__init__(PENDING_RESULT_STATUS)
+        self.request_id, self.approval_id, self.args_digest, self.attempt_id = request_id, approval_id, args_digest, attempt_id
+
+
 @dataclasses.dataclass
 class Pending:
     tool: str
@@ -123,6 +145,10 @@ _LOST: set = set()  # claims the plane took back while their body was still runn
 _EXECUTING: set = set()
 _LOCK = threading.Lock()
 _CURRENT: contextvars.ContextVar = contextvars.ContextVar("runbound_approval_request", default=None)
+#: What the plane offered with the approved request being executed here: ``bind_required``, its ``claim_token`` (the lease it must bind under) and whether a quota unit is held. A mutable dict
+#: so the bind can say the claim was lost.
+_CLAIM: contextvars.ContextVar = contextvars.ContextVar("runbound_approval_claim", default=None)
+_APPROVAL: contextvars.ContextVar = contextvars.ContextVar("runbound_approval_id", default=None)  # the plane's id of the request being executed, for the re-check's report
 #: Who a call is made for (``runbound.session(requested_for=...)``): sent on the approval create so the plane can refuse the requester
 #: approving their own request (409 ``self_approval``). A context variable, so a thread or task that opens its own block is unaffected.
 _REQUESTED_FOR: contextvars.ContextVar = contextvars.ContextVar("runbound_requested_for", default=None)
@@ -172,10 +198,13 @@ def reset_for_tests() -> None:
         _EXECUTORS.clear()
         _META.clear()
         _SIGS.clear()
+        _SHAPES.clear()
         _INFLIGHT.clear()
         _EXECUTING.clear()
         _LOST.clear()
         _QUOTA_BLOCKED.clear()
+        _WITHDRAWN.clear()
+        WITHDRAWALS.clear()
 
 
 # --- the seal ----------------------------------------------------------------------------------
@@ -235,26 +264,269 @@ def verify_seal(secret: str | None, seal: Any, service: str, tool: str, request_
 # --- registration -------------------------------------------------------------------------------
 
 
-def _json_hint(hint: Any) -> bool:
-    """Can a value of this type hint survive a JSON round trip?"""
+class _InjectedMarker:
+    """``Annotated[Session, runbound.Injected]``: the app supplies this parameter, the model does not (DEF-1)."""
+
+    def __repr__(self) -> str:
+        return "runbound.Injected"
+
+
+#: Marks a parameter the APP supplies (a DB session, an HTTP client, the current tenant). It is never stored, sealed, digested, shown to a person or read by a rule;
+#: a deferred execution gets it again from ``init(provide=...)``, else from the parameter's default.
+Injected = _InjectedMarker()
+
+_NONE_TYPE = type(None)
+
+
+def _marks_injected(meta: Any) -> bool:
+    """Is ``meta`` (one ``Annotated`` metadata item) ``runbound.Injected``, or LangChain's ``InjectedToolArg`` (and so ``InjectedState``, ``InjectedToolCallId``)?
+
+    LangChain is only looked at when it is already imported: a hint can only name it if it is, so nothing is ever imported on its account.
+    """
+    if meta is Injected:
+        return True
+    for module in ("langchain_core.tools", "langchain_core.tools.base"):
+        base = getattr(sys.modules.get(module), "InjectedToolArg", None)
+        if isinstance(base, type) and (meta is base or isinstance(meta, base) or (isinstance(meta, type) and issubclass(meta, base))):
+            return True
+    return False
+
+
+def is_injected(hint: Any) -> bool:
+    """Does this (resolved, ``include_extras``) hint mark its parameter as supplied by the app?"""
+    if typing.get_origin(hint) is typing.Annotated:
+        return any(_marks_injected(meta) for meta in hint.__metadata__) or is_injected(typing.get_args(hint)[0])
+    if typing.get_origin(hint) is typing.Union or type(hint).__name__ == "UnionType":
+        return any(is_injected(arm) for arm in typing.get_args(hint))
+    return False
+
+
+def _inner(hint: Any) -> Any:
+    """The class behind ``Annotated[...]`` / ``Optional[...]``, to look an injected parameter's provider up by type."""
+    while True:
+        origin, args = typing.get_origin(hint), typing.get_args(hint)
+        if origin is typing.Annotated:
+            hint = args[0]
+        elif origin is typing.Union or type(hint).__name__ == "UnionType":
+            arms = [a for a in args if a is not _NONE_TYPE]
+            if len(arms) != 1:
+                return hint
+            hint = arms[0]
+        else:
+            return hint
+
+
+def _codec_kind(hint: Any) -> "str | None":
+    """Which codec a class hint needs to cross JSON: ``model`` (pydantic v2, found by duck typing, never imported), ``datetime``, ``date``, ``time``, ``decimal``, ``uuid``, ``path``."""
+    if not isinstance(hint, type):
+        return None
+    if hasattr(hint, "model_validate") and hasattr(hint, "model_dump"):
+        return "model"
+    for kind, base in (("datetime", datetime), ("date", date), ("time", dt_time), ("decimal", Decimal), ("uuid", uuid.UUID), ("path", pathlib.PurePath)):
+        if issubclass(hint, base):
+            return kind
+    return None
+
+
+def _json_hint(hint: Any, codecs: bool = True) -> bool:
+    """Can a value of this type hint survive a JSON round trip (``codecs``: through a codec, see :func:`_encode`)?"""
     if hint is Any or hint is inspect.Parameter.empty or hint is None or hint is type(None):
         return True
     if hint in (str, int, float, bool, list, dict):
         return True
     origin, args = typing.get_origin(hint), typing.get_args(hint)
     if origin is typing.Annotated:
-        return _json_hint(args[0])
+        return _json_hint(args[0], codecs)
     if origin is typing.Literal:
         return all(isinstance(a, (str, int, float, bool)) or a is None for a in args)
-    if origin in (list, dict) or origin is typing.Union or type(hint).__name__ == "UnionType":
-        return all(_json_hint(a) for a in args)
+    if origin is dict:
+        return all(_json_hint(a, codecs and i == 1) for i, a in enumerate(args))  # a key is a JSON object key: never a codec type
+    if origin is list or origin is typing.Union or type(hint).__name__ == "UnionType":
+        return all(_json_hint(a, codecs) for a in args)
     if typing.is_typeddict(hint) or (dataclasses.is_dataclass(hint) and isinstance(hint, type)):
         return all(_json_hint(h) for h in typing.get_type_hints(hint).values())
     if isinstance(hint, type) and issubclass(hint, enum.Enum):
         return all(isinstance(m.value, (str, int, float, bool)) for m in hint)
     if hasattr(hint, "__supertype__"):
-        return _json_hint(hint.__supertype__)
-    return False
+        return _json_hint(hint.__supertype__, codecs)
+    return codecs and _codec_kind(hint) is not None
+
+
+def _needs_codec(hint: Any) -> bool:
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin is typing.Annotated:
+        return _needs_codec(args[0])
+    if origin in (list, dict, typing.Union) or type(hint).__name__ == "UnionType":
+        return any(_needs_codec(a) for a in args)
+    return _codec_kind(hint) is not None
+
+
+def _fits(value: Any, hint: Any) -> bool:
+    """Is ``value`` an instance of what ``hint`` names (loosely: enough to pick a union arm)?"""
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin is typing.Annotated:
+        return _fits(value, args[0])
+    if hint is Any:
+        return True
+    try:
+        return isinstance(value, origin or hint)
+    except TypeError:
+        return False
+
+
+def _encode(value: Any, hint: Any) -> Any:
+    """``value`` as JSON, for a parameter hinted ``hint``: a model as its JSON-mode dict, a datetime/date/time as ISO 8601, a Decimal/UUID/Path as a string. Anything else as it is."""
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin is typing.Annotated:
+        return _encode(value, args[0])
+    if value is None:
+        return None
+    if origin is typing.Union or type(hint).__name__ == "UnionType":
+        for arm in args:
+            if arm is not _NONE_TYPE and _fits(value, arm):
+                return _encode(value, arm)
+        return value
+    if origin is list and isinstance(value, (list, tuple)):
+        return [_encode(v, args[0] if args else Any) for v in value]
+    if origin is dict and isinstance(value, dict):
+        return {k: _encode(v, args[1] if len(args) == 2 else Any) for k, v in value.items()}
+    kind = _codec_kind(hint)
+    if kind is None or not isinstance(value, hint):
+        return value
+    if kind == "model":
+        return value.model_dump(mode="json")
+    if kind in ("datetime", "date", "time"):
+        return value.isoformat()
+    return str(value)
+
+
+def _decode(value: Any, hint: Any) -> Any:
+    """The inverse of :func:`_encode`: what the tool's body is called with. Raises when a value is not the encoded form of its type."""
+    origin, args = typing.get_origin(hint), typing.get_args(hint)
+    if origin is typing.Annotated:
+        return _decode(value, args[0])
+    if value is None:
+        return None
+    if origin is typing.Union or type(hint).__name__ == "UnionType":
+        arms = [a for a in args if a is not _NONE_TYPE]
+        for arm in sorted(arms, key=lambda a: not _needs_codec(a)):  # the arms that need a codec first: "2026-01-01" is a datetime where one is named
+            try:
+                if _needs_codec(arm):
+                    return _decode(value, arm)
+                if _fits(value, arm):
+                    return value
+            except Exception:
+                continue
+        return value
+    if origin is list and isinstance(value, list):
+        return [_decode(v, args[0] if args else Any) for v in value]
+    if origin is dict and isinstance(value, dict):
+        return {k: _decode(v, args[1] if len(args) == 2 else Any) for k, v in value.items()}
+    kind = _codec_kind(hint)
+    if kind is None:
+        return value
+    if kind == "model":
+        return hint.model_validate(value)
+    if kind == "datetime":
+        return hint.fromisoformat(value)
+    if kind == "date":
+        return hint.fromisoformat(value)
+    if kind == "time":
+        return hint.fromisoformat(value)
+    if kind == "decimal":
+        return hint(value)
+    return hint(value)  # uuid.UUID, a Path class
+
+
+def _why(hint: Any) -> str:
+    """What is wrong with a hint that has no JSON form, in a few words."""
+    cls = typing.get_origin(hint) or hint
+    if cls is collections.abc.Callable or (callable(hint) and not isinstance(hint, type)):
+        return "a callable"
+    if isinstance(cls, type):
+        if issubclass(cls, (io.IOBase, typing.IO)):
+            return "a file object"
+        return f"{cls.__name__}, which has no JSON form"
+    return repr(hint)
+
+
+class UnresolvedHint(Exception):
+    """A parameter's type hint cannot be resolved and nothing marks the parameter as supplied by the app."""
+
+    def __init__(self, parameter: str, text: str) -> None:
+        super().__init__(f"the type hint of {parameter!r} cannot be resolved")
+        self.parameter, self.text = parameter, text
+
+
+class _Placeholder:
+    """Stands in for a name a hint uses but the module cannot resolve at run time (a class imported only under ``TYPE_CHECKING``). Never a type: only a parameter explicitly marked injected may carry one."""
+
+
+class _Lenient(dict):
+    """Evaluation names for one annotation string: the function's own globals and builtins first, an inert placeholder for anything else (recorded in ``used``)."""
+
+    def __init__(self, namespace: dict) -> None:
+        super().__init__()
+        self.namespace, self.used = namespace, []
+
+    def __missing__(self, key: str) -> Any:
+        import builtins
+
+        if key in self.namespace:
+            return self.namespace[key]
+        if hasattr(builtins, key):
+            return getattr(builtins, key)
+        self.used.append(key)
+        return _Placeholder
+
+
+def resolve_hints(func: Callable) -> dict:
+    """The resolved hints of ``func`` (``include_extras``).
+
+    When the strict resolution fails (a class imported only under ``TYPE_CHECKING``, a forward reference), each parameter is read on its own: a hint that does not resolve
+    is accepted ONLY on a parameter explicitly marked injected (``Annotated[..., runbound.Injected]``), where the unknown name becomes an inert placeholder (the app supplies
+    the value, so its type is never needed). Any other unresolvable parameter raises :class:`UnresolvedHint`.
+    """
+    target = inspect.unwrap(func)
+    try:
+        return typing.get_type_hints(target, include_extras=True)
+    except Exception:
+        pass
+    namespace = getattr(target, "__globals__", {})
+    hints = {}
+    for name, annotation in getattr(target, "__annotations__", {}).items():
+        if name == "return":
+            continue
+        if isinstance(annotation, str):
+            names = _Lenient(namespace)
+            try:
+                hint = eval(annotation, namespace, names)  # noqa: S307 - an annotation string, as typing.get_type_hints evaluates it
+            except Exception:
+                raise UnresolvedHint(name, annotation) from None
+            unresolved = bool(names.used)
+        else:
+            hint, unresolved = annotation, "ForwardRef(" in repr(annotation)
+        if unresolved and not is_injected(hint):
+            raise UnresolvedHint(name, annotation if isinstance(annotation, str) else repr(annotation))
+        hints[name] = hint
+    return hints
+
+
+def unfit_parameters(func: Callable) -> list:
+    """``[(parameter, why), ...]``: the parameters of ``func`` a deferred approval could not store as JSON. An injected parameter is never one of them.
+
+    Raises when the type hints cannot be resolved.
+    """
+    signature = inspect.signature(func)
+    hints = resolve_hints(func)
+    bad = []
+    for p in signature.parameters.values():
+        hint = hints.get(p.name, inspect.Parameter.empty)
+        if p.kind is p.VAR_POSITIONAL:
+            bad.append((f"*{p.name}", "variable positional arguments cannot be stored"))
+        elif not is_injected(hint) and not _json_hint(hint):
+            bad.append((p.name, _why(hint)))
+    return bad
 
 
 def check_registration(func: Callable, name: str, approval: Any, mode: Any, timeout_s: Any) -> ApprovalSpec | None:
@@ -274,20 +546,21 @@ def check_registration(func: Callable, name: str, approval: Any, mode: Any, time
     signature = inspect.signature(func)
     if mode == "deferred":
         try:
-            hints = typing.get_type_hints(inspect.unwrap(func), include_extras=True)
-        except Exception:
+            bad = unfit_parameters(func)
+        except Exception as exc:
+            param = getattr(exc, "parameter", None)
+            text = str(getattr(exc, "text", "") or "").strip("'\"")
             raise ValueError(
-                f"tool {name!r} cannot be mode=\"deferred\": its type hints cannot be resolved, so its "
-                "arguments cannot be shown to be JSON (import what they name, or use mode=\"sync\")"
+                f"tool {name!r} cannot be mode=\"deferred\": its type hints cannot be resolved"
+                + (f" (parameter {param!r}: {text!r})" if param else "")
+                + ", so its arguments cannot be shown to be JSON (import what they name, or use mode=\"sync\"); "
+                + (f"if the app supplies {param!r}, annotate it Annotated[{text}, runbound.Injected]" if param else "if the app supplies a parameter, annotate it Annotated[<type>, runbound.Injected]")
             ) from None
-        bad = [
-            p.name for p in signature.parameters.values()
-            if p.kind is p.VAR_POSITIONAL or not _json_hint(hints.get(p.name, inspect.Parameter.empty))
-        ]
         if bad:
             raise ValueError(
-                f"tool {name!r} cannot be mode=\"deferred\": its arguments are stored and replayed as JSON, "
-                f"and {', '.join(bad)} cannot be (use mode=\"sync\", or JSON-friendly types)"
+                f"tool {name!r} cannot be mode=\"deferred\": its arguments are stored and replayed as JSON, and "
+                + "; ".join(f"parameter {param!r} ({why}) cannot be" if not param.startswith("*") else f"{param!r} ({why})" for param, why in bad)
+                + ". Mark a parameter runbound.Injected if the app supplies it (it is then never stored), give it a JSON-friendly type, or use mode=\"sync\""
             )
     return ApprovalSpec(mode, float(timeout_s), tuple(signature.parameters))
 
@@ -297,16 +570,35 @@ _SIGS: dict = {}  # tool -> its inspect.Signature, to bind a call's arguments by
 
 
 def json_friendly(func: Callable) -> bool:
-    """Can this tool's arguments be stored and replayed as JSON (so a row may make it ``deferred``)?"""
+    """Can this tool's arguments be stored and replayed as JSON (so a row may make it ``deferred``)? Injected parameters are not stored, so they do not count."""
     try:
-        signature = inspect.signature(func)
-        hints = typing.get_type_hints(inspect.unwrap(func), include_extras=True)
-        return not any(
-            p.kind is p.VAR_POSITIONAL or not _json_hint(hints.get(p.name, inspect.Parameter.empty))
-            for p in signature.parameters.values()
-        )
+        return not unfit_parameters(func)
     except Exception:
         return False
+
+
+@dataclasses.dataclass(frozen=True)
+class Shape:
+    """What a tool's parameters need to cross a deferred approval: which the app supplies (``injected``, in signature order) and which need a codec (``codecs``: name -> hint)."""
+
+    injected: tuple = ()
+    codecs: dict = dataclasses.field(default_factory=dict)
+    hints: dict = dataclasses.field(default_factory=dict)
+
+
+_SHAPES: dict = {}  # tool -> Shape, only for a tool that has an injected or a codec parameter
+
+
+def _shape_of(func: Callable) -> "Shape | None":
+    try:
+        signature = inspect.signature(func)
+        hints = resolve_hints(func)
+    except Exception:
+        return None
+    injected = tuple(p.name for p in signature.parameters.values() if is_injected(hints.get(p.name, inspect.Parameter.empty)))
+    codecs = {p.name: hints[p.name] for p in signature.parameters.values()
+              if p.name in hints and p.name not in injected and _needs_codec(hints[p.name])}
+    return Shape(injected, codecs, hints) if injected or codecs else None
 
 
 def register_tool(name: str, func: Callable, executor: Callable) -> None:
@@ -323,6 +615,11 @@ def register_tool(name: str, func: Callable, executor: Callable) -> None:
         _EXECUTORS.setdefault(name, executor)
         _META[name] = (names, json_friendly(func))
         _SIGS[name] = signature
+        shape = _shape_of(func)
+        if shape is None:
+            _SHAPES.pop(name, None)
+        else:
+            _SHAPES[name] = shape
 
 
 def bound_arguments(name: str, args: tuple, kwargs: dict) -> "dict | None":
@@ -335,8 +632,28 @@ def bound_arguments(name: str, args: tuple, kwargs: dict) -> "dict | None":
         bound.apply_defaults()
     except TypeError:
         return None
-    return {key: value for key, value in bound.arguments.items()
-            if signature.parameters[key].kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)}
+    shape = _SHAPES.get(name)
+    values = {key: value for key, value in bound.arguments.items()
+              if signature.parameters[key].kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD)
+              and (shape is None or key not in shape.injected)}  # an injected parameter is never read by a rule
+    if shape is not None:
+        for key, hint in shape.codecs.items():
+            if key in values:
+                values[key] = _encode(values[key], hint)  # a rule reads the encoded form, the one a person is shown
+    return values
+
+
+def public_call(name: str, args: tuple, kwargs: dict) -> tuple:
+    """``(args, kwargs)`` of a call without its injected parameters, for the span's argument digest; the call unchanged when the tool has none."""
+    shape = _SHAPES.get(name)
+    signature = _SIGS.get(name)
+    if shape is None or not shape.injected or signature is None:
+        return args, kwargs
+    try:
+        bound = signature.bind_partial(*args, **kwargs)
+    except TypeError:
+        return args, kwargs
+    return (), {key: value for key, value in bound.arguments.items() if key not in shape.injected}
 
 
 def tool_meta(name: str) -> tuple:
@@ -367,7 +684,31 @@ def _normalise(spec: ApprovalSpec, call: Any) -> dict:
     positional = [n for n in spec.names if n not in values]
     for name, value in zip(positional, call.args):
         values[name] = value
+    shape = _SHAPES.get(call.name)
+    if shape is not None:
+        for name in shape.injected:
+            values.pop(name, None)  # the app supplies it again at execution: it is never stored, sealed, digested or shown
+        for name, hint in shape.codecs.items():
+            if name in values:
+                original = values[name]
+                values[name] = _encode(original, hint)
+                if spec.mode == "deferred":
+                    _must_round_trip(name, original, values[name], hint)
     return values
+
+
+def _must_round_trip(name: str, original: Any, encoded: Any, hint: Any) -> None:
+    """A deferred request replays the DECODED JSON, so it must decode to what the caller passed. A model's JSON form is not always its value (a secret dumps masked, an
+    excluded field is dropped, an alias is not read back, a custom serializer reshapes it): running the approved tool with that would be silent corruption, so the call is
+    refused here, before any approval exists, and the tool never runs."""
+    try:
+        back = _decode(encoded, hint)
+        same = bool(back == original)
+        why = "the value read back from its JSON form is not equal to the value passed (a secret, an excluded field, an alias or a custom serializer changes it)"
+    except Exception as exc:  # noqa: BLE001 - whatever the codec raised is the reason
+        same, why = False, f"{type(exc).__name__}: {str(exc)[:160]}"
+    if not same:
+        raise StageRefused("arguments", f"parameter {name!r} cannot round-trip through JSON: {why}; use mode=\"sync\" or a JSON-friendly type")
 
 
 def _sleep_until(deadline: float, seconds: float) -> None:
@@ -383,7 +724,24 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
     resumed = _CURRENT.get()
     if resumed is not None:
         info["request_id"] = resumed  # the span of the resumed execution names the request a person approved
+        approval_id = _APPROVAL.get()
+        if approval_id:
+            info["approval_id"] = approval_id  # so the execution-entry re-check can tell the plane this approved request did not run (it holds a quota unit)
+        claim = _CLAIM.get() or {}
+        if claim.get("bind_required"):  # a bind-required request: this run must bind under its claim before the body (RFC 0a.2)
+            info.update(bind_required=True, claim_token=claim.get("claim_token"), claim=claim)
+            if claim.get("quota_held") is False:
+                info["quota_held"] = False
+            try:
+                info["args_digest"] = args_digest(call.name, _normalise(spec, call))
+            except Exception:
+                info["args_digest"] = None
         return
+    suspend = info.get("suspend")
+    if suspend is not None and not getattr(engine.config, "approval_bind", False):  # a suspended request is bind-required for life: without the capability there is nothing safe to file
+        raise StageRefused("approval", "suspended approvals need approval_bind=True (the plane must advertise bind_v1); nothing was asked", PLANE_TOO_OLD)
+    if info.get("fresh_only") and suspend is None:  # a boundary that supports no approval wait or resume (the early LangChain path): refuse BEFORE anything is asked or filed, never run the call
+        raise StageRefused("approval", "this call needs a person's approval, which this boundary does not support (unsupported); nothing was asked and the tool did not run", UNAVAILABLE)
     config, shared = engine.config, engine.shared
     unavailable = getattr(shared, "approval_refusal", lambda: None)()
     if unavailable:  # a new request needs a connected link; a long-poll already in flight rides out an outage
@@ -402,9 +760,9 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
             raise StageRefused("approval", "the tool's quota is exhausted for this window", QUOTA_EXCEEDED,
                                max(blocked - time.monotonic(), 0.0))
         _QUOTA_BLOCKED.pop((config.service, call.name, key_digest), None)
-    request_id = uuid.uuid4().hex
+    request_id = (suspend or {}).get("request_id") or uuid.uuid4().hex  # a replay-safe attempt names its own request, so a replayed node reaches the same approval
     body: dict = {
-        "tool": call.name, "request_id": request_id, "args": args, "mode": spec.mode, "timeout_s": spec.timeout_s,
+        "tool": call.name, "request_id": request_id, "args": args, "mode": "suspended" if suspend is not None else spec.mode, "timeout_s": spec.timeout_s,
         "service": config.service, "worker_id": config.resolved_worker_id(),
         "run_id": getattr(session, "session_id", None),
     }
@@ -413,9 +771,15 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
     requested_for = _REQUESTED_FOR.get()
     if requested_for:
         body["requested_for"] = requested_for
+    if getattr(config, "approval_bind", False) or suspend is not None:
+        body["capabilities"] = ["bind_v1"]  # ask for a request the plane will not let two attempts execute (legacy planes ignore the key and file a legacy request)
     body["args_digest"] = args_digest(call.name, args)  # the plane recomputes it: a different canonical form fails loudly (400), never silently asks again
     if spec.requirement:
         body["requirement"] = spec.requirement
+    for field in ("action_id", "attempt_id", "evaluation_id"):
+        value = (info.get("ids") or {}).get(field)
+        if value:
+            body[field] = value  # the identities of the call that asked, so the request joins its span and its refusal
     record = info.get("record") or {}
     for field in ("reason_code", "matched_rule_ids", "policy_version", "service_default_revision", "policy_state", "contributors", "sdk_version",
                   "rule_revision", "cfg_hash", "boot_id"):
@@ -425,7 +789,19 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
     if spec.mode == "deferred" and secret:
         body["seal"] = make_seal(secret, config.service, call.name, request_id, args, spec.timeout_s)
     deadline = time.monotonic() + spec.timeout_s
-    approval = _file(shared, body, deadline, (config.service, call.name, key_digest))
+    try:
+        approval = _file(shared, body, deadline, (config.service, call.name, key_digest))
+    except StageRefused as refused:
+        if suspend is not None and refused.http_status == 400:  # a plane that does not know the mode refuses it loudly: never fall back to sync or deferred
+            raise StageRefused("approval", "the control plane does not support suspended approvals; nothing was asked", PLANE_TOO_OLD) from None
+        raise
+    if suspend is not None and approval.get("granted") is not True and approval.get("bind_required") is not True:
+        if approval.get("id"):  # filed as something other than a bind-required request (a plane with the bind off): take it back, never wait on it
+            try:
+                withdraw(shared, request_id, "plane_too_old", approval.get("id"))
+            except Exception:
+                pass
+        raise StageRefused("approval", "the control plane did not file a bind-required request; suspended approval is unavailable", PLANE_TOO_OLD)
     if approval.get("granted") is True:  # an active session/minutes grant admits this call: nobody is asked, nothing waits, the plane took no quota unit
         grant_id = str(approval["grant_id"])
         if isinstance(record.get("contributors"), list):
@@ -434,6 +810,11 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
         return
     # ``approval["quota"]`` non-null means the plane already took this call's quota unit: never take another.
     info.update(request_id=request_id, approval_id=approval.get("id"), quota=approval.get("quota"))
+    if approval.get("bind_required") is True:
+        info.update(bind_required=True, args_digest=body["args_digest"])  # the executing worker binds under the claim the plane gives it
+    if suspend is not None:
+        info.update(bind_required=True, args_digest=body["args_digest"])
+        raise Suspended(request_id, approval.get("id"), body["args_digest"], (info.get("ids") or {}).get("attempt_id"))
     if spec.mode == "deferred":
         with _LOCK:
             _PENDING[request_id] = Pending(call.name, request_id, args, approval.get("id"), body["run_id"])
@@ -441,7 +822,19 @@ def admit(engine: Any, session: Any, call: Any, spec: ApprovalSpec, info: dict) 
                 _PENDING.popitem(last=False)
         raise Deferred({"status": PENDING_RESULT_STATUS, "request_id": request_id}, approval.get("id"))
     info["sync"] = True
-    _wait(shared, approval, deadline)
+    stop = info.get("stop")
+    if stop is not None and stop():  # abandoned before the request was filed (the cancel could not name it yet): take it back here, and never wait
+        withdrew = withdraw(shared, request_id, "cancelled_by_caller", approval.get("id"))
+        if withdrew.status == "not_withdrawable" and approval.get("id"):
+            report_async(engine, str(approval["id"]), "superseded", reason="cancelled_by_caller")
+        raise StageRefused("approval", "the invocation was abandoned before the request was decided; nothing will be dispatched", UNAVAILABLE)
+    decided = _wait(shared, approval, deadline, stop, request_id)
+    if isinstance(decided, dict):
+        approval = decided
+    if approval.get("bind_required") is True:  # the plane filed a bind-required request: bind before the body
+        info.update(bind_required=True, args_digest=body["args_digest"])
+        if approval.get("quota_held") is False:
+            info["quota_held"] = False
 
 
 def args_digest(tool: str, args: dict) -> str:
@@ -468,21 +861,28 @@ def _file(shared: Any, body: dict, deadline: float, quota_key: tuple = ()) -> di
         if status == 409:
             raise StageRefused("approval", "the approval request conflicts with an earlier one", UNAVAILABLE)
         if status in (400, 401, 403, 404, 422):
-            raise StageRefused("approval", f"the control plane refused the approval request (HTTP {status})", UNAVAILABLE)
+            refused = StageRefused("approval", f"the control plane refused the approval request (HTTP {status})", UNAVAILABLE)
+            refused.http_status = status
+            raise refused
         if time.monotonic() >= deadline:  # status None (transport) or a 5xx that never cleared
             raise StageRefused("approval", "the control plane could not be reached to ask for approval", TIMEOUT)
         _sleep_until(deadline, delay)
         delay = min(delay * 2, 5.0)
 
 
-def _wait(shared: Any, approval: dict, deadline: float) -> None:
-    """Long-poll until the request is decided. Never treats a transport error as a denial."""
+def _wait(shared: Any, approval: dict, deadline: float, stop: Any = None, request_id: "str | None" = None) -> "dict | None":
+    """Long-poll until the request is decided. Never treats a transport error as a denial.
+
+    ``stop`` (AAI-04-4a, the LangChain local fence) is polled between polls: an abandoned invocation, or a request this process withdrew, stops waiting at once, whatever the plane
+    says, so the thread can never go on to dispatch a call nobody is waiting for. The request itself is withdrawn by whoever abandoned it."""
     approval_id = approval["id"]
     delay = 0.25
     while True:
+        if (stop is not None and stop()) or (request_id is not None and request_id in _WITHDRAWN):
+            raise StageRefused("approval", "the invocation was abandoned before the request was decided; nothing will be dispatched", UNAVAILABLE)
         status = approval.get("status")
         if status == "approved":
-            return
+            return approval
         if status == "denied":
             reason = approval.get("decision_reason")
             raise StageRefused("approval", "a person denied the request" + (f": {reason}" if reason else ""), DENIED)
@@ -501,6 +901,10 @@ def _wait(shared: Any, approval: dict, deadline: float) -> None:
         _sleep_until(deadline, delay)  # transport error or 5xx: retry until the deadline
         delay = min(delay * 2, 5.0)
 
+
+#: The report outcomes every plane that has the report route accepts. A newer SDK that reports another (a future ``cancelled`` or ``withdrawn``) to an older plane gets a 400:
+#: that is a plane too old for this SDK, counted as such, never requeued forever.
+OUTCOMES_OLD_PLANES_KNOW = frozenset({"executed", "failed", "tampered", "clock_skew", "superseded"})
 
 #: HTTP statuses after which a report is settled: delivered, or refused for good (retrying cannot help).
 _SETTLED = frozenset({200, 201, 400, 401, 403, 404, 409})
@@ -606,6 +1010,9 @@ def _post_report(shared: Any, record: dict, attempts: int = 1) -> bool:
     for attempt in range(attempts):
         status, _ = shared.approvals("POST", f"/v1/approvals/{record['approval_id']}/report", body, timeout=5.0)
         if status in _SETTLED:
+            if status not in (200, 201):  # refused for good: counted, by why (an outcome this plane predates is not "the plane is broken")
+                too_old = status in (400, 422) and record["outcome"] not in OUTCOMES_OLD_PLANES_KNOW
+                delivery.dropped("approval_reports", "plane_too_old" if too_old else f"http_{status}")
             return True
         if attempt + 1 < attempts:
             time.sleep(0.5 * 2 ** attempt)
@@ -631,6 +1038,11 @@ _REPORT_RECORD_KEYS = ("reason_code", "matched_rule_ids", "policy_version", "ser
 def _report_record(record: dict) -> dict:
     """The decision-record keys a ``superseded`` report carries (both phases); only what is known."""
     return {key: record[key] for key in _REPORT_RECORD_KEYS if record.get(key) is not None}
+
+
+#: The report outcome for a call cancelled after its body began. The plane has no ``cancelled`` status yet (the new status is held for D2/D3), so the closest existing one is used: the
+#: call did not finish, and the quota unit it held is kept because the body may have run. Changing it to the new status when Codex rules is this one line.
+CANCELLED_REPORT_OUTCOME = "failed"
 
 
 def report_async(engine: Any, approval_id: str, outcome: str, result: Any = None, reason: "str | None" = None, decision_record: "dict | None" = None) -> None:
@@ -737,24 +1149,40 @@ def _execute(item: dict) -> None:
             report_async(engine, approval_id, outcome)
             _call_back({"request_id": request_id, "tool": tool, "outcome": outcome, "error": "clock_skew" if skew else TAMPERED})
             return
-        token = _CURRENT.set(request_id)
+        claim = {"bind_required": item.get("bind_required") is True, "claim_token": item.get("claim_token"), "quota_held": item.get("quota_held"), "lost": False}
+        if request_id in _WITHDRAWN:  # the caller gave up on it: never dispatched here
+            _LOG.warning("runbound: approved request %s was withdrawn; not run", approval_id)
+            return
+        token, approval_token, claim_token = _CURRENT.set(request_id), _APPROVAL.set(approval_id), _CLAIM.set(claim)
         with _LOCK:
             _EXECUTING.add(approval_id)
         try:
             with _run_as((own.run_id if own is not None else None) or item.get("run_id")):
-                result = executor(**args)
+                result = executor(**_rebuild(engine, tool, args))
             outcome = "executed"
-        except BaseException as exc:  # the tool's own failure, or a refusal by the chain
-            result, outcome = None, "failed"
-            _call_back({"request_id": request_id, "tool": tool, "outcome": "failed", "error": type(exc).__name__})
+        except BaseException as exc:  # the tool's own failure, a parameter that could not be supplied, or a refusal by the chain
+            if claim["lost"]:  # the plane gave this request to another worker: that one owns it now. Not run, not reported, not called back
+                result, outcome = None, "dropped"
+                _LOG.warning("runbound: the claim on approved request %s was lost before it could be bound; dropped, the new owner decides", approval_id)
+            elif getattr(exc, "reason", None) == PRIOR_OUTCOME_UNKNOWN:  # bound elsewhere or already: the other attempt owns the outcome, so this one reports nothing
+                result, outcome = None, "unknown"
+                _call_back({"request_id": request_id, "tool": tool, "outcome": "failed", "error": PRIOR_OUTCOME_UNKNOWN})
+            elif getattr(exc, "reason", None) == "approval_superseded":  # the re-check refused it and has already told the plane (``superseded``, with the record): not a failure
+                result, outcome = None, "superseded"
+                _call_back({"request_id": request_id, "tool": tool, "outcome": "superseded", "error": "approval_superseded"})
+            else:
+                result, outcome = None, "failed"
+                _call_back({"request_id": request_id, "tool": tool, "outcome": "failed", "error": exc.code if isinstance(exc, Unrunnable) else type(exc).__name__})
         finally:
             _CURRENT.reset(token)
+            _APPROVAL.reset(approval_token)
+            _CLAIM.reset(claim_token)
             with _LOCK:
                 _EXECUTING.discard(approval_id)
         if outcome == "executed":
             report_async(engine, approval_id, "executed", result)
             _call_back({"request_id": request_id, "tool": tool, "outcome": "executed", "result": result})
-        else:
+        elif outcome == "failed":
             report_async(engine, approval_id, "failed")
         with _LOCK:
             _PENDING.pop(request_id, None)
@@ -765,8 +1193,240 @@ def _execute(item: dict) -> None:
             _INFLIGHT.discard(approval_id)
 
 
+class Unrunnable(Exception):
+    """An approved request that cannot be run because a parameter could not be supplied: the request ends ``failed`` with ``code`` as its error."""
+
+    def __init__(self, code: str) -> None:
+        super().__init__(code)
+        self.code = code
+
+
+def _provider(provide: dict, name: str, hint: Any) -> Any:
+    """The zero-argument provider for an injected parameter: by parameter name first, else by type (the hint's class, then its bases), else ``None``."""
+    if name in provide:
+        return provide[name]
+    cls = _inner(hint)
+    if cls is _Placeholder:
+        return None  # the class was not importable here: only the parameter's name (or its default) can supply it
+    for base in getattr(cls, "__mro__", (cls,)):
+        try:
+            if base in provide:
+                return provide[base]
+        except TypeError:
+            continue
+    return None
+
+
+def _rebuild(engine: Any, tool: str, args: dict) -> dict:
+    """The keyword arguments an approved request runs the tool with: the stored JSON decoded back to the types the tool declares, and every injected parameter supplied afresh.
+
+    An injected parameter comes from ``init(provide=...)`` (by name, then by type), else from its default (a callable default is called, a plain one used as is);
+    with neither the request is not run (:class:`Unrunnable`, ``injected_unavailable:<param>``). A provider is called on every execution, so nothing is held across the wait.
+    """
+    shape = _SHAPES.get(tool)
+    if shape is None:
+        return args
+    values = {key: value for key, value in args.items() if key not in shape.injected}  # an injected value never comes from the wire
+    for name, hint in shape.codecs.items():
+        if name in values:
+            values[name] = _decode(values[name], hint)
+    signature = _SIGS.get(tool)
+    provide = getattr(engine.config, "provide", None) or {}
+    for name in shape.injected:
+        provider = _provider(provide, name, shape.hints.get(name))
+        if provider is not None:
+            values[name] = provider()
+            continue
+        default = signature.parameters[name].default if signature is not None else inspect.Parameter.empty
+        if default is inspect.Parameter.empty:
+            _warn_once(("injected-unavailable", tool, name),
+                       "runbound: tool %r is approved but its injected parameter %r has no provider (init(provide={...})) and no default; the request is not run", tool, name)
+            raise Unrunnable(f"injected_unavailable:{name}")
+        values[name] = default() if callable(default) else default
+    return values
+
+
 def run_executor(func: Callable) -> Callable:
     """A callable that runs ``func(**args)``; an async tool is awaited on its own loop."""
     if inspect.iscoroutinefunction(func):
         return lambda **kw: asyncio.run(func(**kw))
     return lambda **kw: func(**kw)
+
+
+# --- the execution bind (RFC 0a.2, D2) ------------------------------------------------------------
+
+
+def bind(engine: Any, call: Any, info: dict) -> None:
+    """Bind an approved, bind-required request to THIS attempt before its body runs. A no-op for a legacy request.
+
+    ``POST /v1/approvals/{id}/bind {attempt_id, action_id, args_digest, claim_token?}``. ``first: true`` lets the call go on. A bind that cannot be made (transport, a 5xx, 401/403/404,
+    ``503 downgrade_in_progress``) fails CLOSED whatever the tool's fail mode: ``approval_unavailable``. ``first: false`` and every 409 (``bound_to_other_attempt``, ``claim_lost``,
+    ``not_approved``, ``approval_expired``, ``approval_binding_mismatch``, a terminal status) mean the request may already have run: ``prior_outcome_unknown``, never dispatched. A lost
+    claim on a deferred execution also marks the job dropped (``_execute`` neither reports nor calls back).
+    """
+    approval_id = info.get("approval_id")
+    if not info.get("bind_required") or not approval_id:
+        return
+    ids = info.get("ids") or {}
+    body: dict = {"attempt_id": ids.get("attempt_id") or ids_module.mint(), "action_id": ids.get("action_id") or ids_module.mint(), "args_digest": info.get("args_digest")}
+    if info.get("claim_token"):
+        body["claim_token"] = info["claim_token"]
+    status, data = engine.shared.approvals("POST", f"/v1/approvals/{approval_id}/bind", body, timeout=BIND_TIMEOUT_S)
+    if status == 200 and isinstance(data, dict):
+        if data.get("first") is True:
+            info["bound"] = True
+            return
+        raise StageRefused("approval", "this request was already bound to an attempt; it is not run again (its outcome is unknown)", PRIOR_OUTCOME_UNKNOWN)
+    if status == 409:
+        reason = data.get("error") if isinstance(data, dict) else None
+        claim = info.get("claim")
+        if reason == "claim_lost" and isinstance(claim, dict):
+            claim["lost"] = True
+        raise StageRefused("approval", f"the control plane refused to bind this request ({reason or 'conflict'}); it is not run (its outcome is unknown)", PRIOR_OUTCOME_UNKNOWN)
+    raise StageRefused("approval", "the control plane could not bind this approved request, so it is not run", UNAVAILABLE)
+
+
+# --- replay resolution (RFC 0a.2 (1)) -----------------------------------------------------------------
+
+
+@dataclasses.dataclass(frozen=True)
+class Replay:
+    """What the plane's record of a ``request_id`` means for a call that wants to run again.
+
+    ``action``: ``first_run`` (admit normally), ``pending`` (raise the interrupt again), ``resume`` (``resume_admit`` -> bind -> body), ``no_dispatch`` (the recorded outcome
+    stands: ``reason`` is ``prior_outcome_unknown`` or the terminal status), ``refuse`` (``reason`` is the status or ``replay_unavailable``; ``detail`` names ``key_mismatch`` and the like).
+    Nothing but ``first_run`` and ``resume`` may run the body.
+    """
+
+    action: str
+    reason: "str | None" = None
+    detail: "str | None" = None
+    approval: "dict | None" = None
+
+
+REPLAY_LOOKUP_TIMEOUT_S = 1.0
+_REFUSED_STATUSES = frozenset({"denied", "expired", "withdrawn", "approved_unconsumed"})
+_TERMINAL_STATUSES = frozenset({"executed", "failed", "superseded", "cancelled"})
+
+
+def resolve_replay(shared: Any, request_id: str, resume_context: Any = None, *, now: "float | None" = None) -> Replay:
+    """The lookup table of RFC 0a.2 (1): ONE authenticated ``GET /v1/approvals/by-request/{request_id}`` decides, whatever the call's current verdict would be.
+
+    Only a ``200 {"exists": false}`` (the plane's single absence answer) with no approval in ``resume_context`` is a ``first_run``. Everything else maps to the table; an auth failure,
+    a generic 404 (an old plane, a proxy, a missing route), a 5xx, a timeout, a row that is not bind-required, or any shape this does not know is ``refuse``/``replay_unavailable``:
+    none of them is absence, so none may enter first admission whatever the tool's fail mode. ``resume_context`` is whatever the runtime handed back (a dict with an
+    ``approval_id`` / ``request_id``, or a non-empty value): if it says an approval already existed, ``exists: false`` is a contradiction and refuses.
+    """
+    unavailable = Replay("refuse", "replay_unavailable")
+    try:
+        status, data = shared.approvals("GET", f"/v1/approvals/by-request/{request_id}", None, timeout=REPLAY_LOOKUP_TIMEOUT_S)
+    except Exception:
+        return unavailable
+    if status == 403 and isinstance(data, dict) and data.get("error") == "not_requester":
+        return Replay("refuse", "replay_unavailable", "key_mismatch")
+    if status != 200 or not isinstance(data, dict):
+        return unavailable
+    exists = data.get("exists")
+    if exists is False:
+        said_existed = bool(resume_context.get("approval_id") or resume_context.get("request_id")) if isinstance(resume_context, dict) else bool(resume_context)
+        if said_existed:
+            return Replay("refuse", "replay_unavailable", "absent_but_expected")
+        return Replay("first_run")
+    approval = data.get("approval")
+    if exists is not True or not isinstance(approval, dict) or not isinstance(approval.get("status"), str):
+        return unavailable
+    state = approval["status"]
+    if approval.get("bind_required") is not True:
+        return Replay("refuse", "replay_unavailable", "not_bind_required", approval)  # a request filed without the binding cannot be resumed safely
+    if state == "pending":
+        return Replay("pending", approval=approval)
+    if state == "executing" or approval.get("bound_attempt_id"):
+        return Replay("no_dispatch", PRIOR_OUTCOME_UNKNOWN, state, approval)
+    if state in _TERMINAL_STATUSES:
+        return Replay("no_dispatch", state, state, approval)
+    if state in _REFUSED_STATUSES:
+        return Replay("refuse", state, state, approval)
+    if state == "approved":
+        resume_by = _parse_time(approval.get("resume_by"))
+        clock = time.time() if now is None else now
+        if resume_by is not None and clock >= resume_by:  # strict: the window ends AT resume_by
+            return Replay("refuse", "approved_unconsumed", "resume_by_passed", approval)
+        return Replay("resume", approval=approval)
+    return unavailable
+
+
+def _parse_time(value: Any) -> "float | None":
+    """An ISO 8601 UTC instant (as the plane serves it) as epoch seconds, or ``None``."""
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
+
+
+# --- withdrawal (a pending request only) ------------------------------------------------------------------
+
+_WITHDRAWN: set = set()  # request ids withdrawn here: a call holding one never dispatches, whatever the plane said
+#: The ACTUAL answer of each withdrawal, newest last: ``(request_id, status, plane_status)``. ``withdrawn`` is only what the plane confirmed; ``not_withdrawable`` carries the true status
+#: (an approval that won the race is NOT withdrawn); ``local`` means the plane could not be asked and this process alone will not dispatch it.
+WITHDRAWALS: "collections.deque" = collections.deque(maxlen=256)
+
+
+@dataclasses.dataclass(frozen=True)
+class Withdrawal:
+    """``status``: ``withdrawn`` (the plane did it, or had), ``not_withdrawable`` (``plane_status`` is the true status: it was decided, or already ran) or ``local`` (the plane
+    could not be reached: the call is treated as withdrawn HERE and is never dispatched by this process)."""
+
+    status: str
+    plane_status: "str | None" = None
+
+
+def is_withdrawn(request_id: Any) -> bool:
+    return request_id in _WITHDRAWN
+
+
+def withdraw(shared: Any, request_id: str, reason: "str | None" = None, approval_id: "str | None" = None) -> Withdrawal:
+    """:func:`_withdraw` and the record of what the plane actually answered (:data:`WITHDRAWALS`)."""
+    got = _withdraw(shared, request_id, reason, approval_id)
+    WITHDRAWALS.append((request_id, got.status, got.plane_status))
+    return got
+
+
+def _withdraw(shared: Any, request_id: str, reason: "str | None" = None, approval_id: "str | None" = None) -> Withdrawal:
+    """Withdraw a PENDING approval request the caller filed (``POST /v1/approvals/{id}/withdraw``): for the MCP boundary and any HTTP caller whose agent gave up waiting.
+
+    The approval id is the one given, the one a parked deferred request holds, or the one the by-request lookup names. 200 -> ``withdrawn`` (idempotent for the same key); 409
+    ``not_withdrawable`` -> that, with the true status. A transport failure, or a request whose id cannot be found, leaves the call withdrawn LOCALLY: it is recorded, a parked
+    deferred request is forgotten, and this process never dispatches it. Never raises.
+    """
+    with _LOCK:
+        parked = _PENDING.get(request_id)
+        approval_id = approval_id or (parked.approval_id if parked is not None else None)
+    try:
+        if approval_id is None:
+            status, data = shared.approvals("GET", f"/v1/approvals/by-request/{request_id}", None, timeout=REPLAY_LOOKUP_TIMEOUT_S)
+            row = data.get("approval") if status == 200 and isinstance(data, dict) else None
+            approval_id = row.get("id") if isinstance(row, dict) else None
+        if approval_id is None:
+            return _withdrawn_here(request_id)
+        status, data = shared.approvals("POST", f"/v1/approvals/{approval_id}/withdraw", {"reason": reason} if reason else {}, timeout=BIND_TIMEOUT_S)
+    except Exception:
+        return _withdrawn_here(request_id)
+    if status == 200:
+        _withdrawn_here(request_id)
+        return Withdrawal("withdrawn")
+    if status == 409:
+        true_status = data.get("status") if isinstance(data, dict) else None
+        if true_status == "withdrawn":
+            _withdrawn_here(request_id)
+            return Withdrawal("withdrawn")
+        return Withdrawal("not_withdrawable", true_status if isinstance(true_status, str) else None)
+    return _withdrawn_here(request_id)
+
+
+def _withdrawn_here(request_id: str) -> Withdrawal:
+    with _LOCK:
+        _WITHDRAWN.add(request_id)
+        _PENDING.pop(request_id, None)
+    return Withdrawal("local")

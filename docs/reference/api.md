@@ -17,6 +17,7 @@ and spans, is [API.md](../../API.md). `tests/test_public_api.py` checks that fil
 | `runbound.session(key, tags=None)` | Context manager: everything inside counts toward `key`'s own session (per-session `max_calls`, traces). |
 | `runbound.current_session()` | The `SessionState` work is counted toward right now, or `None` before `init()`. |
 | `runbound.current_request()` | The request id of the deferred approval being executed right now, else `None`. |
+| `runbound.Injected` | Marker for a tool parameter the app supplies (`Annotated[Session, runbound.Injected]`): never stored, sealed, digested or shown in a deferred approval, and supplied again from `init(provide=...)` when the request runs. See [Approvals](../guides/approvals.md#injected-parameters). |
 
 ## Check what is guarded
 
@@ -87,6 +88,6 @@ See [Handling refusals](../guides/handling-refusals.md).
 
 | Name | What it is |
 |---|---|
-| `runbound.__version__` | `1.0.0a4`. |
+| `runbound.__version__` | `1.0.0a5`. |
 
 ---

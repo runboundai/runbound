@@ -41,12 +41,34 @@ so with the default these tools stop exactly when the mode becomes
 `connected` or `degraded`.
 
 **A service with enforced service defaults** (every new service starts with the
-standard defaults enforced) does not use the grace: its sealed policy holds for
-its 24-hour validity window. A destructive tool that a console row **allows**
-keeps running while the plane is away; one with **no row** is decided by the
-defaults, which ask a person, so it is refused `approval_unavailable` because
-nobody can be asked. Give a tool an explicit row if it must stop, or keep
-running, on plane loss.
+standard defaults enforced) does not use the grace: it runs on its sealed policy
+for the **offline window**, counted from the last *policy confirmation*. Inside the
+window a destructive tool that a console row **allows** keeps running while the
+plane is away; one with **no row** is decided by the defaults, which ask a person,
+so it is refused `approval_unavailable` because nobody can be asked. Give a tool an
+explicit row if it must stop, or keep running, on plane loss. Once the window has
+passed, every `financial`, `destructive`, `privileged` and unclassified tool (a
+`write` that is also `destructive` included; a bare `write` stays under its own rule)
+is refused `plane_unavailable`: expiry only ever refuses more, and `read` / `external`
+tools are never affected.
+
+- **The window.** The plane serves it (`service_defaults.offline.execution_s`, 60 to
+  86 400 seconds). A new service gets 15 minutes. An existing service keeps 24 hours
+  until an operator changes it in the console. A worker that cannot read what it was
+  served uses 15 minutes, never longer; a worker served nothing (an older plane) behaves
+  exactly as before, 24 hours. `init(offline_execution_s=)` may only *shorten* the
+  served window; a larger value is ignored with a warning.
+- **What renews it.** Only a policy confirmation: an authenticated hello that the plane
+  did not flag as degraded, after which the worker holds the policy the plane announced
+  (already, or fetched in that same hello). A hello whose fetch failed, or that carried
+  `plane_degraded`, does not.
+- **A restart does not renew it.** The deadline survives a restart: the worker resumes
+  from the `confirmed_at` in its cache (an older cache without it uses `written_at`),
+  never from boot time. A confirmation dated in the future by more than 5 seconds, or a
+  wall clock that moved backwards, counts as expired.
+- **What you can see.** `plane_status().offline_window_s` and `offline_deadline` (an
+  estimate: the last confirmation plus the window), and the hello carries
+  `offline_window_s` so the console can list each worker's window.
 
 A tool's classes here include a console row's `risk_class` (see
 [Per-tool policy](policy.md#console-rows)), so a row can make a `read` tool
@@ -134,6 +156,8 @@ call it.
 | `applied_policy_version` | the org policy version this worker enforces (from the plane or the cache); `None` if none. |
 | `halt_stale_s` | seconds since the last answered hello while a halt is enforced (informational: the halt is enforced regardless); `None` when no halt is. |
 | `notice` | the plane's last `notice` text, if any. |
+| `offline_window_s` | the offline window this worker applies, in seconds; `None` for a service without enforced defaults (the 24-hour legacy window reads `86400`). |
+| `offline_deadline` | an estimate, in epoch seconds, of when consequential execution on the last policy confirmation ends; `None` without a window or a confirmation. |
 | `plane_degraded` | what the plane last said is wrong with itself while still answering (`"ledger_unreachable"`: it cannot reach its database); `None` when it said nothing or said it is fine. Informational: no decision changes on it, and `mode` stays `connected`. Each change is one `plane_degraded` entry in `runbound.events()`. |
 
 ## How to test it

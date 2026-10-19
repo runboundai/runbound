@@ -34,10 +34,10 @@ import threading
 import time
 from collections import OrderedDict
 from collections.abc import Callable, Iterator, Sequence
-from typing import Any
+from typing import Any, NoReturn
 from uuid import uuid4
 
-from . import _coverage, approvals as approvals_module, hooks as hooks_module, local_events, policy_rows as policy_rows_module, results as results_module, spans
+from . import _coverage, approvals as approvals_module, hooks as hooks_module, ids as ids_module, local_events, policy_rows as policy_rows_module, results as results_module, spans
 from .config import RunboundConfig
 from .engine import ERROR_MAX_CHARS, Engine
 from .events import Event
@@ -195,6 +195,9 @@ def _teardown_for_tests() -> None:
     outlive an engine, and a test that left them behind would export — or
     report — the next test's traffic.
     """
+    from . import delivery
+
+    delivery._reset_for_tests()
     global _ENGINE, _SESSION, _SHARED
     with _LOCK:
         _ENGINE = None
@@ -207,6 +210,7 @@ def _teardown_for_tests() -> None:
     local_events.clear_for_tests()
     hooks_module.reset_for_tests()
     approvals_module.reset_for_tests()
+    _EFFECT_SOURCE.clear()
     spans.shutdown()
 
 
@@ -599,6 +603,11 @@ def _observe(_latch: bool = True, _local: bool = False, **fields: Any) -> None:
         _LOG.warning("runbound failed to record an event; continuing", exc_info=True)
 
 
+#: Where a tool's capability declaration came from, for the span (``runbound.capability_source``): the code's decorator, an MCP annotation an integration translated, or nothing.
+_EFFECTS_SOURCES = frozenset({"decorator", "mcp_annotation"})
+_EFFECT_SOURCE: dict = {}
+
+
 def _args_hash(tool_name: str, args: tuple, kwargs: dict) -> str | None:
     """sha256 of a salted canonical repr of ``(tool_name, args, sorted kwargs)``.
 
@@ -608,6 +617,7 @@ def _args_hash(tool_name: str, args: tuple, kwargs: dict) -> str | None:
     arguments. ``None`` when the arguments cannot be repr'd.
     """
     try:
+        args, kwargs = approvals_module.public_call(tool_name, args, kwargs)  # an injected parameter (a DB session, a client) is no part of "the same call"
         canonical = repr((tool_name, args, tuple(sorted(kwargs.items()))))
         payload = _HASH_SALT + canonical.encode("utf-8", "replace")
         return hashlib.sha256(payload).hexdigest()
@@ -660,6 +670,7 @@ def tool(
     approval: str | None = None,
     mode: str | None = None,
     timeout_s: float | None = None,
+    effects_source: str | None = None,
 ) -> Callable:
     """Record every call to a tool, and state the rule it must obey.
 
@@ -762,6 +773,8 @@ def tool(
     """
 
     rules = _tool_rules(blocked, max_calls, constraint, require_approval, reviewed, effects)
+    if effects_source is not None and effects_source not in _EFFECTS_SOURCES:
+        raise ValueError(f"@runbound.tool(effects_source=...) must be one of {sorted(_EFFECTS_SOURCES)}, got {effects_source!r}")
     own_hooks = _tool_hooks(pre_hooks, "pre_hooks")
     own_gates = _tool_hooks(gate_hooks, "gate_hooks")
     own_post = _tool_hooks(post_hooks, "post_hooks")
@@ -773,6 +786,7 @@ def tool(
     def decorate(func: Callable) -> Callable:
         tool_name = name or getattr(func, "__name__", "<tool>")
         _require_rule(tool_name, rules)
+        _EFFECT_SOURCE[tool_name] = effects_source or ("decorator" if rules.effects else "undeclared")
         validator = hooks_module.Validator(func, tool_name)
         spec = approvals_module.check_registration(func, tool_name, approval, mode, timeout_s)
         _coverage.tool_decorated(tool_name)
@@ -782,8 +796,11 @@ def tool(
             deferred=bool(spec and spec.mode == "deferred"),
         )
 
-        def begin(args: tuple, kwargs: dict) -> tuple:
-            return _begin(tool_name, args, kwargs, rules.effects, validator, own_hooks, own_gates, spec)
+        def begin(args: tuple, kwargs: dict, attempt: "_Attempt | None" = None) -> tuple:
+            admitted = _begin(tool_name, args, kwargs, rules.effects, validator, own_hooks, own_gates, spec, attempt)
+            if attempt is not None:
+                attempt.settle()  # reached only when the chain cleared (an approval was granted): a refusal or a denial has nothing to report
+            return admitted
 
         def end(result: Any, args: tuple, kwargs: dict, started: float, tags: list) -> Any:
             return _finish(tool_name, result, args, kwargs, started, tags, rules.effects, own_post, max_result_chars)
@@ -792,21 +809,34 @@ def tool(
 
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kwargs: Any) -> Any:
+                attempt = _Attempt()
                 try:
                     if spec is not None or _may_wait(tool_name, rules.effects):  # a sync approval or a quota take blocks, a row's or the service defaults': keep it off the event loop
-                        args, kwargs, tags, started = await asyncio.to_thread(begin, args, kwargs)
+                        args, kwargs, tags, started = await asyncio.to_thread(begin, args, kwargs, attempt)
                     else:
-                        args, kwargs, tags, started = begin(args, kwargs)
+                        args, kwargs, tags, started = begin(args, kwargs, attempt)
                 except approvals_module.Deferred as deferred:
                     return deferred.result
+                except asyncio.CancelledError:
+                    attempt.cancel(tool_name)  # cancelled while waiting for an approval: enqueue only, the thread keeps waiting and is settled when it returns
+                    raise
+                _mark_started(started)
+                token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
                 try:
                     result = await func(*args, **kwargs)
                 except Exception as exc:
                     _record_tool_error(tool_name, exc, retryable=retryable)
                     _emit_result(tool_name, "error", started, tags, exc=exc)
                     raise
+                except asyncio.CancelledError:
+                    _emit_result(tool_name, "cancelled", started, tags)  # the body may have run: external effect unknown; enqueue only, never await in a cancelled scope
+                    raise
+                finally:
+                    if token is not None:
+                        ids_module.CURRENT.reset(token)
                 return end(result, args, kwargs, started, tags)
 
+            async_wrapper.__runbound_tool__ = tool_name  # a framework integration recognises an already-governed function by this (a verified duplicate install), never by name
             _register_approval(tool_name, spec, async_wrapper, func)
             return async_wrapper
 
@@ -816,14 +846,20 @@ def tool(
                 args, kwargs, tags, started = begin(args, kwargs)
             except approvals_module.Deferred as deferred:
                 return deferred.result
+            _mark_started(started)
+            token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
             try:
                 result = func(*args, **kwargs)
             except Exception as exc:
                 _record_tool_error(tool_name, exc, retryable=retryable)
                 _emit_result(tool_name, "error", started, tags, exc=exc)
                 raise
+            finally:
+                if token is not None:
+                    ids_module.CURRENT.reset(token)
             return end(result, args, kwargs, started, tags)
 
+        wrapper.__runbound_tool__ = tool_name
         _register_approval(tool_name, spec, wrapper, func)
         return wrapper
 
@@ -1043,6 +1079,8 @@ class _Run(float):
     request_id: "str | None" = None  # the approval request this call filed, if any
     report_id: "str | None" = None  # the plane's id of a sync approval, to report the outcome on
     record: "dict | None" = None  # the decision record of this call (policy state, matched lines, contributors ...)
+    done: bool = False  # the call's tool_result was emitted and its span ended: nothing else may emit one for it (a cancelled call whose worker thread finishes later)
+    ids: "dict | None" = None  # action_id, attempt_id, evaluation_id (and parent_action_id for a call made inside another governed body)
 
 
 def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | None = None) -> _Run:
@@ -1062,7 +1100,8 @@ def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | 
 
 def _begin(
     tool_name: str, args: tuple, kwargs: dict, effects: frozenset,
-    validator: "hooks_module.Validator", hooks: tuple, gate_hooks: tuple, approval: Any = None,
+    validator: "hooks_module.Validator", hooks: tuple, gate_hooks: tuple, approval: Any = None, attempt: "_Attempt | None" = None,
+    ids: "dict | None" = None, fresh_only: bool = False, suspend: "dict | None" = None,
 ) -> "tuple[tuple, dict, list, _Run]":
     """Run the pre-hook chain; returns ``(args, kwargs, tags, run)`` for the body.
 
@@ -1073,7 +1112,24 @@ def _begin(
     run = _start_run(tool_name, effects)
     if run.span is not None:
         run.span.args_digest = _args_hash(tool_name, args, kwargs)
-    info: dict = {}
+    run.ids = ids_module.new_call()
+    if ids:  # a trusted outer boundary's one-time handoff (the LangChain path, RFC section 4): only these two, never a parent or an evaluation
+        run.ids.update({k: ids[k] for k in ("action_id", "attempt_id") if ids.get(k)})
+    if run.span is not None:
+        run.ids.update(run.span.context_ids())  # trace_id / span_id ride the record into the refusal's anomaly, so the two name each other
+    info: dict = {"ids": run.ids}  # the engine adds evaluation_id to this same dict when it starts the chain
+    if suspend is not None:
+        info["suspend"] = suspend  # AAI-04-4b: a call that would need a person is FILED as a suspended, bind-required request and approvals.Suspended is raised (the caller interrupts its graph)
+    elif fresh_only:
+        info["fresh_only"] = True  # a call that would need a person is refused before anything is asked (approvals.admit); the caller supports no approval wait or resume
+    if attempt is not None:
+        with attempt._lock:
+            attempt.run, attempt.info = run, info
+            already = attempt.cancelled
+        if already:  # cancelled before this thread got as far as starting the call
+            _emit_result(tool_name, "cancelled", run, [])
+        if attempt.fence:
+            info["stop"] = attempt.is_cancelled  # the approval wait polls this: an abandoned invocation stops waiting (AAI-04-4a)
     try:
         args, kwargs = _announce_call(
             tool_name, args, kwargs, effects=effects, decorated=True,
@@ -1084,7 +1140,7 @@ def _begin(
         run.record = info.get("record")
         _emit_result(tool_name, "refused", run, tags, exc=refusal)
         raise
-    except approvals_module.Deferred:
+    except (approvals_module.Deferred, approvals_module.Suspended):
         run.request_id = info.get("request_id")
         run.record = info.get("record")
         _emit_result(tool_name, "pending_approval", run, tags)
@@ -1093,6 +1149,354 @@ def _begin(
     run.record = info.get("record")
     run.report_id = info.get("approval_id") if info.get("sync") else None
     return args, kwargs, tags, run
+
+
+#: The closed public reason a replay refusal carries (``exc.reason``); the recorded status or code itself rides the decision's evaluation and the refusal event.
+_REPLAY_PUBLIC_REASON = {"prior_outcome_unknown": "prior_outcome_unknown", "denied": "approval_denied", "expired": "approval_timeout", "superseded": "approval_superseded"}
+
+
+def _refuse_replayed(tool_name: str, kwargs: dict, effects: frozenset, ids: "dict | None", request_id: str, status: str, detail: "str | None", approval_id: "str | None") -> "NoReturn":
+    """AAI-04-4b: a replay refusal is a DECISION and is recorded like any other. ``status`` is what the plane's record said (``prior_outcome_unknown``, ``replay_unavailable``,
+    ``denied``, ``expired``, ``withdrawn``, ``approved_unconsumed``, ``executed`` ...). ONE refused call span (reason code, action and attempt ids, a NEW evaluation id, NO start marker) and
+    the normal refusal event are written; nothing is dispatched.
+
+    It NEVER returns: every path ends in a raised :class:`~runbound.exceptions.ExecutionRefused`, including before :func:`init` (nothing to record) and if the engine's reaction to the
+    refusal did not raise (the call is still refused), so a caller can never read 'returned' as 'not refused'."""
+    from .admission import approval as approval_decision
+    from .engine import _RECORD, _anomaly
+    from .events import Anomaly
+    from .exceptions import ExecutionRefused
+
+    code = f"{status}" + (f":{detail}" if detail else "")
+    decision = approval_decision(_REPLAY_PUBLIC_REASON.get(status, "approval_unavailable"), f"the recorded state of this request does not let it run again ({code}); nothing was dispatched")
+    decision.evaluation["replay"] = code
+    refusal = ExecutionRefused(Anomaly(detector="approval", severity="warn", message=f"Refused tool {tool_name!r}: {decision.reason}",
+                                       details={"tool": tool_name, "rule": "replay", "replay": code, "request_id": request_id, "approval_id": approval_id, "decision": decision.as_dict()}))
+    engine, state = _active()
+    if engine is None or state is None:
+        raise refusal
+    tags: list = []
+    run = _start_run(tool_name, effects)
+    if run.span is not None:
+        run.span.args_digest = _args_hash(tool_name, (), kwargs)
+    run.ids = ids_module.new_call()
+    if ids:
+        run.ids.update({k: ids[k] for k in ("action_id", "attempt_id") if ids.get(k)})
+    if run.span is not None:
+        run.ids.update(run.span.context_ids())
+    run.ids["evaluation_id"] = ids_module.mint()
+    call = ToolCall(tool_name, (), kwargs, state.key, dict(state.tags or {}))
+    record = engine._record(call, None, True)
+    record.update(run.ids)
+    run.request_id, run.record = request_id, record
+    token = _RECORD.set(record)
+    try:
+        anomaly = _anomaly(state, "approval", "warn", f"Refused tool {tool_name!r}{{whose}}: {decision.reason}", {"tool": tool_name, "rule": "replay", "replay": code, "request_id": request_id, "approval_id": approval_id})
+        engine.refuse(state, anomaly, decision, reacted="blocked")
+    except GuardrailTripped as tripped:
+        state.mark_action_refused()
+        _emit_result(tool_name, "refused", run, tags, exc=tripped)
+        raise
+    finally:
+        _RECORD.reset(token)
+    state.mark_action_refused()
+    _emit_result(tool_name, "refused", run, tags, exc=refusal)
+    raise refusal  # the engine's reaction did not raise: the call is refused all the same
+
+
+def _begin_resumed(tool_name: str, kwargs: dict, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None", resumed: dict) -> tuple:
+    """AAI-04-4b: admit a call whose approval the plane already holds as ``approved``, ``bind_required`` and not bound (RFC 0a.2 (1)); the lookup that said so has already happened.
+
+    Order: argument checks, the recomputed digest against the one the approval was filed with (``approval_binding_mismatch``; the resume payload is never authority),
+    ``Engine.resume_admit`` (reserves the session units and re-checks the CURRENT limits atomically), the bind, the restriction re-check, and (by the caller) the local start
+    marker which commits the reservation. Any refusal before that releases the reservation and ends the call refused; nothing started. Returns ``(kwargs, tags, run, reservation)``.
+    ``resumed``: ``request_id``, ``approval_id``, ``args_digest`` (as filed) and ``quota_held`` (the approval's, ``None`` when unknown).
+    """
+    from .engine import _RECORD
+
+    tags: list = []
+    run = _start_run(tool_name, effects)
+    if run.span is not None:
+        run.span.args_digest = _args_hash(tool_name, (), kwargs)
+    run.ids = ids_module.new_call()
+    if ids:
+        run.ids.update({k: ids[k] for k in ("action_id", "attempt_id") if ids.get(k)})
+    if run.span is not None:
+        run.ids.update(run.span.context_ids())
+    run.ids["evaluation_id"] = ids_module.mint()  # evaluation #2: the entry re-check of the resumed call; evaluation #1 is the one that asked
+    engine, state = _active()
+    call = ToolCall(tool_name, (), kwargs, state.key, dict(state.tags or {}))
+    info: dict = {"ids": run.ids, "request_id": resumed["request_id"], "approval_id": resumed["approval_id"], "bind_required": True, "args_digest": resumed["args_digest"], "sync": False}
+    if resumed.get("quota_held") is False:
+        info["quota_held"] = False
+    reservation = None
+    token = None
+    try:
+        row = getattr(engine.shared, "row_for", lambda _tool: None)(tool_name)
+        row = policy_rows_module.apply_defaults(row, tool_name, effects, engine.shared)
+        row = policy_rows_module.resolve_call(row, approvals_module.bound_arguments(tool_name, (), kwargs), engine._rule_context())
+        record = engine._record(call, row, True)
+        record.update(run.ids)
+        info["record"] = record
+        token = _RECORD.set(record)
+        try:
+            hooks_module.validate(validator, call)
+            names, _json_ok = approvals_module.tool_meta(tool_name)
+            if approvals_module.args_digest(tool_name, approvals_module._normalise(approvals_module.ApprovalSpec(names=names), call)) != resumed["args_digest"]:
+                raise hooks_module.StageRefused("approval", "the arguments differ from the ones this approval was filed for (approval_binding_mismatch); it is not run", "approval_binding_mismatch")
+            reservation = engine.resume_admit(state, call, resumed["approval_id"], effects=effects)
+            if info.get("quota_held") is False:  # the plane held no unit for this request: the existing quota contract applies (fail mode), never a second unit. BEFORE the bind: a refusal after it would leave the row executing
+                from . import quota as quota_module
+
+                quota_module.admit(engine, state, call, row, False, tags)
+            approvals_module.bind(engine, call, info)
+            # After a successful bind the ONLY step left is the entry re-check, and it reports the approval ``superseded`` itself on any refusal (so the row leaves ``executing``). Every other
+            # refusal point (digest, limits, quota) is BEFORE the bind, where nothing is bound. Anything added here must report ``superseded`` before it raises.
+            engine._recheck_after_approval(state, call, effects, effects, tags, info)
+        except hooks_module.StageRefused as refused:
+            engine._refuse_stage(state, call, refused)
+    except GuardrailTripped as refusal:
+        if reservation is not None:
+            reservation.release()
+        state.mark_action_refused()
+        run.request_id, run.record = info["request_id"], info.get("record")
+        _emit_result(tool_name, "refused", run, tags, exc=refusal)
+        raise
+    except BaseException:
+        if reservation is not None:
+            reservation.release()
+        raise
+    finally:
+        if token is not None:
+            _RECORD.reset(token)
+    # NOT ``state.mark_action_admitted()`` here: the reservation's ``commit`` (at the start marker, ``_run_body``) turns the reserved slot into the executed action, admitted once.
+    # Counting it at both places used two ``max_actions_per_run`` slots for one resumed call.
+    run.request_id, run.record = info["request_id"], info.get("record")
+    run.report_id = info["approval_id"]  # the outcome is reported on the approval (executing -> executed / failed)
+    return dict(kwargs), tags, run, reservation
+
+
+def _govern_external(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None" = None, text: Callable, passthrough: tuple = (), waits: bool = False) -> Any:
+    """One FRESH call at a boundary that is not the decorator (the LangChain middleware): the decorator's own pipeline around ``body(kwargs)``.
+
+    Admission is ``_begin`` (the same engine, the same record, the same span; no second evaluator) with ``fresh_only``: a call that would need a person's approval is refused
+    ``approval_unavailable`` before anything is asked, never run. The chain may rewrite ``kwargs``; ``body`` gets the final ones. The result is observed, never replaced: the
+    scan and the ``tool_result`` event see ``text(result)``, and the caller gets ``result`` as the framework produced it. ``passthrough`` names exceptions that are control flow of
+    the framework (a graph interrupt), not tool failures: they are re-raised untouched, no ``tool_error`` is recorded, and the call ends ``cancelled`` (the body did not complete).
+    """
+    _args, kwargs, tags, started = _begin(tool_name, (), kwargs, effects, validator, (), (), None, None, ids, not waits)
+    _mark_started(started)
+    token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
+    try:
+        result = body(kwargs)
+    except passthrough:
+        _emit_result(tool_name, "cancelled", started, tags)
+        raise
+    except Exception as exc:
+        _record_tool_error(tool_name, exc)
+        _emit_result(tool_name, "error", started, tags, exc=exc)
+        raise
+    finally:
+        if token is not None:
+            ids_module.CURRENT.reset(token)
+    _finish(tool_name, text(result), (), kwargs, started, tags, effects, (), None)
+    return result
+
+
+async def _agovern_external(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None" = None, text: Callable, passthrough: tuple = (), waits: bool = False) -> Any:
+    """:func:`_govern_external` for an async boundary: admission is off the event loop when it may block, the body is awaited, a cancelled await is recorded as cancelled.
+
+    ``waits`` allows the approval wait (AAI-04-4a). The local fence then serializes an abandonment against the dispatch commitment (:class:`_Attempt`): a cancel that wins stops the
+    wait, requests the withdrawal and forbids the dispatch; a commit that wins starts the body."""
+    attempt = _Attempt(fence=True)
+
+    def begin() -> tuple:
+        admitted = _begin(tool_name, (), kwargs, effects, validator, (), (), None, attempt, ids, not waits)
+        attempt.settle()
+        return admitted
+
+    try:
+        if _may_wait(tool_name, effects):
+            _args, final, tags, started = await asyncio.to_thread(begin)
+        else:
+            _args, final, tags, started = begin()
+    except asyncio.CancelledError:
+        attempt.cancel(tool_name)
+        raise
+    if not attempt.commit():  # abandoned between the approval and here: never dispatched
+        raise asyncio.CancelledError()
+    _mark_started(started)
+    token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
+    try:
+        result = await body(final)
+    except passthrough:
+        _emit_result(tool_name, "cancelled", started, tags)
+        raise
+    except Exception as exc:
+        _record_tool_error(tool_name, exc)
+        _emit_result(tool_name, "error", started, tags, exc=exc)
+        raise
+    except asyncio.CancelledError:
+        _emit_result(tool_name, "cancelled", started, tags)  # the body may have run: external effect unknown; enqueue only, never await in a cancelled scope
+        raise
+    finally:
+        if token is not None:
+            ids_module.CURRENT.reset(token)
+    _finish(tool_name, text(result), (), final, started, tags, effects, (), None)
+    return result
+
+
+def _govern_suspendable(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None", text: Callable, passthrough: tuple, suspend: dict) -> Any:
+    """AAI-04-4b: one FRESH call at the LangChain resume gate. Admission is ``_begin`` with ``suspend`` instead of ``fresh_only``: a call that would need a person is FILED as a suspended,
+    bind-required request and ``approvals.Suspended`` is raised (before any body, recorded as pending approval); every other outcome is exactly :func:`_govern_external`'s."""
+    _args, kwargs, tags, started = _begin(tool_name, (), kwargs, effects, validator, (), (), None, None, ids, False, suspend)
+    return _run_body(tool_name, kwargs, body, started, tags, effects, text, passthrough, None)
+
+
+def _run_body(tool_name: str, kwargs: dict, body: Callable, started: "_Run", tags: list, effects: frozenset, text: Callable, passthrough: tuple, reservation: Any) -> Any:
+    _mark_started(started)
+    if reservation is not None:
+        reservation.commit()  # the local start marker is the dispatch commitment: the reserved units are this call's now, whether or not the marker is ever delivered
+    token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
+    try:
+        result = body(kwargs)
+    except passthrough:
+        _emit_result(tool_name, "cancelled", started, tags)
+        raise
+    except Exception as exc:
+        _record_tool_error(tool_name, exc)
+        _emit_result(tool_name, "error", started, tags, exc=exc)
+        raise
+    finally:
+        if token is not None:
+            ids_module.CURRENT.reset(token)
+    _finish(tool_name, text(result), (), kwargs, started, tags, effects, (), None)
+    return result
+
+
+def _govern_resumed(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None", text: Callable, passthrough: tuple, resumed: dict) -> Any:
+    """AAI-04-4b: a call whose approval the plane holds as approved and not bound (see :func:`_begin_resumed`), run: reserve -> bind -> re-check -> local start marker (commits) -> body -> outcome."""
+    kwargs, tags, started, reservation = _begin_resumed(tool_name, kwargs, effects, validator, ids, resumed)
+    return _run_body(tool_name, kwargs, body, started, tags, effects, text, passthrough, reservation)
+
+
+async def _agovern_suspendable(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None", text: Callable, passthrough: tuple, suspend: dict) -> Any:
+    """:func:`_govern_suspendable` for an async boundary: admission runs off the event loop."""
+    _args, final, tags, started = await asyncio.to_thread(_begin, tool_name, (), kwargs, effects, validator, (), (), None, None, ids, False, suspend)
+    return await _arun_body(tool_name, final, body, started, tags, effects, text, passthrough, None)
+
+
+async def _arun_body(tool_name: str, kwargs: dict, body: Callable, started: "_Run", tags: list, effects: frozenset, text: Callable, passthrough: tuple, reservation: Any) -> Any:
+    _mark_started(started)
+    if reservation is not None:
+        reservation.commit()
+    token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
+    try:
+        result = await body(kwargs)
+    except passthrough:
+        _emit_result(tool_name, "cancelled", started, tags)
+        raise
+    except Exception as exc:
+        _record_tool_error(tool_name, exc)
+        _emit_result(tool_name, "error", started, tags, exc=exc)
+        raise
+    except asyncio.CancelledError:
+        _emit_result(tool_name, "cancelled", started, tags)  # the body may have run: external effect unknown; enqueue only, never await in a cancelled scope
+        raise
+    finally:
+        if token is not None:
+            ids_module.CURRENT.reset(token)
+    _finish(tool_name, text(result), (), kwargs, started, tags, effects, (), None)
+    return result
+
+
+async def _agovern_resumed(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None", text: Callable, passthrough: tuple, resumed: dict) -> Any:
+    final, tags, started, reservation = await asyncio.to_thread(_begin_resumed, tool_name, kwargs, effects, validator, ids, resumed)
+    return await _arun_body(tool_name, final, body, started, tags, effects, text, passthrough, reservation)
+
+
+class _Attempt:
+    """What the async wrapper needs to settle a call that is cancelled while its pre-chain still runs in a worker thread (an approval wait).
+
+    The worker thread cannot be interrupted, so it keeps running to its end. ``run`` and ``info`` are set by ``_begin`` as soon as they exist; ``cancel`` is called, once, by the
+    wrapper's ``CancelledError`` branch (which only enqueues, never awaits); ``settle`` is called by the thread when its chain returns, and reports an approval that arrived
+    after the cancellation as not run.
+
+    ``fence=True`` (the LangChain path, AAI-04-4a) adds the LOCAL fence between cancellation and dispatch: ``commit`` is the one dispatch commitment and ``cancel`` the one
+    abandonment, serialized under one lock, so exactly one wins. Cancel first: ``commit`` is refused, the waiting thread is told to stop (``stop``), and the filed request is
+    withdrawn in the background (``withdrawal`` holds the plane's ACTUAL answer: a pending request is ``withdrawn``; one a person already decided is ``not_withdrawable`` and is
+    reported not run; an unreachable plane leaves it ``local``). Commit first: the body starts, the cancel can only record that it may have run, and nothing is withdrawn.
+    A cancelled await or ``to_thread`` task alone is NOT this guarantee, and the fence never claims a started body stopped.
+    """
+
+    def __init__(self, fence: bool = False) -> None:
+        self.run: "_Run | None" = None
+        self.info: "dict | None" = None
+        self.cancelled = False
+        self.fence = fence
+        self.committed = False
+        self.withdrawal: "approvals_module.Withdrawal | None" = None
+        self.withdrawer: "threading.Thread | None" = None
+        self._lock = threading.Lock()
+
+    def is_cancelled(self) -> bool:
+        return self.cancelled
+
+    def commit(self) -> bool:
+        """The dispatch commitment: ``True`` when the call may start its body (a cancel arriving later cannot stop it), ``False`` when the invocation was abandoned first."""
+        with self._lock:
+            if self.cancelled:
+                return False
+            self.committed = True
+            return True
+
+    def cancel(self, tool_name: str) -> None:
+        with self._lock:
+            if self.fence and self.committed:
+                return  # dispatch won: the body is the caller's to finish; nothing is withdrawn and nothing is claimed stopped
+            self.cancelled = True
+            run, info = self.run, self.info
+        if run is not None:
+            _emit_result(tool_name, "cancelled", run, [])  # ends the span, records the tool_result; the approval is reported by ``settle`` if it is ever granted
+        if self.fence:
+            self._abandon(info)
+
+    def _abandon(self, info: "dict | None") -> None:
+        """Ask the plane to withdraw the request this invocation filed (enqueue only: never blocks the event loop). A request filed after this point is withdrawn by the thread that files it."""
+        request_id = (info or {}).get("request_id")
+        if not request_id or (info or {}).get("granted"):
+            return
+        approval_id, shared = (info or {}).get("approval_id"), getattr(_ENGINE, "shared", None)
+
+        def work() -> None:
+            try:
+                got = approvals_module.withdraw(shared, str(request_id), "cancelled_by_caller", approval_id)
+            except Exception:
+                return
+            self.withdrawal = got
+            if got.status == "not_withdrawable" and approval_id:  # a person decided first: the request is NOT withdrawn, and the call will not run, so the plane gives its unit back
+                approvals_module.report_async(_ENGINE, str(approval_id), "superseded", reason="cancelled_by_caller")
+
+        self.withdrawer = threading.Thread(target=work, name="runbound-withdraw", daemon=True)
+        self.withdrawer.start()
+
+    def settle(self) -> None:
+        """The pre-chain returned in the worker thread: if the caller was cancelled meanwhile, the body will never run, so say so about the approval it was granted."""
+        with self._lock:
+            cancelled, info = self.cancelled, self.info
+        approval_id = (info or {}).get("approval_id") if (info or {}).get("sync") else None
+        if cancelled and approval_id:
+            approvals_module.report_async(_ENGINE, str(approval_id), "superseded", reason="cancelled_by_caller")
+
+
+def _mark_started(run: "_Run") -> None:
+    """The one site that says "the body is about to run" (AAI-1 FR-3): after admission, the re-check and every gate, immediately before the tool's own code.
+
+    Not at the deferred executor: it re-enters the decorated wrapper, so a resumed call passes here after its re-check, once.
+    """
+    if run.span is not None:
+        engine, _state = _active()
+        run.span.mark_started(run.ids, getattr(engine, "config", None))
 
 
 def _end_span(tool_name: str, outcome: str, run: _Run, exc: "BaseException | None", done: Any, tags: Any = ()) -> None:
@@ -1109,7 +1513,7 @@ def _end_span(tool_name: str, outcome: str, run: _Run, exc: "BaseException | Non
             spans.facts(
                 tool_name, outcome, config=getattr(engine, "config", None),
                 run_id=getattr(state, "session_id", None), key=getattr(state, "key", None), effects=run.effects,
-                call_id=span.call_id, args_digest=span.args_digest, approval_request_id=run.request_id, exc=exc if outcome == "error" else None,
+                call_id=span.call_id, args_digest=span.args_digest, approval_request_id=run.request_id, ids=run.ids, effects_source=_EFFECT_SOURCE.get(tool_name), anomaly_id=getattr(getattr(refusal, "anomaly", None), "anomaly_id", None), exc=exc if outcome == "error" else None,
                 decision=getattr(refusal, "decision", None), record=run.record, reason_code=getattr(refusal, "reason", None),
                 policy_version=getattr(getattr(engine, "shared", None), "policy_version", None),
                 flags=processed.flags if processed else (), flag_score=processed.flag_score if processed else 0.0,
@@ -1127,6 +1531,10 @@ def _emit_result(
     exc: "BaseException | None" = None,
 ) -> None:
     """Record the ``tool_result`` event (how long, how it ended, what the post chain did) and end the span."""
+    if isinstance(started, _Run):
+        if started.done:
+            return
+        started.done = True
     fields: dict = {}
     if done is not None and done.processed is not None:
         processed = done.processed
@@ -1137,9 +1545,10 @@ def _emit_result(
     all_tags = tuple(tags) + (tuple(done.tags) if done is not None else ())
     if isinstance(started, _Run):
         _end_span(tool_name, outcome, started, exc, done, all_tags)
-        if started.report_id and outcome in ("ok", "withheld", "error"):
+        if started.report_id and outcome in ("ok", "withheld", "error", "cancelled"):
             started_report, started.report_id = started.report_id, None
-            approvals_module.report_async(_ENGINE, started_report, "failed" if outcome == "error" else "executed")
+            report = approvals_module.CANCELLED_REPORT_OUTCOME if outcome == "cancelled" else "failed" if outcome == "error" else "executed"
+            approvals_module.report_async(_ENGINE, started_report, report)
     _observe(
         False, kind="tool_result", tool_name=tool_name, outcome=outcome,
         duration_s=max(time.monotonic() - started, 0.0), tags=all_tags, **fields,

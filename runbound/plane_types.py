@@ -311,6 +311,10 @@ class PlaneStatus:
     #: said, or the last hello said nothing is. Not the link's own health (that is ``mode``): a plane can be ``connected`` and
     #: degraded at once. It rides the hello and is read-only; nothing about it is sent back.
     plane_degraded: str | None = None
+    #: The offline-execution window this worker applies, in seconds (``None``: none, a service without enforced defaults), and an ESTIMATE of when it ends
+    #: (wall-clock epoch seconds: the last policy confirmation plus the window; ``None`` when there is no window or no confirmation). Local; the window rides the hello.
+    offline_window_s: int | None = None
+    offline_deadline: float | None = None
 
 
 #: Longest a ``batch_id`` may be — a plane column width, mirroring

@@ -18,7 +18,7 @@ def _extras(pyproject: str) -> set[str]:
 
 def test_the_optional_extras_the_docs_name_are_the_ones_the_package_has():
     extras = _extras(_read("pyproject.toml"))
-    shipped = {name for name in extras if name not in {"test", "dev"}}
+    shipped = {name for name in extras if name not in {"test", "dev", "langchain-test"}}
     assert shipped == {"langchain", "otel"}
     for page in ("README.md", "docs/getting-started.md"):
         text = _read(page)

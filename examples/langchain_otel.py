@@ -33,6 +33,8 @@ trace.set_tracer_provider(provider)
 runbound.init(service="orders", tool_policy={"deny": ["delete_order"]})
 # A LangChain tool carries no capability class, and an unclassified tool fails closed while a configured
 # plane has not answered yet (plane_unavailable): with RUNBOUND_PLANE_URL set, wait for the first hello.
+# A connected plane's defaults for a new service then ASK a person before an unclassified tool runs (default:unclassified):
+# approve lookup_order in the console, or this script waits for the request to expire.
 deadline = time.monotonic() + 30
 while runbound.plane_status().mode == "connecting" and time.monotonic() < deadline:
     time.sleep(0.1)
