@@ -93,7 +93,10 @@ class LocalState:
     def start(self, engine: Any) -> None:
         return None
 
-    def stop(self) -> None:
+    def stop(self, timeout: "float | None" = None) -> None:
+        return None
+
+    def flush(self, timeout: float = 3.0) -> None:
         return None
 
 
@@ -119,6 +122,9 @@ class RemoteState:
         self._exporter = exporter
         self._config = config
         self._now = now
+        self._boot_mono = now()  # this process's start, for the bounded wait on its first confirmation (``plane_refusal``)
+        self._first_answer = threading.Event()  # set by the first hello this process had answered, whatever it said
+        self._waited = threading.local()  # the ms the calling thread last waited for it: read by ``take_waited_ms``
         self._lock = threading.Lock()
         self._failures = 0
         #: Consecutive hellos that did not come back (the Poller reports each), and when this link began.
@@ -412,6 +418,41 @@ class RemoteState:
         with self._lock:
             self._confirmed_mono, self._confirmed_wall = self._now(), self._wall()
 
+    def _boot_wait_remaining(self, effects: "frozenset | None") -> float:
+        """Seconds a call carrying ``effects`` may still wait for this process's first policy confirmation, else 0.
+
+        Only when ALL of these hold: the service has enforced defaults, the tool fails closed, its confirmation is expired, no hello has been answered in THIS process yet, and the first
+        ``confirm_wait_s`` seconds after boot have not run out. Read-only: it never touches a confirmation."""
+        from .hooks import fails_closed
+
+        budget = getattr(self._config, "confirm_wait_s", 0.0) or 0.0
+        if budget <= 0 or self._first_answer.is_set() or not self._defaults_enforced or not fails_closed(effects):
+            return 0.0
+        bound = self._offline_bound()
+        if bound is None or not self._confirmation_expired(bound):
+            return 0.0
+        return max(0.0, budget - (self._now() - self._boot_mono))
+
+    def await_first_confirmation(self, effects: "frozenset | None") -> None:
+        """The bounded wait: the START of an admission, before anything reads the policy (the call's row, its raised effects, its record). The first hello may confirm a NEWER policy
+        in the same hello (an operator may have restricted the tool while this worker was down), and everything after this reads what the worker then holds, including
+        ``plane_refusal``'s own expiry check. It waits only (see :meth:`_boot_wait_remaining`) and renews nothing; ``take_waited_ms`` says how long."""
+        remaining = self._boot_wait_remaining(effects)
+        if remaining > 0:
+            began = time.monotonic()  # the real time spent waiting, whatever clock the state is injected with
+            self._first_answer.wait(remaining)
+            self._waited.ms = int(round((time.monotonic() - began) * 1000))
+
+    def boot_wait_pending(self, effects: "frozenset | None") -> bool:
+        """Would a call carrying ``effects`` wait right now? (``api._may_wait``: such a call must be admitted off the event loop.)"""
+        return self._boot_wait_remaining(effects) > 0
+
+    def take_waited_ms(self) -> "int | None":
+        """How long (ms) this thread's last ``plane_refusal`` waited for the first confirmation, once; ``None`` when it did not wait."""
+        waited = getattr(self._waited, "ms", None)
+        self._waited.ms = None
+        return waited
+
     def plane_refusal(self, effects: "frozenset | None") -> str | None:
         """Why a tool carrying ``effects`` must be refused because the plane is gone, else ``None``.
 
@@ -529,6 +570,13 @@ class RemoteState:
     # --- the heartbeat ------------------------------------------------------------
 
     def apply_hello(self, reply: Any) -> None:
+        """Apply one heartbeat reply, then release any call waiting on this process's first answer (the wait never renews anything: only ``_confirm`` does)."""
+        try:
+            self._apply_hello(reply)
+        finally:
+            self._first_answer.set()
+
+    def _apply_hello(self, reply: Any) -> None:
         """Apply one heartbeat reply (the :class:`~runbound.plane.Poller` calls this).
 
         Can change the halt and its mode, the policy version (fetched here, on the
@@ -860,8 +908,16 @@ class RemoteState:
             _LOG.debug("runbound: could not read the exporter's pending count", exc_info=True)
             return None
 
-    def stop(self) -> None:
-        """Stop the heartbeat and drain the exporter. Idempotent, bounded."""
+    def flush(self, timeout: float = 3.0) -> None:
+        """Post what the event exporter has queued now, waiting up to ``timeout`` seconds, and keep running. Never raises."""
+        if self._exporter is not None:
+            try:
+                self._exporter.flush(timeout)
+            except Exception:
+                _LOG.warning("runbound: could not flush the exporter", exc_info=True)
+
+    def stop(self, timeout: "float | None" = None) -> None:
+        """Stop the heartbeat and drain the exporter (within ``timeout`` seconds when given). Idempotent, bounded."""
         poller, self._poller = self._poller, None
         if poller is not None:
             try:
@@ -870,7 +926,7 @@ class RemoteState:
                 _LOG.warning("runbound: could not stop the plane poller", exc_info=True)
         if self._exporter is not None:
             try:
-                self._exporter.stop()
+                self._exporter.stop() if timeout is None else self._exporter.stop(timeout)
             except Exception:
                 _LOG.warning("runbound: could not stop the exporter", exc_info=True)
 

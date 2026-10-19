@@ -452,6 +452,75 @@ def test_a_decorated_tool_under_the_middleware_is_admitted_once_by_the_decorator
     assert lc.duplicate_installs() == {("lookup_dec", "decorator"): 2}, "counted per call, recorded (warned) once per tool and kind"
 
 
+def refund_tool(ran: Ran):
+    @tool
+    def issue_refund(order_id: str, amount: int) -> str:
+        """Refund an order."""
+        ran.calls.append(("issue_refund", order_id, amount))
+        return f"refunded {amount} on {order_id}"
+
+    return issue_refund
+
+
+@SURFACES
+def test_a_console_rule_with_an_argument_condition_is_evaluated_on_plain_tools_through_the_middleware(run, collector):
+    """The headline layout (plain LangChain tools + the middleware): a row 'amount > 200 -> deny, otherwise allow' must read the call's ARGUMENTS. Draco's finding: the middleware registered no signature, the
+    condition saw nothing, read as unknown, and the unknown-condition rule (K1) refused EVERY call, a 19 refund included."""
+    from test_conditions import cond, line
+
+    ran = Ran()
+    start(FakeShared([row("issue_refund", lines=[line("L1", "deny", [cond("amount", ">", 200)])], otherwise="allow")]), otel_endpoint=collector.url, service="lc-early")
+    effects = {"issue_refund": {"financial"}}
+    (small,) = run([refund_tool(ran)], calls_message(("issue_refund", {"order_id": "A-1", "amount": 19}, "c1")), effects=effects)
+    assert (small.content, small.status) == ("refunded 19 on A-1", "success"), "under the limit: the line did not match, the row's otherwise allows"
+    (big,) = run([refund_tool(ran)], calls_message(("issue_refund", {"order_id": "A-2", "amount": 249}, "c2")), effects=effects)
+    assert big.status == "error" and not big.content.endswith("condition_unevaluable"), "over the limit: refused by the rule, not for an argument it could not read"
+    assert ran.calls == [("issue_refund", "A-1", 19)], "the 249 refund never ran"
+    refused = [a for a in call_spans(exported(collector)) if a["runbound.outcome"] == "refused"]
+    assert len(refused) == 1 and "L1" in str(refused[0]["runbound.decision.matched_rule_ids"]) and refused[0]["runbound.decision.reason_code"] != "condition_unevaluable"
+
+
+@SURFACES
+def test_a_rule_that_needs_a_person_asks_about_the_arguments_through_the_middleware(run):
+    """The ask path of the same layout: 'amount > 200 -> ask' asks for the 249 refund (the bound arguments in the refusal that no approval plane answers) and lets the 19 through."""
+    from test_conditions import cond, line
+
+    ran = Ran()
+    start(FakeShared([row("issue_refund", lines=[line("L1", "ask", [cond("amount", ">", 200)], approval={"approval_mode": "sync", "approval_timeout_s": 30, "approvers": []})], otherwise="allow")]), service="lc-early")
+    effects = {"issue_refund": {"financial"}}
+    (small,) = run([refund_tool(ran)], calls_message(("issue_refund", {"order_id": "A-1", "amount": 19}, "c1")), effects=effects)
+    assert small.status == "success" and ran.calls == [("issue_refund", "A-1", 19)], "under the limit: nothing to ask"
+    (big,) = run([refund_tool(ran)], calls_message(("issue_refund", {"order_id": "A-2", "amount": 249}, "c2")), effects=effects)
+    assert big.status == "error" and big.content == "refused approval_unavailable", "over the limit: it WANTED a person (no wait mode here), not 'condition_unevaluable'"
+    assert len(ran.calls) == 1
+
+
+@SURFACES
+def test_a_refusal_by_the_inner_decorator_reaches_the_model_as_the_same_error_tool_message_not_an_exception(run, collector):
+    """Draco's natural stacking (a ``tool(...)`` over a ``@runbound.tool`` function, with the middleware): the inner decorator still decides and still refuses; the new path only presents it as the error
+    ``ToolMessage`` it uses for its own refusals, so ``agent.invoke`` does not raise and the turn is not lost."""
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early", tool_policy={"deny": ["lookup_dec"]})
+    inner = decorated_lc_tool(ran)
+    (message,) = run([inner], calls_message(("lookup_dec", {"order_id": "A-1"}, "c1")))
+    assert (message.content, message.status) == ("refused tool_blocked", "error"), "the same message the new path gives its own refusals"
+    assert ran.calls == [], "the inner decorator refused: the body never ran"
+    raw = exported(collector)
+    assert [a["runbound.outcome"] for a in call_spans(raw)] == ["refused"] and markers(raw) == [], "one refusal, by the decorator, and no start"
+    assert lc.duplicate_installs() == {("lookup_dec", "decorator"): 1}
+
+
+def test_the_callback_handler_stays_authoritative_and_its_refusal_still_raises(collector):
+    """Not changed: a refusal by an attached ``RunboundCallbackHandler`` is raised from ``on_tool_start`` as it always was (the dual-install caveat)."""
+    from runbound.integrations.langchain import RunboundCallbackHandler
+
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early", tool_policy={"deny": ["lookup_order"]})
+    tools = make_tools(Ran())
+    agent = create_agent(ScriptedModel(script=[calls_message(("lookup_order", {"order_id": "A-1"}, "c1")), AIMessage(content="done")]), [tools["lookup_order"]], middleware=[lc.RunboundMiddleware()])
+    with pytest.raises(runbound.ExecutionRefused):
+        agent.invoke({"messages": [("user", "go")]}, {**CONFIG, "callbacks": [RunboundCallbackHandler()]})
+
+
 @SURFACES
 def test_a_decorated_function_is_recognised_by_the_function_not_by_a_matching_name(run):
     ran, admitted = Ran(), []
@@ -460,16 +529,6 @@ def test_a_decorated_function_is_recognised_by_the_function_not_by_a_matching_na
     (message,) = run([inner], calls_message(("renamed", {"order_id": "A-1"}, "c1")))
     assert message.content == "order A-1: shipped" and admitted == ["lookup_dec"]
     assert lc.duplicate_installs() == {("renamed", "decorator"): 1}
-
-
-@SURFACES
-def test_a_refusal_by_the_inner_decorator_is_the_inner_boundarys_own_and_the_outer_layer_adds_none(run):
-    ran = Ran()
-    start(FakeShared(), service="lc-early", tool_policy={"deny": ["lookup_dec"]})
-    inner = decorated_lc_tool(ran)
-    with pytest.raises(runbound.ExecutionRefused):
-        run([inner], calls_message(("lookup_dec", {"order_id": "A-1"}, "c1")))  # the decorator raises as it always did; the middleware did not turn it into a message
-    assert ran.calls == []
 
 
 @SURFACES

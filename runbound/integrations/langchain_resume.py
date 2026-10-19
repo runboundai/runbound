@@ -1,4 +1,4 @@
-"""LangChain / LangGraph SUSPENDED approval: interrupt, resume and replay (AAI-04-4b, RFC 0a.2 and section 9). INTERNAL, DISABLED BY DEFAULT, not a supported or public adapter.
+"""LangChain / LangGraph SUSPENDED approval: interrupt, resume and replay (AAI-04-4b, RFC 0a.2 and section 9). OFF until enabled and EXPERIMENTAL in 1.0.0a6 (the resume bound is a plane deployment setting; see docs/guides/langchain.md).
 
     from runbound.integrations import langchain_early, langchain_resume
     langchain_early.enable(); langchain_resume.enable()        # or RUNBOUND_LANGCHAIN_RESUME=1; init(approval_bind=True) and a checkpointer are required

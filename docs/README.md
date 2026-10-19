@@ -23,7 +23,7 @@ call.
 - [Upgrading from 0.11.x](guides/upgrading-from-0-11.md): console rules need 1.x; a 0.x worker ignores them.
 - [Handling refusals](guides/handling-refusals.md): the typed exception and every reason.
 - [OpenTelemetry](guides/opentelemetry.md): one span per tool call.
-- [LangChain / LangGraph](guides/langchain.md): the callback handler.
+- [LangChain / LangGraph](guides/langchain.md): the opt-in reference integration (tested combinations, limits, migration) and the callback handler.
 - [The plane link](guides/plane-link.md): the wire the SDK speaks.
 
 ## Reference

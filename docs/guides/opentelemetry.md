@@ -75,6 +75,26 @@ When `otel_endpoint` is set, per-call events stop going to `/v1/events`, which
 keeps only the low-volume audit records: refusals, approvals and tool-registry
 changes.
 
+## Delivering the queue before the process ends
+
+Spans are queued and posted in the background. Python posts what is left at a normal exit and on Ctrl-C, but **not when the process is stopped by SIGTERM** (the default action), which is what Docker and Kubernetes send on a stop or a redeploy: the spans still queued are lost, the last few calls of that process included.
+
+- `runbound.flush(timeout=3.0)` posts what is queued now and keeps running (the end of a job, a request handler).
+- `runbound.shutdown(timeout=3.0)` stops the heartbeat and the exporters and posts what is queued. It is idempotent, does nothing before `init()`, and holds the caller at most three seconds whatever `timeout` says (a receiver that stalls cannot hold the process). After it the process should exit: later calls are still governed on the last policy but are no longer exported.
+
+**What this does not do:** `flush` drains to a reachable ingest; spans queued during an outage are lost if the worker exits before it reconnects. There is no disk spool in this release, and the SDK does not claim lossless telemetry.
+
+The recipe for a container: call `runbound.shutdown()` in your SIGTERM handler, or in the `preStop` hook of the pod.
+
+```python
+import signal, sys
+import runbound
+
+signal.signal(signal.SIGTERM, lambda *_: (runbound.shutdown(), sys.exit(0)))
+```
+
+If your server already handles SIGTERM (uvicorn, gunicorn), call `runbound.shutdown()` from its own shutdown hook instead (a lifespan handler, `worker_exit`); installing a second handler would replace theirs.
+
 ## Log records and counters for refusals
 
 `otel.enable()` additionally exports the SDK's own refusal and change records as

@@ -61,12 +61,19 @@ def configure(config: Any, version: str) -> None:
         _LOG.warning("runbound: could not start the OTLP span emitter; no spans", exc_info=True)
 
 
-def shutdown() -> None:
-    """Stop the stdlib emitter, posting what is queued."""
+def shutdown(timeout: "float | None" = None) -> None:
+    """Stop the stdlib emitter, posting what is queued (within ``timeout`` seconds when given)."""
     global _EXPORTER
     exporter, _EXPORTER = _EXPORTER, None
     if exporter is not None:
-        exporter.stop()
+        exporter.stop() if timeout is None else exporter.stop(timeout)
+
+
+def flush(timeout: float = 3.0) -> None:
+    """Post the queued call spans now (up to ``timeout`` seconds) and keep the emitter running."""
+    exporter = _EXPORTER
+    if exporter is not None:
+        exporter.flush(timeout)
 
 
 def exporter() -> "otlp.SpanExporter | None":
@@ -291,6 +298,7 @@ def facts(
         out[n.DECISION_RULE_REVISION] = record.get("rule_revision")
         out[n.DECISION_CFG_HASH] = record.get("cfg_hash")
         out[n.DECISION_BOOT_ID] = record.get("boot_id")
+        out[n.WAITED_MS] = record.get("waited_ms")
         out[n.DECISION_CANDIDATE_OUTCOME] = record.get("candidate_outcome")
         out[n.DECISION_CANDIDATE_REVISION] = record.get("candidate_revision")
         out[n.DECISION_CANDIDATE_OF] = record.get("candidate_of")

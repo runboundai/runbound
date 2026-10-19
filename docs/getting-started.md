@@ -8,7 +8,7 @@ console, quotas, approvals and a fleet-wide view.
 **1. Install.**
 
 ```bash
-pip install runbound --pre      # 1.0.0a5 is an alpha; without --pre you get 0.11.2, which ignores console rules
+pip install runbound --pre      # 1.0.0a6 is an alpha; without --pre you get 0.11.2, which ignores console rules
 ```
 
 There are no runtime dependencies: stdlib only. There are two optional extras:
@@ -114,8 +114,11 @@ runbound.init(
     service="payments",
     worker_id="payments-7f9c",   # a stable name: the pod or host name
     approval_secret="...",   # or RUNBOUND_APPROVAL_SECRET, for deferred approvals
+    otel_endpoint="https://plane.example",   # where the call spans go: see below
 )
 ```
+
+`otel_endpoint` is what puts your calls in the console's **Traces**: the SDK posts one span per call there as OTLP/JSON. Without it the worker still connects and enforces policy, but Traces stay empty and the service's last call shows as `—`. For a self-hosted plane it is the plane's own address (the same URL as `control_plane_url`).
 
 Set `worker_id` to a stable name (a pod or host name) so a restart is recognised as
 the same worker; each process also has its own boot id, which tells the processes

@@ -176,3 +176,17 @@ def test_a_dry_run_candidate_records_would_ask_and_would_deny_and_decides_nothin
     assert "would_ask:approval" in runbound.tool_results()[-1]["tags"]
     assert pay(amount=1, region="eu") == "ok"
     assert "would_refuse:tool_blocked" in runbound.tool_results()[-1]["tags"]
+
+
+def test_a_conditional_deny_names_the_line_it_matched_and_does_not_say_the_tool_is_blocked():
+    """DRACO F8: ``amount > 200 -> deny`` refused a 249 with "tool is blocked by policy", though the tool is not blocked (a 19 ran). The code stays
+    ``tool_blocked`` (callers switch on it); the message names the line that decided."""
+    start(FakeShared([rule("pay", line("L1", "deny", [cond("amount", ">", 200)]))]))
+    pay, ran = make()
+    with pytest.raises(runbound.ExecutionRefused) as raised:
+        pay(amount=249)
+    assert raised.value.reason == "tool_blocked"
+    message = str(raised.value)
+    assert "L1" in message and "condition" in message
+    assert "is blocked by policy" not in message
+    assert pay(amount=19) == "ok" and ran == [19]

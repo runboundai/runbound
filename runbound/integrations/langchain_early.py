@@ -1,4 +1,4 @@
-"""LangChain / LangGraph tool-call governance, EARLY TRANCHE (AAI-04, LC-04-1). INTERNAL, DISABLED BY DEFAULT, not a supported or public adapter.
+"""LangChain / LangGraph tool-call governance (AAI-04): the opt-in reference integration (``RunboundMiddleware`` and ``govern_tools``). OFF until you enable it; supported at the tested combinations only (see docs/guides/langchain.md).
 
     from runbound.integrations import langchain_early
     langchain_early.enable()                      # or RUNBOUND_LANGCHAIN_EARLY=1; until then the two surfaces below refuse to construct
@@ -15,7 +15,7 @@ there is no approval wait, resume, replay, bind or cancellation claim; the resul
 Duplicate install (04-2): the INNERMOST boundary governs and this layer passes the call through, recording ``duplicate_install`` once per (tool, kind), when it can VERIFY that
 the call is governed again: the tool's function is a ``@runbound.tool`` wrapper (kind ``decorator``), a ``RunboundCallbackHandler`` is attached to the call or to the tool (kind
 ``callback_handler``: the handler is the inner boundary, and its checks are the handler's, which are weaker; migrate by removing it), or another layer of this module already holds
-the same tool call (kind ``new_path``). A same-named tool, or a governed call made from inside a tool's body (a different boundary), is not a duplicate. See :func:`duplicate_installs`.
+the same tool call (kind ``new_path``). When the inner boundary is a ``decorator``, its refusal is presented as this layer's own error tool message (the decorator still decides; presentation only); a handler's refusal is raised as before. A same-named tool, or a governed call made from inside a tool's body (a different boundary), is not a duplicate. See :func:`duplicate_installs`.
 
 A call whose arguments fail the tool's own schema is passed on unchanged: LangChain refuses it before the tool body runs, so it never becomes an action.
 """
@@ -36,13 +36,16 @@ try:
     from langchain.agents.middleware import AgentMiddleware
     from langgraph.prebuilt import ToolNode
 except ImportError as missing:  # pragma: no cover - exercised only without the extras
-    raise ImportError(f"runbound.integrations.langchain_early needs langchain>=1.0 and langgraph>=1.2 ({missing.name} is missing)") from missing
+    raise ImportError(
+        f"runbound.integrations.langchain_early needs langchain and langgraph ({missing.name} is missing): install runbound[langchain] (langchain>=1.2.11, langgraph>=1.2); "
+        "the combinations that were tested are listed in docs/guides/langchain.md"
+    ) from missing
 
 from langchain_core.messages import ToolMessage
 from langgraph.errors import GraphBubbleUp
 
 from .. import _coverage, api, hooks as hooks_module, ids as ids_module
-from ..approvals import key_hash
+from ..approvals import key_hash, register_signature
 from ..exceptions import ExecutionRefused
 from ..policy import ToolRules, normalize_effects
 
@@ -66,7 +69,7 @@ _JSON_TYPES = {"string": str, "integer": int, "number": float, "boolean": bool, 
 
 
 class LangChainEarlyDisabled(RuntimeError):
-    """The early LangChain path is internal and off until it is enabled on purpose."""
+    """The LangChain integration is off until it is enabled on purpose (``langchain_early.enable()`` or ``RUNBOUND_LANGCHAIN_EARLY=1``)."""
 
 
 def enable(*, approval_wait: bool = False) -> None:
@@ -84,7 +87,7 @@ def _waits() -> bool:
 
 def _check_enabled() -> None:
     if not (_enabled or os.environ.get(_ENV, "").strip().lower() in ("1", "true", "yes")):
-        raise LangChainEarlyDisabled(f"the early LangChain path is internal and disabled by default: call langchain_early.enable() or set {_ENV}=1")
+        raise LangChainEarlyDisabled(f"the LangChain integration is off until you enable it: call langchain_early.enable() or set {_ENV}=1")
 
 
 def framework_versions() -> dict:
@@ -145,6 +148,7 @@ def _register(name: str, tool: Any, effects: Mapping) -> "tuple[hooks_module.Val
         trampoline.__annotations__ = dict(shape[1])
     trampoline.__name__ = name
     validator = hooks_module.Validator(trampoline, name)
+    register_signature(name, trampoline)  # a console rule's conditions and the approval request read the call's arguments by name through this signature (plain tools never pass through @runbound.tool)
     rules = ToolRules(effects=stated)
     api._EFFECT_SOURCE[name] = "decorator" if stated else "undeclared"  # the customer's stated effects ride the decorator's source label; nothing else is "declared"
     _coverage.tool_requested(name)
@@ -246,7 +250,10 @@ def _note_duplicate(name: str, kind: str) -> None:
         first = (name, kind) not in _DUPLICATES
         _DUPLICATES[(name, kind)] = _DUPLICATES.get((name, kind), 0) + 1
     if first:
-        _LOG.warning("runbound: tool %r is governed twice (%s); the innermost boundary governs and the LangChain middleware passes the call through", name, kind)
+        if kind == "callback_handler":  # the handler governs with its weaker checks: worth a warning, and the way out is to remove it
+            _LOG.warning("runbound: tool %r is also governed by an attached RunboundCallbackHandler; the innermost boundary governs, so the handler's weaker checks apply: remove the handler to get the middleware's", name)
+        else:  # a @runbound.tool function under the middleware is the documented layout: nothing to fix
+            _LOG.info("runbound: tool %r is governed by its own %s; the LangChain middleware passes the call through (expected)", name, kind)
 
 
 class _Governed:
@@ -276,6 +283,11 @@ class _Governed:
             return handler(request)
         if plan[1] is not None:
             _note_duplicate(plan[0], plan[1])
+            if plan[1] == "decorator":  # the inner @runbound.tool decides (unchanged); only the PRESENTATION is the new path's: its refusal reaches the model as the same error tool message
+                try:
+                    return handler(request)
+                except ExecutionRefused as refused:
+                    return _refusal(request, refused)
             return handler(request)
         name, _, kwargs, validator, effects = plan
         if RESUME_GATE is not None:
@@ -296,6 +308,11 @@ class _Governed:
             return await handler(request)
         if plan[1] is not None:
             _note_duplicate(plan[0], plan[1])
+            if plan[1] == "decorator":  # as in run(): presentation only, the inner decorator still decides
+                try:
+                    return await handler(request)
+                except ExecutionRefused as refused:
+                    return _refusal(request, refused)
             return await handler(request)
         name, _, kwargs, validator, effects = plan
         if RESUME_GATE is not None:

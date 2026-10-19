@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import ast
 import importlib
+import importlib.util
 import re
 import types
 from pathlib import Path
@@ -69,7 +70,13 @@ def _resolve(chain: list[str]) -> str | None:
             try:
                 importlib.import_module(f"{obj.__name__}.{part}")
             except ImportError:
-                pass  # not a submodule: an attribute
+                try:
+                    shipped = importlib.util.find_spec(f"{obj.__name__}.{part}") is not None
+                except ImportError:
+                    shipped = False
+                if shipped:
+                    return None  # a shipped submodule that needs an optional dependency (e.g. langchain) not installed here
+                # not a submodule: an attribute
             if part in getattr(obj, "__all__", ()) and not _has(obj, part):
                 return None  # a lazily built export (e.g. a handler needing an optional dependency)
         if not _has(obj, part):

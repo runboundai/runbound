@@ -7,6 +7,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.0a6] - 2026-10-19
+
+What this release is for: LangChain / LangGraph as an opt-in, supported reference integration at four tested combinations, a startup wait that stops a restart from refusing a worker's first consequential calls while its first hello is in flight, and a floor for the optional `langchain` extra. Nothing is enabled by default and no decision is loosened: the policy a worker holds still decides, and neither waiting nor restarting renews the offline window.
+
+**LangChain and LangGraph.** Runbound supports an opt-in LangChain / LangGraph reference integration for locally executed tools through `RunboundMiddleware` (`wrap_tool_call` / `awrap_tool_call`) and `govern_tools`. It provides tool-boundary policy enforcement, explicitly configured approval handling and correlated action records. Support is limited to the tested combinations, execution layouts and approval configurations documented in the [LangChain guide](docs/guides/langchain.md); installing the extra does not enable governance automatically. This is an alpha release, not a compatibility claim for every version in the dependency range.
+
+| Python | langchain | langgraph |
+|---|---|---|
+| 3.11.17 | 1.2.11 | 1.2.0 |
+| 3.13.16 | 1.3.0 | 1.2.0 |
+| 3.13.16 | 1.4.6 | 1.2.16 |
+| 3.12.15 | 1.4.6 | 1.2.16 |
+
+All four rows: macOS arm64, langchain-core 1.6.12, langgraph-prebuilt 1.1.1, langgraph-checkpoint 4.3.0, langgraph-checkpoint-sqlite 3.1.2, pydantic 2.14.1; 111 tests per row. These are not four full reruns of every scenario (the restart and race checks ran at one pinned point). Linux, Windows, versions between the rows and other checkpointers are untested. Middleware, approval waits, execution binding and resume stay explicit opt-ins, and callback installations are not migrated automatically.
+
+### Added
+
+- `runbound.flush(timeout=3.0)` and `runbound.shutdown(timeout=3.0)`: deliver what is queued (call spans and events) before a process ends. Python skips its exit hooks when SIGTERM takes its default action, which is what Docker and Kubernetes send, so a worker stopped that way lost the spans still in its queue; call `runbound.shutdown()` in your SIGTERM handler or a `preStop` hook. Both are idempotent, do nothing before `init()` and hold the caller at most three seconds. `flush` drains to a reachable ingest; spans queued during an outage are lost if the worker exits before it reconnects (there is no disk spool, and lossless telemetry is not claimed). (An opt-in SIGTERM handler is not part of this release.)
+- `init(confirm_wait_s=)` (seconds, 0 to 10, default 3; 0 disables the wait): see Fixed. The span of a call that waited carries `runbound.waited_ms`.
+
+### Fixed
+
+- **Plain LangChain tools through `RunboundMiddleware` / `govern_tools`: a console rule with an argument condition (`amount > 200 -> deny`) is now evaluated on the call's arguments.** The middleware did not register the tool's signature, so a condition could not read the arguments and the unknown-condition rule refused every call (a 19 refund included) as `condition_unevaluable`; an approval request also lacked the bound arguments. A `@runbound.tool` function was not affected. **The defect is present since the early integration**, so it is in 1.0.0a5 too, where the LangChain path was internal and off by default. The log line for a decorated tool under the middleware is now informational (that layout is expected); an attached callback handler still warns. The messages say the integration is off until enabled (no longer "internal and disabled by default"), and the missing-package error names the extra and the guide instead of an old floor.
+- After a restart, a consequential call whose cached policy confirmation has expired can wait for the first policy confirmation, within the first three seconds after boot. The call is then evaluated against the policy the worker holds, including restrictions received during that wait. If no valid confirmation arrives, the call remains refused. Waiting and restarting do not renew the offline window. Set `confirm_wait_s=0` to disable the wait; the maximum setting is 10 seconds. Async calls do not block the event loop while waiting. A worker that restarts after a quiet period longer than its offline window no longer has its first calls refused merely because its first hello was still in flight, when that hello confirms the policy in time.
+
+### Changed
+
+- With `RunboundMiddleware` (or `govern_tools`), a refusal by a `@runbound.tool` function inside the tool now reaches the model as the same error `ToolMessage` the middleware uses for its own refusals, instead of an `ExecutionRefused` raised out of `agent.invoke`. Presentation only: the decorator still decides, and a refusal by an attached `RunboundCallbackHandler`, or by a decorator with no middleware, is raised as before.
+- The `langchain` extra now installs `langchain>=1.2.11,<2` and `langgraph>=1.2,<2` next to `langchain-core`: the install constraints of the lowest tested combination. They are constraints, not a statement that every version in between is supported.
+
+### Documentation
+
+- The LangChain guide gains the tested combinations, a tested-pin install example, the supported layouts and the limits (no exactly-once claim, key-based redaction, provider-hosted tools and custom or unwrapped paths outside support), and states the migration rule below.
+
+**What to check before upgrading**
+
+- `runbound[langchain]` now installs `langchain>=1.2.11` and `langgraph>=1.2` (with `langchain-core`). An app pinned to an older langchain keeps using the callback handler with `langchain-core` alone: install `runbound` and `langchain-core` without the extra.
+- **Leaving the old callback handler installed can leave its weaker governance in charge.** Nothing migrates for you. The new middleware raises no exception on a refusal (an error `ToolMessage` instead), and when both are installed the boundary closest to the tool governs: the old handler then keeps its weaker checks (no argument validation, no class rules for an undeclared tool). Duplicate-install detection prevents a double admission and a double quota unit; it does not make the new middleware's guarantees apply. Remove the handler deliberately when you switch.
+- **Suspended and resume execution is experimental in this release.** How long an approved request stays resumable is a control-plane deployment setting (`RUNBOUND_SUSPENDED_RESUME_S`), not one the SDK or the console selects, and the seven-day default it falls back to is not ratified. Fresh-call governance and approval waits are not affected. Enabling any of middleware, approval wait, suspension or execution binding is your explicit choice; none is on by default.
+- **A restarted worker can hold its first consequential call for up to three seconds** in the case described under Fixed. If that is not wanted, `init(confirm_wait_s=0)` keeps the previous behaviour (the call is refused at once). Only an authenticated policy confirmation accepted by the worker renews the offline window.
+- No exactly-once or independently verified external-outcome claim is made: an execution bind is not a start marker. Redaction is key-based, not a scan of free text. Records from SDKs up to 1.0.0a4 can lack an action identity or start evidence, and those SDKs emit no span for a cancelled call.
+
 ## [1.0.0a5] - 2026-10-19
 
 What this release is for: deferred approvals that work for real tools, a bounded offline window, and a record of each call that survives loss (identities, a start marker, honest delivery counters). Everything new is additive or off by default; a plane that does not know a new key ignores it, and an older plane leaves the SDK's behaviour as it was.

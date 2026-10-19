@@ -13,7 +13,7 @@ argument leaves the process only when the tool asks a person (the approver must
 see it). It puts no gateway in your hot path, and never speaks to your users: when it
 refuses something it hands control straight back to your own code.
 
-> **1.0.0a5 is an alpha.** The detection, provider-wrapper and cost
+> **1.0.0a6 is an alpha.** The detection, provider-wrapper and cost
 > features of 0.11.x are gone; see [CHANGELOG.md](CHANGELOG.md) for what was
 > removed and how to migrate.
 
@@ -30,7 +30,7 @@ console: it enforces only the rules in your code. Install with `--pre` (or pin
 
 Requires **Python 3.10 or newer** (pip refuses the install on older versions, and `import runbound` on
 3.9 raises an `ImportError` that says so). No runtime dependencies: stdlib only. There are two optional extras:
-`pip install "runbound[langchain]"` and `pip install "runbound[otel]"`.
+`pip install "runbound[langchain]"` and `pip install "runbound[otel]"`. LangChain / LangGraph is an opt-in reference integration at four tested combinations, not a range: see the [LangChain guide](docs/guides/langchain.md).
 
 ## Quick start
 
@@ -45,7 +45,8 @@ def lookup_order(order_id: str) -> dict:
 def issue_refund(order_id: str, amount: float) -> str:
     return "refunded"
 
-runbound.init(token="rb_...", control_plane_url="https://plane.example", service="support-agent")
+runbound.init(token="rb_...", control_plane_url="https://plane.example", service="support-agent",
+               otel_endpoint="https://plane.example")   # puts each call in the console's Traces (self-hosted: the plane's own address)
 ```
 
 **Decorate before `init()`.** Import your tool modules, then call `init()`: the
@@ -79,10 +80,10 @@ logged and skipped for a read, write or external one. See
 Rules come from two places and only ever tighten each other: the decorator
 (`blocked`, `max_calls`, `constraint`, `require_approval`, `effects`) and rows set
 in the console (blocked, session cap, approval, risk class, fail mode, quota). The
-most restrictive wins, field by field. A row starts as **dry run**: it evaluates
+most restrictive wins, field by field. A row you create is a **draft**; you start it as a **dry run**, which evaluates
 everything, refuses nothing and records `would_refuse` (or `would_ask` for a call
 it would have sent to a person), takes no quota unit and asks nobody, so you see
-what it would have stopped before you switch it to **enforced**. A tool with no row
+what it would have stopped before you promote it to **enforced** (the console asks for a comment at each step). A tool with no row
 follows the service defaults: a new service starts with the standard defaults
 enforced, so a financial, destructive, privileged or unclassified tool asks a
 person until you give it a row.
@@ -132,7 +133,8 @@ confirmation for the *offline window* (15 minutes for a new service; an existing
 keeps 24 hours until an operator changes it; `init(offline_execution_s=)` may only shorten
 it). Inside it a tool a row allows keeps running, and a tool with no row asks, so it is
 refused `approval_unavailable` while nobody can be reached; after it every
-`financial`, `destructive`, `privileged` and unclassified tool refuses `plane_unavailable`. See
+`financial`, `destructive`, `privileged` and unclassified tool refuses `plane_unavailable`.
+After a restart, a consequential call whose cached policy confirmation has expired can wait for the first policy confirmation, within the first three seconds after boot. The call is then evaluated against the policy the worker holds, including restrictions received during that wait. If no valid confirmation arrives, the call remains refused. Waiting and restarting do not renew the offline window. Set `confirm_wait_s=0` to disable the wait; the maximum setting is 10 seconds. Async calls do not block the event loop while waiting. Only an authenticated policy confirmation accepted by the worker renews the window; a merely answered or degraded hello does not, and no tool body runs on the strength of the wait alone. The three seconds are one allowance counted from boot, not a fresh one for every call. See
 [Plane loss](docs/guides/plane-loss.md).
 
 A worker with `export_events=False` exports nothing, refusals included, so the

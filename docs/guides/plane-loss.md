@@ -66,6 +66,7 @@ tools are never affected.
   from the `confirmed_at` in its cache (an older cache without it uses `written_at`),
   never from boot time. A confirmation dated in the future by more than 5 seconds, or a
   wall clock that moved backwards, counts as expired.
+- **A call right after a restart can wait, briefly.** The first hello goes out at once but is answered a moment after `init()` returns. After a restart, a consequential call whose cached policy confirmation has expired can wait for the first policy confirmation, within the first three seconds after boot. The call is then evaluated against the policy the worker holds, including restrictions received during that wait. If no valid confirmation arrives, the call remains refused. Waiting and restarting do not renew the offline window. Set `confirm_wait_s=0` to disable the wait; the maximum setting is 10 seconds. Async calls do not block the event loop while waiting. Only an authenticated policy confirmation accepted by the worker renews the window; a merely answered or degraded hello does not, and no tool body runs on the strength of the wait alone. The three seconds are one allowance counted from boot, not a fresh one for every call. The span of a call that waited carries `runbound.waited_ms`.
 - **What you can see.** `plane_status().offline_window_s` and `offline_deadline` (an
   estimate: the last confirmation plus the window), and the hello carries
   `offline_window_s` so the console can list each worker's window.
@@ -159,6 +160,10 @@ call it.
 | `offline_window_s` | the offline window this worker applies, in seconds; `None` for a service without enforced defaults (the 24-hour legacy window reads `86400`). |
 | `offline_deadline` | an estimate, in epoch seconds, of when consequential execution on the last policy confirmation ends; `None` without a window or a confirmation. |
 | `plane_degraded` | what the plane last said is wrong with itself while still answering (`"ledger_unreachable"`: it cannot reach its database); `None` when it said nothing or said it is fine. Informational: no decision changes on it, and `mode` stays `connected`. Each change is one `plane_degraded` entry in `runbound.events()`. |
+
+## Stopping a worker without losing its last spans
+
+A worker stopped by SIGTERM (a container stop, a redeploy) skips Python's exit hooks, so the spans still queued, including any recorded while the plane was away, are lost. Call `runbound.shutdown()` from your SIGTERM handler or a `preStop` hook; it posts what is queued within three seconds and stops the heartbeat. See [OpenTelemetry](opentelemetry.md#delivering-the-queue-before-the-process-ends). `flush` drains to a reachable ingest; spans queued during an outage are lost if the worker exits before it reconnects. There is no disk spool in this release, and the SDK does not claim lossless telemetry.
 
 ## How to test it
 

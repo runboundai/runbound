@@ -603,6 +603,15 @@ def _shape_of(func: Callable) -> "Shape | None":
 
 def register_tool(name: str, func: Callable, executor: Callable) -> None:
     """Every decorated tool: how to run it once approved, and what a row needs to know to ask about it."""
+    with _LOCK:
+        _EXECUTORS.setdefault(name, executor)
+    register_signature(name, func)
+
+
+def register_signature(name: str, func: Callable) -> None:
+    """What a console row needs to read a call's arguments by name (its conditions, the approval request): the tool's parameter names and signature, from ``func``.
+
+    A tool that is not run from the approval store (one the LangChain middleware governs) registers only this, never an executor."""
     try:
         names = tuple(inspect.signature(func).parameters)
     except (TypeError, ValueError):
@@ -612,7 +621,6 @@ def register_tool(name: str, func: Callable, executor: Callable) -> None:
     except (TypeError, ValueError):
         signature = None
     with _LOCK:
-        _EXECUTORS.setdefault(name, executor)
         _META[name] = (names, json_friendly(func))
         _SIGS[name] = signature
         shape = _shape_of(func)

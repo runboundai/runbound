@@ -123,6 +123,9 @@ class Engine:
         The unit is held from the start so concurrent calls see each other; a call that is refused
         (or deferred to a person) gives it back, so only calls that cleared the chain are counted.
         """
+        waiter = getattr(self.shared, "await_first_confirmation", None)
+        if waiter is not None:  # after a restart: wait (bounded) for the first policy confirmation BEFORE anything reads the policy, so the row, the effects and the record below are the served one
+            waiter(chain.get("effects"))
         session.enter_chain(call.name)
         cleared = False
         _REPEATS.set([])
@@ -142,6 +145,7 @@ class Engine:
             _KEYS.set(None)
             _REPEATS.set(None)
             _RECORD.set(None)
+            getattr(self.shared, "take_waited_ms", lambda: None)()  # a wait that no later gate reported must not leak into the next call on this thread
 
     def _run_chain(
         self,

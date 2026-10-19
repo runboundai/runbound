@@ -46,6 +46,7 @@ DECISION_CONTRIBUTORS = "runbound.decision.contributors"
 # VPC: the revision and configuration a call was decided under, and (R-C) what the revision being tried made of it.
 DECISION_RULE_REVISION = "runbound.decision.rule_revision"
 DECISION_CFG_HASH = "runbound.decision.cfg_hash"
+WAITED_MS = "runbound.waited_ms"  # how long the call waited for the first policy confirmation after a restart (bounded by init(confirm_wait_s)); absent when it did not wait
 DECISION_BOOT_ID = "runbound.decision.boot_id"  # which process decided the call (a restart is a new boot)
 DECISION_CANDIDATE_OUTCOME = "runbound.decision.candidate_outcome"
 DECISION_CANDIDATE_REVISION = "runbound.decision.candidate_revision"

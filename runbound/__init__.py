@@ -28,10 +28,12 @@ from .api import (  # noqa: E402
     current_session,
     decisions,
     events,
+    flush,
     init,
     plane_status,
     reset,
     session,
+    shutdown,
     tool,
     tool_calls,
     tool_results,
@@ -51,7 +53,7 @@ from .plane_types import PlaneStatus
 from .policy import ToolCall, ToolPolicy, ToolRules, Violation
 from .state import SessionState
 
-__version__ = "1.0.0a5"
+__version__ = "1.0.0a6"
 
 from ._check import check  # noqa: E402  (after __version__: the report prints it)
 
@@ -85,11 +87,13 @@ __all__ = [
     "current_session",
     "decisions",
     "events",
+    "flush",
     "init",
     "is_retryable",
     "plane_status",
     "reset",
     "session",
+    "shutdown",
     "tool",
     "tool_calls",
     "tool_results",

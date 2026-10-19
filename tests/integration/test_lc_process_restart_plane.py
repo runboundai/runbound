@@ -22,7 +22,7 @@ import pytest
 pytest.importorskip("langgraph")
 
 from .test_langchain_resume_plane import ASK, private_plane_resume, rig  # noqa: F401  (fixtures)
-from .test_real_plane import KEY
+from .test_real_plane import KEY, wait_scale
 
 pytestmark = pytest.mark.plane
 
@@ -48,7 +48,7 @@ class Worker:
                 pass
 
     def wait_for(self, kind, seconds=90):
-        end = time.monotonic() + seconds
+        end = time.monotonic() + seconds * wait_scale()
         while time.monotonic() < end:
             try:
                 got = self.lines.get(timeout=0.5)
@@ -152,7 +152,7 @@ def test_two_processes_resuming_the_same_approved_request_at_the_same_instant_di
     payload, _ = suspended_then_killed(rig, thread=f"th-race-{round_}")
     rig.decide(payload["approval_id"])
     resume = {"request_id": payload["request_id"], "approval_id": payload["approval_id"]}
-    at = time.time() + 6.0  # both interpreters import and connect first, then fire together
+    at = time.time() + 6.0 * wait_scale()  # both interpreters import and connect first, then fire together
     a = Worker(rig, "resume", resume=resume, thread=f"th-race-{round_}", at=at)
     b = Worker(rig, "resume", resume=resume, thread=f"th-race-{round_}", at=at)
     done = [a.wait_for("DONE"), b.wait_for("DONE")]

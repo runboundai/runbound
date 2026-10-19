@@ -64,9 +64,17 @@ def _free_port() -> int:
 LOAD_FLOOR_S = 45.0
 
 
+def wait_scale() -> float:
+    """``RUNBOUND_TEST_WAIT_SCALE`` (default 1, clamped to 1..3): multiplies every wait of the real-plane tests on a host so loaded that the floor above is not enough (a gate run at load 25-78)."""
+    try:
+        return min(3.0, max(1.0, float(os.environ.get("RUNBOUND_TEST_WAIT_SCALE", "1"))))
+    except ValueError:
+        return 1.0
+
+
 def _until(check, timeout=15.0, what="condition"):
-    """Poll ``check`` until it returns something truthy; ``timeout`` is a hint, never less than ``LOAD_FLOOR_S``."""
-    deadline = time.monotonic() + max(timeout, LOAD_FLOOR_S)
+    """Poll ``check`` until it returns something truthy; ``timeout`` is a hint, never less than ``LOAD_FLOOR_S``, and both are multiplied by :func:`wait_scale`."""
+    deadline = time.monotonic() + max(timeout, LOAD_FLOOR_S) * wait_scale()
     while time.monotonic() < deadline:
         value = check()
         if value:
@@ -238,3 +246,11 @@ def test_the_new_sdk_talks_to_the_current_plane(plane, sdk):
         return status == 200 and "wipe_database" in text and "count_rows" in text
     _until(refused_on_the_plane, what="the refusal on the plane")
     assert shared._exporter.pending == 0
+
+
+@pytest.mark.parametrize("value,expected", [(None, 1.0), ("1", 1.0), ("2.5", 2.5), ("3", 3.0), ("9", 3.0), ("0.1", 1.0), ("fast", 1.0)])
+def test_the_wait_scale_is_read_from_the_environment_and_clamped_to_one_to_three(monkeypatch, value, expected):
+    monkeypatch.delenv("RUNBOUND_TEST_WAIT_SCALE", raising=False)
+    if value is not None:
+        monkeypatch.setenv("RUNBOUND_TEST_WAIT_SCALE", value)
+    assert wait_scale() == expected

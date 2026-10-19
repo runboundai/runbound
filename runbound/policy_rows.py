@@ -318,6 +318,15 @@ def _would_ask(engine: Any, session: Any, call: Any, row: Row) -> None:
     engine._alert(_stamp_decision(anomaly, admission.row("approval", reason), session=session), session, "dry_run", refusal=True)
 
 
+def _blocked_text(tool: str, row: Row) -> str:
+    """The refusal text for a ``blocked`` row. A tool blocked outright is "blocked by policy"; a row with a condition blocks only the calls its deny
+    line matches, so it names the line (and says the tool itself is not off), never the tool as blocked (DRACO F8). The reason code is the same."""
+    if row.conditional and row.matched:
+        lines = ", ".join(m.rsplit("#", 1)[-1] for m in row.matched)
+        return f"tool {tool!r} was refused by rule line {lines}: a condition on this call matched a deny line (the tool itself is not blocked)"
+    return f"tool {tool!r} is blocked by policy"
+
+
 def enforce(engine: Any, session: Any, call: Any, row: "Row | None", tags: list | None) -> None:
     """``blocked`` then the session cap, in that order (tool-policy.md §2). Consumes nothing."""
     if row is None:
@@ -331,7 +340,7 @@ def enforce(engine: Any, session: Any, call: Any, row: "Row | None", tags: list 
         _refuse(engine, session, call, row, row.refuse[0], f"tool {call.name!r}: {row.refuse[1]}", tags)
         return
     if row.blocked:
-        _refuse(engine, session, call, row, "tool_blocked", f"tool {call.name!r} is blocked by policy", tags)
+        _refuse(engine, session, call, row, "tool_blocked", _blocked_text(call.name, row), tags)
     if row.max_calls is not None:
         used = session.counted_key(call.name, ",".join(row.matched)) if row.conditional else session.counted_calls(call.name)
         if used > row.max_calls:

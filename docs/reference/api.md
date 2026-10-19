@@ -29,6 +29,8 @@ and spans, is [API.md](../../API.md). `tests/test_public_api.py` checks that fil
 | `runbound.check(file=None, as_json=False)` | Print and return a local report of what is guarded; makes no plane call. `python -m runbound check` is the command form. |
 | `runbound.assert_guarded()` | Raise `RuntimeError` when nothing is decorated with `@runbound.tool`. |
 | `runbound.plane_status()` | The state of the control-plane link, as a `PlaneStatus`. |
+| `runbound.flush(timeout=3.0)` | Post what is queued (call spans and events) now, waiting at most `timeout` seconds (never more than 3), and keep running. Does nothing before `init()`. |
+| `runbound.shutdown(timeout=3.0)` | Stop the heartbeat and the exporters, posting what is queued within the same bound. Idempotent. Call it from a SIGTERM handler or a container `preStop` hook (see [OpenTelemetry](../guides/opentelemetry.md#delivering-the-queue-before-the-process-ends)). |
 
 ## Read what happened
 
@@ -88,6 +90,6 @@ See [Handling refusals](../guides/handling-refusals.md).
 
 | Name | What it is |
 |---|---|
-| `runbound.__version__` | `1.0.0a5`. |
+| `runbound.__version__` | `1.0.0a6`. |
 
 ---

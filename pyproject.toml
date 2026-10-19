@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "runbound"
-version = "1.0.0a5"
+version = "1.0.0a6"
 description = "A policy boundary around the tools an AI agent can call: per-tool policy, quotas, human approvals, fail-closed on plane loss, OpenTelemetry spans."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,9 +42,13 @@ Changelog = "https://github.com/runboundai/runbound/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = ["pytest>=7.0"]
-langchain = ["langchain-core"]
-# AAI-04-5: the real-framework test harness (tests/integration/lc_harness.py). EXACT versions, recorded here and printed by the harness; the supported ranges are the RFC section 9 pins
-# (langchain >=1.0,<2, langgraph >=1.2,<2, Python >=3.11). Not a runtime dependency.
+# The install constraints of the tested floor row (langchain 1.2.11 with langgraph 1.2.0, Python 3.11; `scripts/gate.sh sdk-langchain-matrix`). They are constraints, not a support statement: the combinations
+# that were tested are named in the CHANGELOG and docs/design/aai-04-langchain-support.md.
+langchain = ["langchain-core", "langchain>=1.2.11,<2", "langgraph>=1.2,<2"]
+# AAI-04-5: the real-framework test harness (tests/integration/lc_harness.py). EXACT versions, recorded here and printed by the harness. These are the newest TESTED combination. The
+# combinations that ran green (docs/design/aai-04-gate-b-evidence.md section 8; `scripts/gate.sh sdk-langchain-matrix`): langchain 1.2.11 with langgraph 1.2.0 (Python 3.11), langchain 1.3.0 with
+# langgraph 1.2.0 (3.13), and the pins below (3.13). Nothing between them is claimed. langchain below 1.2.11 cannot be installed next to langgraph >=1.2 (resolver), so the RFC section 9
+# the RFC-era floor (langchain 1.0) is not a tested point. Not a runtime dependency.
 langchain-test = [
     "langchain==1.4.6; python_version >= '3.11'",
     "langchain-core==1.6.12; python_version >= '3.11'",

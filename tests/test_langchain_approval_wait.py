@@ -236,6 +236,24 @@ def test_a_denied_or_expired_request_never_starts_the_body(verdict, reason, coll
     assert markers(raw) == [] and [a["runbound.outcome"] for a in calls_of(raw)] == ["refused"]
 
 
+def test_a_conditional_ask_files_the_request_with_the_calls_own_arguments_and_only_for_the_calls_that_match(collector):
+    """Wait mode, plain tool, a row 'amount_cents > 200 -> ask': the 19 runs with nothing filed; the 249 files ONE request whose arguments are its own (the condition read them)."""
+    from test_conditions import cond, line
+
+    ran = Ran()
+    plane = ApprovalPlane([row("refund", lines=[line("L1", "ask", [cond("amount_cents", ">", 200)], approval={"approval_mode": "sync", "approval_timeout_s": 30, "approvers": []})], otherwise="allow")])
+    start(plane, otel_endpoint=collector.url, service="lc-wait")
+    refund = make_tool(ran)
+    small = graph_of(refund).invoke({"messages": [message("A-1", 19, "c1")]})
+    assert [m.content for m in small["messages"] if isinstance(m, ToolMessage)] == ["refunded 19 on A-1"] and plane.requests == {}, "under the limit: no request filed"
+    thread, box = in_thread(lambda: graph_of(refund).invoke({"messages": [message("A-2", 249, "c2")]}))
+    plane.wait_for(1)
+    assert plane.requests["ap1"]["body"]["args"] == {"order_id": "A-2", "amount_cents": 249} and ran.calls == [("A-1", 19)]
+    plane.decide("ap1", "approved")
+    thread.join(10)
+    assert tool_message(box).content == "refunded 249 on A-2"
+
+
 # --- AT-08 (subset): the arguments are bound to their own request ------------------------------------------------------------------------------------------------
 
 

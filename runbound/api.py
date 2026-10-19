@@ -188,6 +188,73 @@ def _start_session(config: RunboundConfig) -> None:
     _SESSION = _new_session()
 
 
+def _drain_seconds(timeout: Any) -> float:
+    """The time ``flush`` / ``shutdown`` may take: the caller's, never longer than the exporter's own bound (:data:`runbound.export.DRAIN_TIMEOUT_S`): a SIGTERM grace period is short, and the SDK never holds a process."""
+    from .export import DRAIN_TIMEOUT_S
+
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout < 0:
+        raise ValueError(f"timeout must be a number of seconds, 0 or more, got {timeout!r}")
+    return min(float(timeout), DRAIN_TIMEOUT_S)
+
+
+def _within(seconds: float, work: Callable[[], None]) -> None:
+    """Run ``work`` on a daemon thread and wait at most ``seconds`` for it: a receiver that stalls a request cannot hold the caller (or the process) past the bound. What is not posted in time stays queued
+    (``flush``) or is dropped with the process (``shutdown``); the thread is a daemon and never keeps the process alive."""
+    box: list = []
+
+    def run() -> None:
+        try:
+            work()
+        except Exception as error:  # a delivery problem is never the caller's
+            box.append(error)
+
+    thread = threading.Thread(target=run, name="runbound-drain", daemon=True)
+    thread.start()
+    thread.join(seconds)
+    if box:
+        _LOG.warning("runbound: draining the queue failed: %s", box[0])
+
+
+def flush(timeout: float = 3.0) -> None:
+    """Post what is queued (call spans and events) now, waiting up to ``timeout`` seconds (at most 3), and keep running.
+
+    For the end of a short-lived job or a request handler. A no-op before :func:`init`. Never raises on a delivery problem: what cannot be posted in time stays queued.
+    """
+    seconds = _drain_seconds(timeout)
+    shared = _SHARED
+    if shared is None:  # before init(): nothing is queued and nothing to stop; silent
+        return
+
+    def work() -> None:
+        flusher = getattr(shared, "flush", None)
+        if flusher is not None:
+            flusher(seconds)
+        spans.flush(seconds)
+
+    _within(seconds, work)
+
+
+def shutdown(timeout: float = 3.0) -> None:
+    """Stop the heartbeat and the exporters, posting what is queued within ``timeout`` seconds (at most 3). Idempotent.
+
+    Call it from your SIGTERM handler or a container ``preStop`` hook: Python does not run its exit hooks when SIGTERM takes its default action, so the spans still queued would be lost.
+    After it the process should exit: calls made later are still governed on the last policy but are no longer exported. A no-op before :func:`init`.
+    """
+    seconds = _drain_seconds(timeout)
+    shared = _SHARED
+    if shared is None:  # before init(): an explicit silent no-op, not a drain that fails and is logged
+        return
+
+    def work() -> None:
+        try:
+            shared.stop(seconds)
+        except TypeError:  # a state object that takes no time limit
+            shared.stop()
+        spans.shutdown(seconds)
+
+    _within(seconds, work)
+
+
 def _teardown_for_tests() -> None:
     """Return the module to its uninitialized state. Test-only.
 
@@ -533,6 +600,8 @@ def _may_wait(tool_name: str, effects: "frozenset | None") -> bool:
     if engine is None:
         return False
     shared = engine.shared
+    if getattr(shared, "boot_wait_pending", lambda _effects: False)(effects):  # a restart: the call may wait for the first policy confirmation, so it is admitted off the loop
+        return True
     row = getattr(shared, "row_for", lambda _tool: None)(tool_name)
     if row is not None and (row.approval_required or row.quota):
         return True

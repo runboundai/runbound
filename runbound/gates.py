@@ -78,6 +78,13 @@ def plane(engine: Any, session: Any, call: Any, effects: "frozenset | None") -> 
                            {"tool": call.name, "rule": "policy_expired_restricted"})
         engine.refuse(session, anomaly, admission.plane_unavailable(why, "policy_expired_restricted"), reacted="door")
     why = getattr(engine.shared, "plane_refusal", lambda _effects: None)(effects)
+    waited = getattr(engine.shared, "take_waited_ms", lambda: None)()
+    if waited:  # the call waited for the first policy confirmation after a restart: the span says how long, on the refusal and on the call that then ran
+        from .engine import _RECORD
+
+        record = _RECORD.get()
+        if record is not None:
+            record["waited_ms"] = waited
     if why:
         from .engine import _anomaly
 

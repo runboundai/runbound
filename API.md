@@ -22,6 +22,8 @@ each name removed in S1 raises `AttributeError`.
 - `tool_results` — recorded `tool_result` records (one per call: `tool`, `outcome`, `duration_s`, `flags`, `flag_score`, `flagged`, `truncated`, sizes, `tags`; never the result). Its own ring, apart from `events`, because it grows with every call and would push the refusals out; `on_event` receives the same records as they happen.
 - `decisions` — recorded decisions.
 - `plane_status` — state of the control-plane link.
+- `flush` — post what is queued now (at most 3 s) and keep running.
+- `shutdown` — stop the heartbeat and the exporters, posting what is queued (at most 3 s); call it from a SIGTERM handler or a `preStop` hook.
 
 ## Types
 
@@ -243,7 +245,7 @@ Each is the same object as its replacement; the first use in a process emits one
 
 ## Metadata
 
-- `__version__` — `1.0.0a5`.
+- `__version__` — `1.0.0a6`.
 
 ## Removed in S1
 
