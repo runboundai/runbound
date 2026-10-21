@@ -125,11 +125,11 @@ One `execute_tool {tool}` span per call, only when something receives it. See
 | `error.type` | The exception's class name for a body that raised; `runbound.refused` for a refusal. |
 | `runbound.service`, `runbound.worker_id`, `runbound.run_id` | The service, the worker id, the local session id. |
 | `runbound.capability` | The tool's classes, comma-separated. |
-| `runbound.capability_source` | Where that declaration came from: `decorator`, `mcp_annotation` (an integration said so with `@tool(effects_source="mcp_annotation")`) or `undeclared`. |
+| `runbound.capability_source` | Where that declaration came from: `decorator`, `mcp_annotation` (an integration said so with `@tool(effects_source="mcp_annotation")`), `langchain_middleware` (the effects were stated to the LangChain middleware's `effects=`) or `undeclared`. |
 | `runbound.capability_effective` | The classes the call was held to, only when a console row raised the tool's own (`risk_class`); absent otherwise. |
 | `runbound.service_version` | `RUNBOUND_SERVICE_VERSION` when the deployment sets it; a label to compare the same tool across releases, never a decision input. |
 | `runbound.action_id`, `runbound.attempt_id`, `runbound.evaluation_id`, `runbound.parent_action_id` | Random identities of the action, this attempt and this evaluation, and the parent action of a nested governed call. Carry nothing about the call. |
-| `runbound.boundary`, `runbound.contract_version` | `sdk-decorator`; the version of this record contract. |
+| `runbound.boundary`, `runbound.contract_version` | The integration point that decided the call: `sdk-decorator` (a `@runbound.tool` function, including one under the LangChain middleware, and the callback handler) or `langchain-middleware` (a plain LangChain tool the middleware governs); the version of this record contract. The start marker carries the same boundary and the same `runbound.declared_target`. |
 | `runbound.anomaly_id` | On a refused span: the id of the refusal it records (the anomaly names the span back). |
 | `runbound.outcome` | `ok`, `error`, `refused`, `withheld`, `cancelled` or `pending_approval`. |
 | `runbound.args_digest` | The salted argument digest. |
@@ -139,10 +139,10 @@ One `execute_tool {tool}` span per call, only when something receives it. See
 | `runbound.decision.boundary`, `runbound.decision.level`, `runbound.decision.detector`, `runbound.decision.reason` | On a refusal: what refused it, and the sentence it says, with the session key replaced. |
 | `runbound.approval.request_id` | The approval request, for a call that asked a person. |
 
-- **To `otel_endpoint`:** posted to `<otel_endpoint>/v1/traces` as gzipped OTLP/JSON with
+- **To the built-in exporter's destination** (`otel_endpoint`, or the connected plane when it is unset; `otel_endpoint=False` disables it): posted to `<destination>/v1/traces` as gzipped OTLP/JSON with
   `token` as the Bearer key. The resource carries `service.name` (the `service`),
   `service.instance.id` (the worker id) and `telemetry.sdk.name` (`runbound`). No argument, result
-  or exception message is in it.
+  or exception message is in this payload (digests and metadata only); this says nothing about a provider you configure yourself.
 - **To your own provider:** the same attributes. When a tool body raises, the span also records the
   exception the OpenTelemetry way (`record_exception`), which includes its message and stack
   trace. That record stays in your pipeline, wherever you send it.

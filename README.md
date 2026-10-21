@@ -13,7 +13,7 @@ argument leaves the process only when the tool asks a person (the approver must
 see it). It puts no gateway in your hot path, and never speaks to your users: when it
 refuses something it hands control straight back to your own code.
 
-> **1.0.0a6 is an alpha.** The detection, provider-wrapper and cost
+> **1.0.0a7 is an alpha.** The detection, provider-wrapper and cost
 > features of 0.11.x are gone; see [CHANGELOG.md](CHANGELOG.md) for what was
 > removed and how to migrate.
 
@@ -30,7 +30,7 @@ console: it enforces only the rules in your code. Install with `--pre` (or pin
 
 Requires **Python 3.10 or newer** (pip refuses the install on older versions, and `import runbound` on
 3.9 raises an `ImportError` that says so). No runtime dependencies: stdlib only. There are two optional extras:
-`pip install "runbound[langchain]"` and `pip install "runbound[otel]"`. LangChain / LangGraph is an opt-in reference integration at four tested combinations, not a range: see the [LangChain guide](docs/guides/langchain.md).
+`pip install --pre "runbound[langchain]"` and `pip install --pre "runbound[otel]"`. LangChain / LangGraph is an opt-in reference integration at four tested combinations, not a range: see the [LangChain guide](docs/guides/langchain.md).
 
 ## Quick start
 
@@ -102,11 +102,11 @@ a tool that declares nothing stays unclassified, so it still fails closed. See
 ## Approvals
 
 `@runbound.tool(approval="required", mode="sync" | "deferred")` asks a person.
-*Sync* waits for the answer up to `timeout_s`. *Deferred* returns
+*Sync* waits for the answer up to `timeout_s`: in a chat agent that is your application holding the turn open (not the model thinking), so give it a timeout and a way to cancel. *Deferred* returns
 `{"status": "pending_approval", "request_id": ...}` at once; when a person
 approves, a worker verifies an HMAC **seal** (keyed by `RUNBOUND_APPROVAL_SECRET`,
 which never leaves your processes) and runs the tool with the approved arguments
-through the whole chain again. `runbound.current_request()` is the idempotency key.
+through the whole chain again. In **deferred** mode `runbound.current_request()` is the request id while the approved body runs, and is the idempotency key. In **sync** mode the call runs once, in your own call stack, right after the answer, so `current_request()` is `None` there: key a side effect on your own arguments (an order id and an amount, say), not on it. In a chat agent the model gets `pending_approval` at once and the outcome goes to `on_deferred_result`, not to that conversation: your application must send the update, and never describe pending as done. See [LangChain](docs/guides/langchain.md#approval-mode-for-a-chat-agent-wait-deferred-or-neither).
 A parameter your app supplies (a DB session, a client, the tenant) is marked `Annotated[Session, runbound.Injected]`: it is never stored or shown, and
 `init(provide={Session: make_session})` supplies it again when the approved request runs. Pydantic models, `datetime`, `Decimal`, `UUID` and `Path` arguments are
 supported when their JSON form gives the value back (checked before the approval is opened). Type hints must resolve at decoration: a `TYPE_CHECKING`-only hint refuses registration unless the parameter is marked `runbound.Injected`
@@ -134,7 +134,7 @@ keeps 24 hours until an operator changes it; `init(offline_execution_s=)` may on
 it). Inside it a tool a row allows keeps running, and a tool with no row asks, so it is
 refused `approval_unavailable` while nobody can be reached; after it every
 `financial`, `destructive`, `privileged` and unclassified tool refuses `plane_unavailable`.
-After a restart, a consequential call whose cached policy confirmation has expired can wait for the first policy confirmation, within the first three seconds after boot. The call is then evaluated against the policy the worker holds, including restrictions received during that wait. If no valid confirmation arrives, the call remains refused. Waiting and restarting do not renew the offline window. Set `confirm_wait_s=0` to disable the wait; the maximum setting is 10 seconds. Async calls do not block the event loop while waiting. Only an authenticated policy confirmation accepted by the worker renews the window; a merely answered or degraded hello does not, and no tool body runs on the strength of the wait alone. The three seconds are one allowance counted from boot, not a fresh one for every call. See
+After a restart, a consequential call whose cached policy confirmation has expired can wait for the first policy confirmation, within the first three seconds after boot. The call is then evaluated against the policy the worker holds, including restrictions received during that wait. If no valid confirmation arrives, the call remains refused. Waiting and restarting do not renew the offline window. Set `confirm_wait_s=0` to disable the wait; the maximum setting is 10 seconds. Async calls do not block the event loop while waiting. The same wait covers a brand-new worker's first call, before it has received any policy at all (no cache, no answered hello): it waits for the first answer, within the same allowance, and is then judged by the policy that answer brought; with no answer in time it is refused as before. Only an authenticated policy confirmation accepted by the worker renews the window; a merely answered or degraded hello does not, and no tool body runs on the strength of the wait alone. The three seconds are one allowance counted from boot, not a fresh one for every call. See
 [Plane loss](docs/guides/plane-loss.md).
 
 A worker with `export_events=False` exports nothing, refusals included, so the

@@ -27,7 +27,7 @@ any one of them is.
 - A refused call takes no quota unit and asks no person. It still counts as an attempt in
   `tool_calls()`, but never as an executed action and never against `max_calls`, which counts admitted calls.
 - `exc.reason` is always one of the fixed set in `runbound.exceptions.REASONS`. `exc.retryable`
-  (and `runbound.is_retryable(exc)`) is true only for `plane`, `plane_unavailable`, `approval_unavailable`, `quota_exceeded` and `quota_plane_unavailable`.
+  (and `runbound.is_retryable(exc)`) is true only for `plane`, `plane_unavailable`, `policy_unavailable`, `approval_unavailable`, `quota_exceeded` and `quota_plane_unavailable`.
   `exc.retry_after` gives the seconds to wait for a quota. See
   [Handling refusals](../guides/handling-refusals.md).
 - Arguments are validated against the signature and type hints and never coerced. A refusal

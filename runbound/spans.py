@@ -34,6 +34,8 @@ _LOG = logging.getLogger("runbound")
 #: The stdlib emitter, set by :func:`configure`. ``None`` when ``otel_endpoint`` is unset.
 _EXPORTER: "otlp.SpanExporter | None" = None
 _RESOURCE: dict = {}
+#: What :func:`configure` resolved: ``mode`` (explicit / plane / disabled / none), the redacted ``url``, and whether the built-in exporter is ``exporting``. Configured is not delivered.
+_DESTINATION: dict = {"mode": "none", "url": None, "exporting": False, "note": None}
 
 #: ``opentelemetry.trace`` and its context module, imported on first use; ``False`` if absent.
 _API: Any = None
@@ -41,11 +43,16 @@ _API: Any = None
 
 def configure(config: Any, version: str) -> None:
     """(Re)start the stdlib emitter for ``config``; called by :func:`runbound.init`. Never raises."""
-    global _EXPORTER, _RESOURCE
+    global _EXPORTER, _RESOURCE, _DESTINATION
     previous, _EXPORTER = _EXPORTER, None
     if previous is not None:
         previous.stop()
-    endpoint = getattr(config, "otel_endpoint", None)
+    mode, endpoint = _resolve(config)
+    note = None
+    if mode == "plane" and _provider() is not None:
+        # The customer's own provider takes the call spans; the plane default adds no second pipeline, and the events lane keeps the per-call record.
+        mode, endpoint, note = "none", None, "an application TracerProvider is configured, so the connected plane is not used for call spans"
+    _DESTINATION = {"mode": mode, "url": _display(endpoint), "exporting": False, "note": note}
     if not endpoint:
         return
     try:
@@ -57,14 +64,45 @@ def configure(config: Any, version: str) -> None:
         exporter = otlp.SpanExporter(endpoint, config.token or None, _RESOURCE, version)
         exporter.start()
         _EXPORTER = exporter
+        _DESTINATION["exporting"] = True
     except Exception:
         _LOG.warning("runbound: could not start the OTLP span emitter; no spans", exc_info=True)
 
 
+def _resolve(config: Any) -> tuple:
+    resolver = getattr(config, "span_destination", None)
+    if resolver is not None:
+        return resolver()
+    endpoint = getattr(config, "otel_endpoint", None)
+    return ("explicit", endpoint) if endpoint else ("none", None)
+
+
+def _display(url: "str | None") -> "str | None":
+    """The destination for diagnostics: scheme, host and path only, never credentials or a query."""
+    if not url:
+        return None
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(url)
+        host = parts.hostname or ""
+        if parts.port:
+            host += f":{parts.port}"
+        return f"{parts.scheme}://{host}{parts.path}".rstrip("/")
+    except Exception:
+        return None
+
+
+def destination() -> dict:
+    """The resolved span destination (see ``_DESTINATION``); a copy."""
+    return dict(_DESTINATION)
+
+
 def shutdown(timeout: "float | None" = None) -> None:
     """Stop the stdlib emitter, posting what is queued (within ``timeout`` seconds when given)."""
-    global _EXPORTER
+    global _EXPORTER, _DESTINATION
     exporter, _EXPORTER = _EXPORTER, None
+    _DESTINATION = {"mode": "none", "url": None, "exporting": False, "note": None}
     if exporter is not None:
         exporter.stop() if timeout is None else exporter.stop(timeout)
 
@@ -110,14 +148,14 @@ def _provider() -> Any:
         return None
 
 
-def begin(tool_name: str, run_id: str | None, version: str, call_id: str | None = None) -> "CallSpan | None":
+def begin(tool_name: str, run_id: str | None, version: str, call_id: str | None = None, boundary: str | None = None) -> "CallSpan | None":
     """Start the span for one call, or ``None`` when nothing would receive it."""
     try:
         provider = _provider()
         if provider is not None:
-            return CallSpan(tool_name, call_id, provider=provider, version=version, run_id=run_id)
+            return CallSpan(tool_name, call_id, provider=provider, version=version, run_id=run_id, boundary=boundary)
         if _EXPORTER is not None:
-            return CallSpan(tool_name, call_id, run_id=run_id)
+            return CallSpan(tool_name, call_id, run_id=run_id, boundary=boundary)
     except Exception:
         _LOG.debug("runbound: could not start a span", exc_info=True)
     return None
@@ -127,9 +165,10 @@ class CallSpan:
     """The span of one call in flight. :meth:`end` finishes it exactly once."""
 
     def __init__(
-        self, tool_name: str, call_id: str | None, *, provider: Any = None, version: str = "", run_id: str | None = None
+        self, tool_name: str, call_id: str | None, *, provider: Any = None, version: str = "", run_id: str | None = None, boundary: str | None = None
     ) -> None:
         self.tool = tool_name
+        self.boundary = boundary or ids_module.BOUNDARY_DECORATOR  # the integration point this call is seen at; the marker and the call span carry the same value
         self.call_id = call_id
         self.run_id = run_id
         self.args_digest: str | None = None
@@ -158,7 +197,7 @@ class CallSpan:
             return
         self._marked = True
         try:
-            attrs = {n.BOUNDARY: ids_module.BOUNDARY_DECORATOR, n.DECLARED_TARGET: ids_module.BOUNDARY_DECORATOR, n.CONTRACT_VERSION: ids_module.CONTRACT_VERSION, n.MARKER_TOOL: self.tool,
+            attrs = {n.BOUNDARY: self.boundary, n.DECLARED_TARGET: self.boundary, n.CONTRACT_VERSION: ids_module.CONTRACT_VERSION, n.MARKER_TOOL: self.tool,
                      n.RUN_ID: self.run_id, n.SERVICE: getattr(config, "service", None), n.WORKER_ID: config.resolved_worker_id() if config is not None else None,
                      n.SERVICE_VERSION: _service_version()}
             for name, key in ((n.ACTION_ID, "action_id"), (n.ATTEMPT_ID, "attempt_id"), (n.EVALUATION_ID, "evaluation_id")):
@@ -236,6 +275,7 @@ def facts(
     policy_version: int | None, flags: tuple, flag_score: float, result_chars: int,
     approval_request_id: str | None = None, would_refuse: str | None = None, record: "dict | None" = None,
     reason_code: str | None = None, ids: "dict | None" = None, anomaly_id: str | None = None, effects_source: str | None = None,
+    boundary: str | None = None,
 ) -> dict:
     """The attribute dict of one finished call (RS-3 / otel-clickhouse.md §1.2)."""
     refused = outcome == "refused"
@@ -259,7 +299,7 @@ def facts(
         n.APPROVAL_REQUEST_ID: approval_request_id,
         n.DECISION_VERDICT: "refuse" if refused else "would_refuse" if would_refuse else "allow",
         n.DECISION_KIND: "action",
-        n.BOUNDARY: ids_module.BOUNDARY_DECORATOR,
+        n.BOUNDARY: boundary or ids_module.BOUNDARY_DECORATOR,
         n.CONTRACT_VERSION: ids_module.CONTRACT_VERSION,
     }
     for name, key in ((n.ACTION_ID, "action_id"), (n.ATTEMPT_ID, "attempt_id"), (n.EVALUATION_ID, "evaluation_id"), (n.PARENT_ACTION_ID, "parent_action_id")):

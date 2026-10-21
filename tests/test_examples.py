@@ -111,7 +111,7 @@ def test_langchain_otel_runs_with_the_extras_or_names_them(tmp_path) -> None:
     result = run_offline("langchain_otel", tmp_path)
     if not has_extras(python, "langchain_otel"):
         assert result.returncode != 0, _show(result)
-        assert "pip install 'runbound[langchain,otel]'" in result.stderr, _show(result)
+        assert "pip install --pre 'runbound[langchain,otel]'" in result.stderr, _show(result)
         pytest.skip(f"{python} has no langchain-core / opentelemetry-sdk; checked the install hint only")
     assert result.returncode == 0, _show(result)
     out = result.stdout.splitlines()

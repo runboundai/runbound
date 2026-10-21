@@ -25,13 +25,14 @@ not empty, `Authorization: Bearer <token>`.
 
 ## The endpoints
 
-The SDK calls ten endpoints on the plane and nowhere else.
+The SDK calls eleven endpoints on the plane and nowhere else.
 
 | Call | Sent by | When | What it carries |
 |---|---|---|---|
 | `POST /v1/hello` | `plane.py` | at start, then every `control_plane_poll_s` (±10%) | the heartbeat: who this worker is and what it holds (below) |
 | `GET /v1/policy` | `plane.py` | a hello reply names a `policy_version` other than the one held | `?service=<service>` and nothing else |
 | `POST /v1/events` | `plane.py` | in the background, about once a second | `batch_id`, `service`, `worker_id`, `sent_at`, `dropped`, and four lanes: `events`, `anomalies`, `exits`, `changes` |
+| `POST /v1/goodbye` | `plane.py` | once, when this process says it stopped: `runbound.shutdown()`, or a normal exit while `goodbye_on_exit` is true (1.5 s at most, never retried) | `service`, `worker_id`, `boot_id`, `reason` (`shutdown` or `exit`), `sdk_version`. The plane records the worker as stopped, not disconnected; an older plane answers 404 and the SDK ignores it |
 | `POST /v1/quota/take` | `quota.py` | a call on a tool with a quota and no lease left | `tool`, `service`, and `key` (the sha256 of the session key) for a per-key quota |
 | `POST /v1/approvals` | `approvals.py` | a call that needs a person | `tool`, `request_id`, `args`, `mode`, `timeout_s`, `service`, `worker_id`, `run_id`, `key` when keyed, `args_digest`, `requirement` when a rule asks, the decision record (`reason_code` when known, `matched_rule_ids`, `policy_version`, `service_default_revision`, `policy_state`, `contributors`, `sdk_version`, and `rule_revision` / `cfg_hash` when the worker was served them), `seal` when deferred and a secret is set. A `granted: true` answer admits the call with no request |
 | `GET /v1/approvals/{id}` | `approvals.py` | a sync approval waiting for its answer | `?wait_s=` (at most 25): a long poll |
@@ -47,7 +48,7 @@ approval request is the only one that carries a tool's arguments, because a
 person has to see what they approve. Spans for OpenTelemetry go to
 `otel_endpoint`, not to the plane; see [OpenTelemetry](opentelemetry.md).
 
-Timeouts: hello 2 s, policy 2 s, events 5 s, quota take 3 s, approval create
+Timeouts: hello 2 s, policy 2 s, events 5 s, goodbye 1.5 s, quota take 3 s, approval create
 and report 5 s, the long poll `wait_s + 5` s.
 
 ## The hello

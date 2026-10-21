@@ -251,6 +251,9 @@ def shutdown(timeout: float = 3.0) -> None:
         except TypeError:  # a state object that takes no time limit
             shared.stop()
         spans.shutdown(seconds)
+        say = getattr(shared, "goodbye", None)
+        if say is not None:  # last: after the queue drained and the heartbeat stopped, tell the plane this worker stopped (an explicit shutdown always says it)
+            say("shutdown")
 
     _within(seconds, work)
 
@@ -296,6 +299,8 @@ def coverage() -> dict:
          "tool_calls_seen": 41,                # decorated tool calls attempted
          "keyed_sessions_seen": 12,            # keys registered
          "tools_by_class": {"read": 2, ...},   # tools per capability class
+         "middleware_installed": True,         # a LangChain middleware / govern_tools governs calls in this process
+         "middleware_tool_names": ["lookup"],  # the tools it has governed so far (known from their first call)
          "fleet": "local protection active; fleet coordination: not connected",
          "fleet_pending": None}                # events queued to post; None with no plane
 
@@ -305,12 +310,17 @@ def coverage() -> dict:
     """
     try:
         report = _coverage.snapshot()
+        governed = _coverage.middleware_snapshot()
+        report["middleware_installed"] = governed["installed"]  # a LangChain surface (RunboundMiddleware / govern_tools) governs calls here
+        report["middleware_tool_names"] = governed["tools"]  # the tools it has governed so far
         report["fleet"] = _fleet_report()
         report["fleet_pending"] = _fleet_pending()
         return report
     except Exception:
         _LOG.warning("runbound could not read its own coverage", exc_info=True)
         zeros = _coverage.zeros()
+        zeros["middleware_installed"] = False
+        zeros["middleware_tool_names"] = []
         zeros["fleet"] = _NO_FLEET
         zeros["fleet_pending"] = None
         return zeros
@@ -1152,8 +1162,8 @@ class _Run(float):
     ids: "dict | None" = None  # action_id, attempt_id, evaluation_id (and parent_action_id for a call made inside another governed body)
 
 
-def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | None = None) -> _Run:
-    """Start timing a call, and its span when something would receive one."""
+def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | None = None, boundary: str | None = None) -> _Run:
+    """Start timing a call, and its span when something would receive one. ``boundary``: the integration point the call is seen at (``None``: the decorator's)."""
     run = _Run(time.monotonic())
     run.effects = effects
     if spans.active():
@@ -1161,7 +1171,7 @@ def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | 
             from . import __version__
 
             _engine, state = _active()
-            run.span = spans.begin(tool_name, getattr(state, "session_id", None), __version__, call_id)
+            run.span = spans.begin(tool_name, getattr(state, "session_id", None), __version__, call_id, boundary)
         except Exception:
             _LOG.debug("runbound could not start a span", exc_info=True)
     return run
@@ -1170,7 +1180,7 @@ def _start_run(tool_name: str, effects: frozenset = frozenset(), call_id: str | 
 def _begin(
     tool_name: str, args: tuple, kwargs: dict, effects: frozenset,
     validator: "hooks_module.Validator", hooks: tuple, gate_hooks: tuple, approval: Any = None, attempt: "_Attempt | None" = None,
-    ids: "dict | None" = None, fresh_only: bool = False, suspend: "dict | None" = None,
+    ids: "dict | None" = None, fresh_only: bool = False, suspend: "dict | None" = None, boundary: str | None = None,
 ) -> "tuple[tuple, dict, list, _Run]":
     """Run the pre-hook chain; returns ``(args, kwargs, tags, run)`` for the body.
 
@@ -1178,7 +1188,7 @@ def _begin(
     recorded and the refusal re-raised.
     """
     tags: list = []
-    run = _start_run(tool_name, effects)
+    run = _start_run(tool_name, effects, boundary=boundary)
     if run.span is not None:
         run.span.args_digest = _args_hash(tool_name, args, kwargs)
     run.ids = ids_module.new_call()
@@ -1245,7 +1255,7 @@ def _refuse_replayed(tool_name: str, kwargs: dict, effects: frozenset, ids: "dic
     if engine is None or state is None:
         raise refusal
     tags: list = []
-    run = _start_run(tool_name, effects)
+    run = _start_run(tool_name, effects, boundary=ids_module.BOUNDARY_LANGCHAIN)  # the resume gate is the LangChain integration
     if run.span is not None:
         run.span.args_digest = _args_hash(tool_name, (), kwargs)
     run.ids = ids_module.new_call()
@@ -1284,7 +1294,7 @@ def _begin_resumed(tool_name: str, kwargs: dict, effects: frozenset, validator: 
     from .engine import _RECORD
 
     tags: list = []
-    run = _start_run(tool_name, effects)
+    run = _start_run(tool_name, effects, boundary=ids_module.BOUNDARY_LANGCHAIN)  # the resume gate is the LangChain integration
     if run.span is not None:
         run.span.args_digest = _args_hash(tool_name, (), kwargs)
     run.ids = ids_module.new_call()
@@ -1353,7 +1363,7 @@ def _govern_external(tool_name: str, kwargs: dict, body: Callable, *, effects: f
     scan and the ``tool_result`` event see ``text(result)``, and the caller gets ``result`` as the framework produced it. ``passthrough`` names exceptions that are control flow of
     the framework (a graph interrupt), not tool failures: they are re-raised untouched, no ``tool_error`` is recorded, and the call ends ``cancelled`` (the body did not complete).
     """
-    _args, kwargs, tags, started = _begin(tool_name, (), kwargs, effects, validator, (), (), None, None, ids, not waits)
+    _args, kwargs, tags, started = _begin(tool_name, (), kwargs, effects, validator, (), (), None, None, ids, not waits, boundary=ids_module.BOUNDARY_LANGCHAIN)
     _mark_started(started)
     token = ids_module.CURRENT.set((started.ids["action_id"], started.ids["attempt_id"])) if started.ids else None
     try:
@@ -1380,7 +1390,7 @@ async def _agovern_external(tool_name: str, kwargs: dict, body: Callable, *, eff
     attempt = _Attempt(fence=True)
 
     def begin() -> tuple:
-        admitted = _begin(tool_name, (), kwargs, effects, validator, (), (), None, attempt, ids, not waits)
+        admitted = _begin(tool_name, (), kwargs, effects, validator, (), (), None, attempt, ids, not waits, boundary=ids_module.BOUNDARY_LANGCHAIN)
         attempt.settle()
         return admitted
 
@@ -1418,7 +1428,7 @@ async def _agovern_external(tool_name: str, kwargs: dict, body: Callable, *, eff
 def _govern_suspendable(tool_name: str, kwargs: dict, body: Callable, *, effects: frozenset, validator: "hooks_module.Validator", ids: "dict | None", text: Callable, passthrough: tuple, suspend: dict) -> Any:
     """AAI-04-4b: one FRESH call at the LangChain resume gate. Admission is ``_begin`` with ``suspend`` instead of ``fresh_only``: a call that would need a person is FILED as a suspended,
     bind-required request and ``approvals.Suspended`` is raised (before any body, recorded as pending approval); every other outcome is exactly :func:`_govern_external`'s."""
-    _args, kwargs, tags, started = _begin(tool_name, (), kwargs, effects, validator, (), (), None, None, ids, False, suspend)
+    _args, kwargs, tags, started = _begin(tool_name, (), kwargs, effects, validator, (), (), None, None, ids, False, suspend, ids_module.BOUNDARY_LANGCHAIN)
     return _run_body(tool_name, kwargs, body, started, tags, effects, text, passthrough, None)
 
 
@@ -1582,7 +1592,7 @@ def _end_span(tool_name: str, outcome: str, run: _Run, exc: "BaseException | Non
             spans.facts(
                 tool_name, outcome, config=getattr(engine, "config", None),
                 run_id=getattr(state, "session_id", None), key=getattr(state, "key", None), effects=run.effects,
-                call_id=span.call_id, args_digest=span.args_digest, approval_request_id=run.request_id, ids=run.ids, effects_source=_EFFECT_SOURCE.get(tool_name), anomaly_id=getattr(getattr(refusal, "anomaly", None), "anomaly_id", None), exc=exc if outcome == "error" else None,
+                call_id=span.call_id, args_digest=span.args_digest, boundary=getattr(span, "boundary", None), approval_request_id=run.request_id, ids=run.ids, effects_source=_EFFECT_SOURCE.get(tool_name), anomaly_id=getattr(getattr(refusal, "anomaly", None), "anomaly_id", None), exc=exc if outcome == "error" else None,
                 decision=getattr(refusal, "decision", None), record=run.record, reason_code=getattr(refusal, "reason", None),
                 policy_version=getattr(getattr(engine, "shared", None), "policy_version", None),
                 flags=processed.flags if processed else (), flag_score=processed.flag_score if processed else 0.0,

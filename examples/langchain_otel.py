@@ -1,6 +1,6 @@
 """Example 3: LangChain tools guarded by the callback handler, one OpenTelemetry span per call.
 
-    pip install "runbound[langchain,otel]"
+    pip install --pre "runbound[langchain,otel]"
     python examples/langchain_otel.py
 
 No model and no API key are needed: the tools are invoked directly, the way an agent would.
@@ -17,7 +17,7 @@ try:
     from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 except ImportError as missing:
     sys.exit(f"this example needs the optional extras ({missing.name} is missing): "
-             "pip install 'runbound[langchain,otel]'")
+             "pip install --pre 'runbound[langchain,otel]'")
 
 import runbound
 from runbound.integrations.langchain import RunboundCallbackHandler

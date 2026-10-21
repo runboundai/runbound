@@ -64,7 +64,7 @@ class RunboundConfig:
     unclassified tools keep running on the cache after the plane last answered) and ``cache_dir`` (where the last policy the plane served is kept so a restart enforces it before the first
     heartbeat; ``RUNBOUND_CACHE_DIR``, else the platform cache dir, else the temp dir) and ``approval_secret`` (the per-service secret that seals deferred approvals; ``RUNBOUND_APPROVAL_SECRET``
     when unset; never sent to the plane), ``on_deferred_result`` (called with the outcome of each deferred
-    approval this worker executes), ``offline_execution_s`` (60 to 86400: how long consequential tools keep running on the last policy confirmation while the plane is away; it may only SHORTEN the window the plane serves), ``confirm_wait_s`` (0 to 10, default 3: after a restart, how long a consequential call made before the first policy confirmation waits for it; 0 turns the wait off; it never renews the window), ``approval_bind`` (default False: ask the plane for approval requests that can be BOUND to one execution attempt, so a replay cannot run the body twice; a plane that does not know it files a legacy request), ``provide`` (``{type or parameter name: zero-argument callable}``: what supplies a tool parameter marked ``runbound.Injected`` when an approved deferred request runs) and ``otel_endpoint`` (an OTLP/HTTP collector base URL: spans are posted there as OTLP/JSON when no
+    approval this worker executes), ``offline_execution_s`` (60 to 86400: how long consequential tools keep running on the last policy confirmation while the plane is away; it may only SHORTEN the window the plane serves), ``goodbye_on_exit`` (default True: a process that exits normally tells the plane it stopped, so the console shows it as stopped and not disconnected; False turns that off; ``runbound.shutdown()`` always says it), ``confirm_wait_s`` (0 to 10, default 3: after a restart, how long a consequential call made before the first policy confirmation waits for it; 0 turns the wait off; it never renews the window), ``approval_bind`` (default False: ask the plane for approval requests that can be BOUND to one execution attempt, so a replay cannot run the body twice; a plane that does not know it files a legacy request), ``provide`` (``{type or parameter name: zero-argument callable}``: what supplies a tool parameter marked ``runbound.Injected`` when an approved deferred request runs) and ``otel_endpoint`` (an OTLP/HTTP collector base URL: spans are posted there as OTLP/JSON when no
     OpenTelemetry provider is configured, with ``token`` as the Bearer key) and ``hook_timeout_s`` (a user hook still running after
     this many seconds counts as raising; ``None`` waits forever).
 
@@ -90,7 +90,7 @@ class RunboundConfig:
     post_hooks: tuple | list = ()
     redact_keys: tuple | list = ()
     result_limits: dict | None = None
-    otel_endpoint: str | None = None
+    otel_endpoint: str | bool | None = None
     cache_dir: str | None = None
     consequential_grace_s: float = 60.0
     approval_secret: str | None = field(default=None, repr=False)  # secret
@@ -98,6 +98,7 @@ class RunboundConfig:
     provide: dict | None = None
     offline_execution_s: int | None = None
     confirm_wait_s: float = 3.0
+    goodbye_on_exit: bool = True
     approval_bind: bool = False
     on_event: Callable[[dict], None] | None = None
     max_sessions: int = 10_000
@@ -127,6 +128,21 @@ class RunboundConfig:
         resolved = f"{host}:{os.getpid()}:{suffix}"
         self._resolved_worker_id = resolved
         return resolved
+
+    def span_destination(self) -> tuple:
+        """Where the built-in tool-call span exporter sends, as ``(mode, url)``.
+
+        ``("explicit", url)``: ``otel_endpoint`` is a URL and wins. ``("disabled", None)``: ``otel_endpoint=False``, no exporter and no fallback.
+        ``("plane", url)``: ``otel_endpoint`` is unset and a control plane is connected, so the plane's own ingest. ``("none", None)``: unset and not connected.
+        Needs a normalized configuration (``validate()`` ran).
+        """
+        if self.otel_endpoint is False:
+            return "disabled", None
+        if self.otel_endpoint:
+            return "explicit", self.otel_endpoint
+        if self.plane_mode != "off" and (self.control_plane_url or "").strip():
+            return "plane", self.control_plane_url
+        return "none", None
 
     def validate(self) -> None:
         """Raise ``ValueError`` if this configuration cannot be honored."""
@@ -168,10 +184,10 @@ class RunboundConfig:
                 isinstance(v, int) and not isinstance(v, bool) and v >= 1 for v in limits.values()
             ):
                 raise ValueError(f"result_limits must be a dict of {sorted(allowed)} to ints >= 1, got {limits!r}")
-        if self.otel_endpoint is not None and not (
+        if self.otel_endpoint is not None and self.otel_endpoint is not False and not (
             isinstance(self.otel_endpoint, str) and self.otel_endpoint.startswith(("http://", "https://"))
         ):
-            raise ValueError(f"otel_endpoint must be an http(s) URL, got {self.otel_endpoint!r}")
+            raise ValueError(f"otel_endpoint must be an http(s) URL, False or unset, got {self.otel_endpoint!r}")
         grace = self.consequential_grace_s
         if isinstance(grace, bool) or not isinstance(grace, (int, float)) or not 15 <= grace <= 60:
             raise ValueError(f"consequential_grace_s must be between 15 and 60 (it may not outlast a halt), got {grace!r}")
@@ -193,6 +209,8 @@ class RunboundConfig:
         window = self.offline_execution_s
         if window is not None and (isinstance(window, bool) or not isinstance(window, int) or not 60 <= window <= 86400):
             raise ValueError(f"offline_execution_s must be an integer between 60 and 86400 (it may only shorten the window the plane serves), got {window!r}")
+        if not isinstance(self.goodbye_on_exit, bool):
+            raise ValueError(f"goodbye_on_exit must be True or False, got {self.goodbye_on_exit!r}")
         wait = self.confirm_wait_s
         if isinstance(wait, bool) or not isinstance(wait, (int, float)) or not 0 <= wait <= 10:
             raise ValueError(f"confirm_wait_s must be a number of seconds between 0 and 10 (0 turns the wait off), got {wait!r}")

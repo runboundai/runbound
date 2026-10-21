@@ -10,7 +10,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 _PAGE = (_ROOT / "docs" / "guides" / "plane-link.md").read_text()
-_NUMBERS = {"three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10}
+_NUMBERS = {"three": 3, "four": 4, "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10, "eleven": 11}
 
 #: The modules that open a request to the control plane (OTLP spans go to ``otel_endpoint``, not the plane).
 _SENDERS = ("plane.py", "approvals.py", "quota.py")

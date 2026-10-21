@@ -16,7 +16,7 @@ and spans, is [API.md](../../API.md). `tests/test_public_api.py` checks that fil
 | `runbound.reset()` | Start a fresh session with the same configuration: counters go back to zero and keyed sessions are forgotten. Does nothing before `init()`. |
 | `runbound.session(key, tags=None)` | Context manager: everything inside counts toward `key`'s own session (per-session `max_calls`, traces). |
 | `runbound.current_session()` | The `SessionState` work is counted toward right now, or `None` before `init()`. |
-| `runbound.current_request()` | The request id of the deferred approval being executed right now, else `None`. |
+| `runbound.current_request()` | The request id of the deferred approval being executed right now, else `None` (always `None` in sync mode). |
 | `runbound.Injected` | Marker for a tool parameter the app supplies (`Annotated[Session, runbound.Injected]`): never stored, sealed, digested or shown in a deferred approval, and supplied again from `init(provide=...)` when the request runs. See [Approvals](../guides/approvals.md#injected-parameters). |
 
 ## Check what is guarded
@@ -25,8 +25,8 @@ and spans, is [API.md](../../API.md). `tests/test_public_api.py` checks that fil
 |---|---|
 | `runbound.tools()` | The tool report: one entry per tool this process knows. |
 | `runbound.tool_calls(key=None)` | How many times each tool was attempted in a session. |
-| `runbound.coverage()` | Which registered tools are guarded, which are not, with the call counters. |
-| `runbound.check(file=None, as_json=False)` | Print and return a local report of what is guarded; makes no plane call. `python -m runbound check` is the command form. |
+| `runbound.coverage()` | Which registered tools are guarded, which are not, with the call counters. `middleware_installed` and `middleware_tool_names` say whether a LangChain `RunboundMiddleware` / `govern_tools` governs calls in this process and which tools it has governed (known from their first call). |
+| `runbound.check(file=None, as_json=False)` | Print and return a local report of what is guarded (decorated tools and the LangChain middleware); makes no plane call. `python -m runbound check` is the command form. |
 | `runbound.assert_guarded()` | Raise `RuntimeError` when nothing is decorated with `@runbound.tool`. |
 | `runbound.plane_status()` | The state of the control-plane link, as a `PlaneStatus`. |
 | `runbound.flush(timeout=3.0)` | Post what is queued (call spans and events) now, waiting at most `timeout` seconds (never more than 3), and keep running. Does nothing before `init()`. |
@@ -90,6 +90,6 @@ See [Handling refusals](../guides/handling-refusals.md).
 
 | Name | What it is |
 |---|---|
-| `runbound.__version__` | `1.0.0a6`. |
+| `runbound.__version__` | `1.0.0a7`. |
 
 ---

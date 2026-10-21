@@ -205,3 +205,118 @@ def test_a_tool_the_first_hello_restricts_is_judged_by_the_new_rule_and_never_ru
     assert ran == [], "the tool the served policy blocks did not run"
     assert second.row_for("purge").blocked and refused.value.reason != "plane_unavailable", "refused by the NEW rule (blocked), not by the expired window"
     assert refused.value.reason == "tool_blocked"
+
+
+# --- W9: a brand-new worker's FIRST call after init() (no cache, no answered hello yet) waits for the first answer ---------------------------------------------------------------
+
+
+READ_ROW = {"tool": "lookup", "state": "enforced", "lines": [{"id": "L1", "decision": "allow", "approval": None, "limits": None}], "otherwise": "allow", "rule_revision": 1}
+
+
+def first_boot(tmp_path, served, wait_s=3.0):
+    """A worker that has never run here: no cache file, no answered hello; ``served`` is what its plane will serve on the first hello (or ``None``: nothing readable)."""
+    worker, _wall = process(served, tmp_path, confirm_wait_s=wait_s)
+    assert worker.awaiting_first_policy() is True and worker._last_success is None
+    api._teardown_for_tests()
+    start(worker)
+    return worker
+
+
+def lookup_tool(ran):
+    @runbound.tool(name="lookup", effects={"read"}, reviewed=True)
+    def lookup(order_id: str):
+        ran.append(order_id)
+        return "found"
+
+    return lookup
+
+
+def test_the_first_call_of_a_brand_new_worker_waits_for_the_first_answer_and_then_runs(tmp_path):
+    """The quick start: ``init()`` then call at once. Before this, the call was refused ``policy_unavailable`` ("the control plane has not answered yet and there is no sealed policy cache")."""
+    worker = first_boot(tmp_path, policy(1, READ_ROW))
+    ran = []
+    timer = later(0.3, lambda: hello(worker, version=1))
+    try:
+        assert lookup_tool(ran)(order_id="A-1") == "found"
+    finally:
+        timer.join()
+    assert ran == ["A-1"]
+    assert worker.awaiting_first_policy() is False, "it ran on a policy the plane actually served"
+
+
+def test_without_a_first_answer_in_time_the_first_call_is_refused_exactly_as_before_never_allowed(tmp_path):
+    worker = first_boot(tmp_path, policy(1, READ_ROW), wait_s=0.4)
+    ran = []
+    began = time.monotonic()
+    with pytest.raises(runbound.ExecutionRefused) as refused:
+        lookup_tool(ran)(order_id="A-1")
+    assert time.monotonic() - began >= 0.35, "it waited the whole allowance"
+    assert refused.value.reason == "policy_unavailable" and ran == []
+
+
+def test_an_answer_that_confirms_nothing_does_not_let_a_consequential_first_call_run(tmp_path):
+    """The wait only waits. A first hello that is degraded (the plane could not read its own state) ends it, and a consequential call is still refused: nothing here allows without a confirmation."""
+    worker = first_boot(tmp_path, policy(1, READ_ROW), wait_s=1.0)
+    ran = []
+
+    @runbound.tool(name="purge", effects={"destructive"}, reviewed=True)
+    def purge():
+        ran.append(1)
+        return "purged"
+
+    timer = later(0.15, lambda: hello(worker, version=0, plane_degraded="ledger_unreachable"))
+    try:
+        with pytest.raises(runbound.ExecutionRefused):
+            purge()
+    finally:
+        timer.join()
+    assert ran == []
+
+
+def test_a_restriction_the_first_answer_serves_applies_to_the_call_that_waited(tmp_path):
+    worker = first_boot(tmp_path, policy(1, {**BLOCKS, "tool": "lookup", "rule_revision": 1}))
+    ran = []
+    timer = later(0.2, lambda: hello(worker, version=1))
+    try:
+        with pytest.raises(runbound.ExecutionRefused) as refused:
+            lookup_tool(ran)(order_id="A-1")
+    finally:
+        timer.join()
+    assert ran == [] and refused.value.reason == "tool_blocked", "decided by the policy it waited for, not by a default"
+
+
+def test_the_switch_off_keeps_the_first_call_refused_at_once(tmp_path):
+    worker = first_boot(tmp_path, policy(1, READ_ROW), wait_s=0)
+    began = time.monotonic()
+    with pytest.raises(runbound.ExecutionRefused) as refused:
+        lookup_tool([])(order_id="A-1")
+    assert time.monotonic() - began < 0.5 and refused.value.reason == "policy_unavailable"
+
+
+def test_an_async_first_call_waits_without_stalling_the_event_loop(tmp_path):
+    worker = first_boot(tmp_path, policy(1, READ_ROW))
+    ran = []
+
+    @runbound.tool(name="lookup", effects={"read"}, reviewed=True)
+    async def lookup(order_id: str):
+        ran.append(order_id)
+        return "found"
+
+    async def main():
+        ticks = []
+
+        async def ticker():
+            for _ in range(14):
+                ticks.append(time.monotonic())
+                await asyncio.sleep(0.05)
+
+        timer = later(0.5, lambda: hello(worker, version=1))
+        try:
+            result, _ = await asyncio.gather(lookup(order_id="A-1"), ticker())
+        finally:
+            timer.join()
+        return result, ticks
+
+    result, ticks = asyncio.run(main())
+    assert result == "found" and ran == ["A-1"]
+    assert max(b - a for a, b in zip(ticks, ticks[1:])) < 0.35, "the loop kept running while the first call waited"

@@ -24,6 +24,10 @@ import uuid
 CONTRACT_VERSION = 1
 #: The boundary this SDK is: a call seen by the ``@runbound.tool`` decorator.
 BOUNDARY_DECORATOR = "sdk-decorator"
+#: The boundary a call is seen at when ``RunboundMiddleware`` / ``govern_tools`` itself governs it (a plain LangChain tool). A tool that is also a ``@runbound.tool`` function (the decorator
+#: decides and the middleware passes the call through) and a callback handler keep ``sdk-decorator``. The span's ``runbound.boundary`` and the start marker's ``runbound.boundary`` /
+#: ``runbound.declared_target`` all take this ONE value: a start is counted only where the marker's boundary is the call's declared target.
+BOUNDARY_LANGCHAIN = "langchain-middleware"
 
 #: ``(action_id, attempt_id)`` of the governed call whose body is running, so a governed call made inside it can name its parent.
 CURRENT: "contextvars.ContextVar[tuple[str, str] | None]" = contextvars.ContextVar("runbound_current_attempt", default=None)

@@ -7,7 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.0.0a6] - 2026-10-19
+## [1.0.0a7] - 2026-10-21
+
+### Added
+
+- **A worker that stops cleanly tells the plane.** A process that exits normally, by `sys.exit` or by Ctrl-C, and `runbound.shutdown()` send one `goodbye` (at most 1.5 seconds, never raises), so the console shows the worker as stopped and not as disconnected, and a stopped worker does not hold a Promote or Restore waiting for an acknowledgement. `init(goodbye_on_exit=False)` turns the automatic goodbye off (`shutdown()` always says it). A crash, a kill or a default SIGTERM says nothing and the worker stays disconnected, as before. Needs a plane that has the route; an older plane answers 404 and the SDK ignores it.
+
+- A call that `RunboundMiddleware` (or `govern_tools`) itself governs, a plain LangChain tool, is now recorded at its own boundary: `runbound.boundary` is `langchain-middleware` on the call span and on the start marker (whose `runbound.declared_target` takes the same value, so starts are still counted), and `runbound.capability_source` is `langchain_middleware` when the effects were stated to the middleware. Before, these calls were labelled `sdk-decorator`, so the console could not show which boundary decided. A `@runbound.tool` function under the middleware (the decorator decides) and the callback handler keep `sdk-decorator`. `runbound.contract_version` stays `1`: a new value of an existing attribute.
+
+### Changed
+
+- **What to check before upgrading (a7): the connected plane is now the default destination of the built-in tool-call span exporter.** Starting with a7, when you connect a control plane and leave `otel_endpoint` unset, Runbound configures its built-in tool-call span exporter to send to that plane. Set `otel_endpoint=False` before upgrading to disable this built-in export, or specify an explicit collector URL. An application-configured OpenTelemetry provider continues to take precedence and must be configured separately. This setting does not disable other control-plane communication. `python -m runbound check` (and its JSON, additive `spans` object) shows the resolved destination, mode and this process's sent, queued and dropped counts. Legacy per-call events follow the resolved exporter: they leave `/v1/events` only while the exporter is on, so nothing is dropped or counted twice. An application `TracerProvider` present at `init()` keeps the call spans and the plane default is not started. Install your `TracerProvider` before `runbound.init()`, or set `otel_endpoint=False`: a provider installed after `init()` still gets the spans while the plane default is on.
+
+### Fixed
+
+- **A worker that starts while the plane is down logs one warning line, not a 55-line traceback.** The line names the cause (for example `URLError: <urlopen error [Errno 61] Connection refused>`) and says to check that the control plane is reachable at the configured URL. The chained traceback is logged only when the logger is at DEBUG. Behaviour is unchanged: the call still fails closed on the sealed cache or `policy_unavailable`.
+- **The first call of a brand-new worker no longer fails just because `init()` was followed at once by a call.** A worker with no cache and no answered hello used to refuse its very first call `policy_unavailable` ("the control plane has not answered yet and there is no sealed policy cache"), so the README quick start's first run was a refusal. That call now waits for the first answer within `confirm_wait_s` (default 3 s, 0 turns it off), like the restart case, and is judged by the policy the answer brought; with no answer in time it is refused as before. It waits at the start of admission, before anything reads the policy, and an async call waits without blocking the event loop.
+- `python -m runbound check` (and `runbound.check()`) now recognises an app governed by the LangChain middleware. With plain tools and `RunboundMiddleware` or `govern_tools`, it used to print "Nothing is guarded in this process" and exit 1, which failed a CI gate on a correctly governed app. It reports `GUARDED` with the line "A LangChain middleware was created in this process; it governs the tools of any agent it is attached to (each tool is listed after its first call)", exits 0, and the JSON report gains an additive `middleware` object (`installed`, `tools`); `runbound.coverage()` gains `middleware_installed` and `middleware_tool_names`. The heartbeat's coverage block is unchanged.
+
+### Documentation
+
+- Approval mode for a chat agent: the LangChain guide and the README say what a wait (the application holds the chat turn open: give it a timeout and a way to cancel), a deferred result (the model gets `pending_approval` now; the later outcome reaches `on_deferred_result`, not that conversation, so the application delivers the update and never describes pending as done) and no opt-in (`approval_unavailable`) look like to the model. Suspended/resume stays experimental.
+
+**What to check before upgrading**
+
+- A filter, alert or query on `integration_boundary = 'sdk-decorator'` no longer matches calls the LangChain middleware governs; those now carry `langchain-middleware`. Ingest, the plane and the console store and show the value as given, so nothing else changes.
+
+## [1.0.0a6] - 2026-10-20
 
 What this release is for: LangChain / LangGraph as an opt-in, supported reference integration at four tested combinations, a startup wait that stops a restart from refusing a worker's first consequential calls while its first hello is in flight, and a floor for the optional `langchain` extra. Nothing is enabled by default and no decision is loosened: the policy a worker holds still decides, and neither waiting nor restarting renews the offline window.
 

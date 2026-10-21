@@ -33,6 +33,8 @@ def test_coverage_before_init_reports_zeros():
         "keyed_sessions_seen": 0,
         "tools_by_class": {"read": 0, "write": 0, "external": 0, "financial": 0,
                            "destructive": 0, "privileged": 0, "unclassified": 0},
+        "middleware_installed": False,
+        "middleware_tool_names": [],
         "fleet": "local protection active; fleet coordination: not connected",
         "fleet_pending": None,  # no plane before init()
     }

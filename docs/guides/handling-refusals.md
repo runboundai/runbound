@@ -25,7 +25,7 @@ Every refusal carries:
 | Attribute | What it is |
 |---|---|
 | `reason` | a stable code from the closed set below. Switch on this, not on the message. |
-| `retryable` | `True` only when repeating the same call unchanged could succeed (`plane`, `plane_unavailable`, `approval_unavailable`, `quota_exceeded`, `quota_plane_unavailable`). |
+| `retryable` | `True` only when repeating the same call unchanged could succeed (`plane`, `plane_unavailable`, `policy_unavailable`, `approval_unavailable`, `quota_exceeded`, `quota_plane_unavailable`). |
 | `retry_after` | seconds until a retry could succeed when that is known (a quota's window), else `None`. |
 | `boundary` | the Decision's dimension: `policy`, `row`, `capability`, `blast_radius`, `halt`, `plane`, `arguments`, `hook`, `hook_error` or `approval`. |
 | `decision` | the full `Decision` (`verdict`, `kind`, `boundary`, `level`, `reason`, `detector`, `evaluation`). |
@@ -66,7 +66,7 @@ anything else.
 | `policy_unsupported` | `ExecutionRefused` | the console has a rule for this tool that this SDK cannot interpret safely: it carries a field this SDK does not know, or a value the console itself would not accept. Only this tool is refused, until the rule is changed or the SDK is upgraded. | no |
 | `approval_denied` | `ExecutionRefused` | a person denied the request. | no |
 | `approval_timeout` | `ExecutionRefused` | nobody decided within `timeout_s`, the request expired, or the plane could not be reached to file it before the deadline. | no |
-| `approval_unavailable` | `ExecutionRefused` | a new approval cannot be asked: no plane, the link is not `connected`, the arguments are not JSON, or the plane refused or stopped answering the request. | no |
+| `approval_unavailable` | `ExecutionRefused` | a new approval cannot be asked: no plane, the link is not `connected`, the arguments are not JSON, or the plane refused or stopped answering the request. | yes, once the link is back (not when the arguments are not JSON: that call cannot ask until they are) |
 | `approval_superseded` | `ExecutionRefused` | a person approved the call (or a grant admitted it), but the policy the worker holds now refuses it: the tool was blocked, a deny line or an unreadable rule now applies, or the session cap is reached. The approval never overrides the policy; ask again under the new one. | no |
 | `approval_tampered` | never raised | a deferred request whose seal does not verify. Nothing runs; `on_deferred_result` gets `outcome="tampered"` and `error="approval_tampered"`. | |
 | `plane` | not raised | in the closed set for older handlers; no check in this release produces it. | yes |

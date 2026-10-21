@@ -45,15 +45,18 @@ def build_report() -> dict:
     engine = getattr(api, "_ENGINE", None)
     config = getattr(engine, "config", None)
     tools = [{"name": row.get("name"), "classes": sorted(row.get("effects") or [])} for row in (_tools() or [])]
-    guarded = bool(coverage.get("decorated_tools"))
+    middleware = {"installed": bool(coverage.get("middleware_installed")), "tools": list(coverage.get("middleware_tool_names") or [])}
+    guarded = bool(coverage.get("decorated_tools")) or middleware["installed"] or bool(middleware["tools"])
     return {
         "schema": SCHEMA,
         "runbound": __version__,
         "python": platform.python_version(),
         "guarded": guarded,
+        "middleware": middleware,  # additive (schema 1): the LangChain middleware / govern_tools in this process and the tools it has governed
         "initialized": engine is not None,
         "tools": tools,
         "plane": _plane(coverage, config),
+        "spans": _spans(),
         "limits": {k: getattr(config, k) for k in LIMIT_KEYS if getattr(config, k, None) not in (None, False)} if config else {},
         "tool_calls_seen": int(coverage.get("tool_calls_seen") or 0),
         "events": [_event(e) for e in (api.events(EVENTS_SHOWN) or [])][-EVENTS_SHOWN:],
@@ -77,6 +80,21 @@ def _plane(coverage: dict, config: Any) -> dict:
     return {"mode": mode, "url": url or None, "detail": coverage.get("fleet")}
 
 
+def _spans() -> dict:
+    """Where the built-in tool-call span exporter was configured to send. Configured is not delivered: the counters say what left this process, not what arrived."""
+    try:
+        from . import spans
+
+        out = spans.destination()
+        exporter = spans.exporter()
+        out["sent"] = getattr(exporter, "sent", 0)
+        out["dropped"] = getattr(exporter, "dropped", 0)
+        out["pending"] = getattr(exporter, "pending", 0)
+        return out
+    except Exception:
+        return {"mode": "unknown", "url": None, "exporting": False, "note": None}
+
+
 def _event(event: dict) -> dict:
     kind = str(event.get("kind") or "")
     if kind == "runtime_change":
@@ -90,8 +108,13 @@ def _event(event: dict) -> dict:
 def render(report: dict) -> str:
     """The report for a person: short, one section a question."""
     lines = [f"runbound {report['runbound']} on python {report['python']}"]
-    lines.append("GUARDED" if report["guarded"] else
-                 "Nothing is guarded in this process: no @runbound.tool is decorated.")
+    middleware = report.get("middleware") or {}
+    if report["guarded"]:
+        lines.append("GUARDED")
+        if middleware.get("installed") or middleware.get("tools"):  # built, not necessarily attached: say only what is known
+            lines.append("  A LangChain middleware was created in this process; it governs the tools of any agent it is attached to (each tool is listed after its first call).")
+    else:
+        lines.append("Nothing is guarded in this process: no @runbound.tool is decorated and no LangChain middleware was created.")
     if not report["initialized"]:
         lines.append("  runbound.init() has not run here. Add runbound.init(...) before your first tool call, or call "
                      "runbound.check() at the end of your setup (a target's __main__ block is not run).")
@@ -101,9 +124,17 @@ def render(report: dict) -> str:
     if report["tools"]:
         for tool in report["tools"]:
             lines.append(f"  {tool['name']}  [{', '.join(tool['classes']) or 'unclassified'}]")
+    elif middleware.get("installed"):
+        lines.append("  none yet: a tool the LangChain middleware governs is listed after its first call")
     else:
         lines.append("  no @runbound.tool decorated")
     plane = report["plane"]
+    sp = report["spans"]
+    mode_text = {"explicit": "to your collector", "plane": "to the connected control plane", "disabled": "off (otel_endpoint=False; the built-in exporter is disabled)", "none": "off (no collector and no control plane connected)"}.get(sp["mode"], sp["mode"])
+    lines += ["", "Tool-call spans", f"  {mode_text}" + (f" at {sp['url']}" if sp["url"] else "")
+              + (f" - {sp['note']}" if sp.get("note") else "")]
+    if sp["exporting"]:
+        lines.append(f"  configured, not confirmed delivered: {sp['sent']} sent, {sp['pending']} queued, {sp['dropped']} dropped by this process")
     lines += ["", "Plane", f"  {plane['mode']}" + (f" at {plane['url']}" if plane["url"] else " (state stays in this process)")
               + (f" - {plane['detail']}" if plane.get("detail") else "")]
     lines += ["", "Limits in force"]

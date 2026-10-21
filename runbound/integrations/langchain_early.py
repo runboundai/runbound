@@ -150,8 +150,9 @@ def _register(name: str, tool: Any, effects: Mapping) -> "tuple[hooks_module.Val
     validator = hooks_module.Validator(trampoline, name)
     register_signature(name, trampoline)  # a console rule's conditions and the approval request read the call's arguments by name through this signature (plain tools never pass through @runbound.tool)
     rules = ToolRules(effects=stated)
-    api._EFFECT_SOURCE[name] = "decorator" if stated else "undeclared"  # the customer's stated effects ride the decorator's source label; nothing else is "declared"
+    api._EFFECT_SOURCE[name] = "langchain_middleware" if stated else "undeclared"  # the effects the customer stated to the middleware; nothing else is "declared"
     _coverage.tool_requested(name)
+    _coverage.middleware_tool(name)  # `runbound check` and coverage() count a tool the middleware governs
     _coverage.tool_declared(name, trampoline, rules)
     with _LOCK:
         return _REGISTERED.setdefault(key, (validator, stated))
@@ -360,6 +361,7 @@ class RunboundMiddleware(AgentMiddleware):
 
     def __init__(self, *, effects: "Mapping[str, Iterable[str]] | None" = None) -> None:
         _check_enabled()
+        _coverage.middleware_built()
         super().__init__()
         self._governed = _Governed(effects)
 
@@ -373,5 +375,6 @@ class RunboundMiddleware(AgentMiddleware):
 def govern_tools(tools: Iterable[Any], *, effects: "Mapping[str, Iterable[str]] | None" = None, **node_kwargs: Any) -> ToolNode:
     """A ``ToolNode`` over ``tools`` whose every call passes the same admission as :class:`RunboundMiddleware`."""
     _check_enabled()
+    _coverage.middleware_built()
     governed = _Governed(effects)
     return ToolNode(list(tools), wrap_tool_call=governed.run, awrap_tool_call=governed.arun, **node_kwargs)

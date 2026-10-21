@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import Any
 
 import pytest
@@ -110,6 +111,7 @@ def calls_message(*calls):
 
 
 CONFIG = {"configurable": {"thread_id": "thread-1"}}
+SDK_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def run_node(tools, message, *, effects=None, config=CONFIG):
@@ -493,6 +495,114 @@ def test_a_rule_that_needs_a_person_asks_about_the_arguments_through_the_middlew
     (big,) = run([refund_tool(ran)], calls_message(("issue_refund", {"order_id": "A-2", "amount": 249}, "c2")), effects=effects)
     assert big.status == "error" and big.content == "refused approval_unavailable", "over the limit: it WANTED a person (no wait mode here), not 'condition_unevaluable'"
     assert len(ran.calls) == 1
+
+
+def test_runbound_check_recognises_an_app_governed_by_the_middleware_and_does_not_say_nothing_is_guarded(tmp_path):
+    """W6 (Draco's MVP walk): plain tools + RunboundMiddleware, the guide's lead layout, made ``python -m runbound check app.py`` print 'Nothing is guarded' and exit 1: it only counted @runbound.tool."""
+    import subprocess
+    import sys
+    import textwrap
+
+    app = tmp_path / "agent.py"
+    app.write_text(textwrap.dedent("""
+        import runbound
+        from langchain_core.tools import tool
+        from runbound.integrations import langchain_early
+        from runbound.integrations.langchain_early import RunboundMiddleware
+
+        runbound.init()
+        langchain_early.enable()
+
+        @tool
+        def lookup_order(order_id: str) -> str:
+            \"\"\"Look up an order.\"\"\"
+            return "found"
+
+        MIDDLEWARE = RunboundMiddleware(effects={"lookup_order": {"read"}})
+    """))
+    done = subprocess.run([sys.executable, "-m", "runbound", "check", str(app)], capture_output=True, text=True, cwd=str(tmp_path), env={**os.environ, "PYTHONPATH": SDK_ROOT})
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "Nothing is guarded" not in done.stdout and "GUARDED" in done.stdout
+    assert "A LangChain middleware was created in this process; it governs the tools of any agent it is attached to (each tool is listed after its first call)." in done.stdout, done.stdout
+    assert "installed" not in done.stdout.split("Tools")[0], "it says what is known (a middleware was built), not that an agent has it attached"
+    report = json.loads(subprocess.run([sys.executable, "-m", "runbound", "check", "--json", str(app)], capture_output=True, text=True, cwd=str(tmp_path), env={**os.environ, "PYTHONPATH": SDK_ROOT}).stdout)
+    assert report["guarded"] is True and report["middleware"]["installed"] is True
+
+
+@SURFACES
+def test_coverage_counts_the_tools_the_middleware_governs_once_they_are_called(run, collector):
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early")
+    assert runbound.coverage()["middleware_installed"] is False
+    tools = make_tools(ran)
+    run([tools["lookup_order"]], calls_message(("lookup_order", {"order_id": "A-1"}, "c1")), effects={"lookup_order": {"read"}})
+    report = runbound.coverage()
+    assert report["middleware_installed"] is True and report["middleware_tool_names"] == ["lookup_order"]
+    assert report["decorated_tools"] == 0, "the decorator's own count is unchanged (and is also what the heartbeat carries)"
+
+
+def boundary_facts(raw):
+    """(call span attributes, start markers' attributes) for what a run exported."""
+    return call_spans(raw), [attrs_of(m) for m in markers(raw)]
+
+
+@SURFACES
+def test_a_plain_tool_the_middleware_governs_is_recorded_at_the_langchain_middleware_boundary_on_the_span_and_the_marker(run, collector):
+    """F24: with no decorator anywhere the span used to say ``sdk-decorator`` and the console could not tell which boundary decided. The call span, the start marker and its declared target take ONE value."""
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early")
+    tools = make_tools(ran)
+    (message,) = run([tools["lookup_order"]], calls_message(("lookup_order", {"order_id": "A-1"}, "c1")), effects={"lookup_order": {"read"}})
+    assert message.status == "success" and ran.calls == [("lookup_order", "A-1")]
+    (call,), (marker,) = boundary_facts(exported(collector))
+    assert call["runbound.boundary"] == "langchain-middleware" and call["runbound.capability_source"] == "langchain_middleware"
+    assert marker["runbound.boundary"] == marker["runbound.declared_target"] == "langchain-middleware", "the start is counted only where the marker's boundary is the declared target: the same value"
+    assert str(call["runbound.contract_version"]) == "1" and str(marker["runbound.contract_version"]) == "1"
+
+
+@SURFACES
+def test_a_refusal_by_the_middleware_is_recorded_at_the_same_boundary_and_a_tool_with_no_stated_effects_is_undeclared(run, collector):
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early", tool_policy={"deny": ["delete_order"]})
+    tools = make_tools(ran)
+    (message,) = run([tools["delete_order"]], calls_message(("delete_order", {"order_id": "A-1"}, "c1")))
+    assert message.content == "refused tool_blocked"
+    (call,), markers_seen = boundary_facts(exported(collector))
+    assert call["runbound.boundary"] == "langchain-middleware" and call["runbound.capability_source"] == "undeclared" and markers_seen == []
+
+
+def test_the_async_path_records_the_same_boundary(collector):
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early")
+    tools = make_tools(ran)
+    agent = create_agent(ScriptedModel(script=[calls_message(("lookup_order", {"order_id": "A-1"}, "c1")), AIMessage(content="done")]), [tools["lookup_order"]],
+                         middleware=[lc.RunboundMiddleware(effects={"lookup_order": {"read"}})])
+    asyncio.run(agent.ainvoke({"messages": [("user", "go")]}, CONFIG))
+    (call,), (marker,) = boundary_facts(exported(collector))
+    assert call["runbound.boundary"] == marker["runbound.boundary"] == marker["runbound.declared_target"] == "langchain-middleware"
+
+
+@SURFACES
+def test_a_decorated_tool_under_the_middleware_and_the_callback_handler_keep_sdk_decorator(run, collector):
+    """The inner ``@runbound.tool`` decides (the middleware passes the call through), so the boundary that decided is the decorator's; an attached handler is not the middleware either."""
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early")
+    inner = decorated_lc_tool(ran)
+    run([inner], calls_message(("lookup_dec", {"order_id": "A-1"}, "c1")))
+    (call,), (marker,) = boundary_facts(exported(collector))
+    assert call["runbound.boundary"] == marker["runbound.boundary"] == marker["runbound.declared_target"] == "sdk-decorator" and call["runbound.capability_source"] == "decorator"
+
+
+def test_the_legacy_callback_handler_alone_is_recorded_at_the_decorator_boundary(collector):
+    from runbound.integrations.langchain import RunboundCallbackHandler
+
+    ran = Ran()
+    start(FakeShared(), otel_endpoint=collector.url, service="lc-early")
+    tools = make_tools(ran)
+    agent = create_agent(ScriptedModel(script=[calls_message(("lookup_order", {"order_id": "A-1"}, "c1")), AIMessage(content="done")]), [tools["lookup_order"]])
+    agent.invoke({"messages": [("user", "go")]}, {**CONFIG, "callbacks": [RunboundCallbackHandler()]})
+    calls = call_spans(exported(collector))
+    assert calls and all(c["runbound.boundary"] == "sdk-decorator" for c in calls)
 
 
 @SURFACES

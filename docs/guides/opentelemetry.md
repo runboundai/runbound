@@ -9,7 +9,7 @@ either; a span on your own provider records the exception the body raised, as
 OpenTelemetry's `record_exception` does.
 
 ```bash
-pip install "runbound[otel]"   # opentelemetry-api and opentelemetry-sdk (optional)
+pip install --pre "runbound[otel]"   # opentelemetry-api and opentelemetry-sdk (optional)
 ```
 
 ## The span
@@ -25,7 +25,7 @@ pip install "runbound[otel]"   # opentelemetry-api and opentelemetry-sdk (option
   The strings are pinned in `runbound/otel_names.py`.
 - **Identities and the record of one call.** `runbound.action_id`, `.attempt_id` and
   `.evaluation_id` (random, carrying nothing about the call), `.parent_action_id` for a
-  governed call made inside another's body, `runbound.boundary` (`sdk-decorator`) and
+  governed call made inside another's body, `runbound.boundary` (`sdk-decorator`, or `langchain-middleware` for a plain LangChain tool that `RunboundMiddleware` / `govern_tools` itself governs) and
   `runbound.contract_version`. A refused span carries `runbound.anomaly_id`, and the
   refusal's anomaly names the span back (`span_id`, `trace_id`). A call that was approved
   and re-checked carries `runbound.recheck.evaluation_id`, `.outcome`, `.reason` and what
@@ -71,7 +71,20 @@ pip install "runbound[otel]"   # opentelemetry-api and opentelemetry-sdk (option
 
 With neither, no span is made and a call pays one lookup.
 
-When `otel_endpoint` is set, per-call events stop going to `/v1/events`, which
+## Where the built-in exporter sends
+
+| `otel_endpoint` | A plane is connected | Built-in tool-call span exporter |
+|---|---|---|
+| a URL | either | that collector (it wins) |
+| unset | yes | the connected plane's existing `/v1/traces`, with the worker's token |
+| unset | no | none |
+| `False` | either | disabled, with no fallback |
+
+Starting with a7, when you connect a control plane and leave `otel_endpoint` unset, Runbound configures its built-in tool-call span exporter to send to that plane. Set `otel_endpoint=False` before upgrading to disable this built-in export, or specify an explicit collector URL. An application-configured OpenTelemetry provider continues to take precedence and must be configured separately. This setting does not disable other control-plane communication.
+
+What the built-in payload carries is metadata: tool, service, worker, run and action IDs, timings, policy and approval references, reported outcomes and argument digests. It is not anonymous. If you configure your own `TracerProvider` the spans go there instead, the plane default is not started, and a tool body that raises is recorded on your provider with its exception, so exception text can reach your own pipeline; what your provider exports is yours to configure. Install your `TracerProvider` before `runbound.init()`, or set `otel_endpoint=False`: the provider is looked for when `init()` runs, so one installed after `init()` still gets the spans while the plane default is on (the plane then receives them too). Batching, shutdown, errors and delivery loss still apply, and nothing promises that every call appears. `python -m runbound check` shows the resolved destination (never a token or URL credentials) and what this process has sent, queued and dropped.
+
+When the built-in exporter is on, per-call events stop going to `/v1/events`, which
 keeps only the low-volume audit records: refusals, approvals and tool-registry
 changes.
 
@@ -84,7 +97,7 @@ Spans are queued and posted in the background. Python posts what is left at a no
 
 **What this does not do:** `flush` drains to a reachable ingest; spans queued during an outage are lost if the worker exits before it reconnects. There is no disk spool in this release, and the SDK does not claim lossless telemetry.
 
-The recipe for a container: call `runbound.shutdown()` in your SIGTERM handler, or in the `preStop` hook of the pod.
+The recipe for a container: call `runbound.shutdown()` in your SIGTERM handler, or in the `preStop` hook of the pod. It also tells the plane this worker stopped, so the console shows it as stopped and not as disconnected ([Plane loss](plane-loss.md#a-worker-that-stopped-is-not-a-worker-that-disconnected)).
 
 ```python
 import signal, sys

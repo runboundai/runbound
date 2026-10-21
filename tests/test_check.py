@@ -125,11 +125,13 @@ def test_the_text_report_names_tools_with_classes_plane_limits_and_events(tmp_pa
 def test_json_has_a_stable_documented_shape(tmp_path):
     report = json.loads(run_cli(["--json", script(tmp_path, GUARDED)]).stdout)
     assert report["schema"] == 1
-    assert set(report) == {"schema", "runbound", "python", "guarded", "initialized", "tools", "plane", "limits",
+    assert set(report) == {"schema", "runbound", "python", "guarded", "middleware", "initialized", "tools", "plane", "spans", "limits",
                            "tool_calls_seen", "events"}
+    assert report["middleware"] == {"installed": False, "tools": []}
     assert report["guarded"] is True and report["tool_calls_seen"] == 1
     assert {t["name"]: t["classes"] for t in report["tools"]} == {"issue_refund": ["financial"], "lookup_order": ["read"]}
     assert set(report["plane"]) == {"mode", "url", "detail"} and report["plane"]["mode"] == "local"
+    assert set(report["spans"]) >= {"mode", "url", "exporting", "note", "sent", "dropped", "pending"} and report["spans"]["mode"] == "none"
     assert report["limits"] == {"max_actions_per_run": 50}
     assert isinstance(report["events"], list)
 

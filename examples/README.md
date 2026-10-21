@@ -7,7 +7,7 @@ plane say what they print instead. Run them from `runbound-sdk/`.
 |---|---|---|
 | [`tool_rules.py`](tool_rules.py) | `@runbound.tool` with code rules (`constraint=`, `max_calls=`), and a console row that tightens them | nothing; a plane for the row |
 | [`deferred_approval.py`](deferred_approval.py) | `approval="required", mode="deferred"`, the seal (`RUNBOUND_APPROVAL_SECRET`), `on_deferred_result`, `runbound.current_request()` | a plane to ask a person |
-| [`langchain_otel.py`](langchain_otel.py) | the LangChain callback handler, and one OpenTelemetry span per tool call | `pip install "runbound[langchain,otel]"` |
+| [`langchain_otel.py`](langchain_otel.py) | the LangChain callback handler, and one OpenTelemetry span per tool call | `pip install --pre "runbound[langchain,otel]"` |
 
 ## Without a plane
 

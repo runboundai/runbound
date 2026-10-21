@@ -25,6 +25,7 @@ What the plane says is cached: a fleet-wide halt it served holds until the plane
 lifts it (the enforcement floor, F1), whether or not the plane keeps answering.
 """
 
+import atexit
 import logging
 import threading
 import time
@@ -33,7 +34,7 @@ from collections.abc import Callable
 from typing import Any
 
 from . import cache as cache_module
-from . import local_events
+from . import local_events, spans
 from .export import Exporter
 from .plane import PlaneClient, Poller
 from .plane_types import PlaneStatus
@@ -99,6 +100,9 @@ class LocalState:
     def flush(self, timeout: float = 3.0) -> None:
         return None
 
+    def goodbye(self, reason: str = "shutdown") -> bool:
+        return False
+
 
 class RemoteState:
     """Plane state backed by a control plane, and by local answers when not.
@@ -138,6 +142,8 @@ class RemoteState:
         self._defaults: Any = None  # lines.Defaults, when readable
         self._defaults_problem: "tuple | None" = None  # (reason code, text) when served defaults cannot be read safely
         self._last_success: float | None = None
+        self._goodbye_sent = False  # this process said goodbye (once)
+        self._exit_hook: Any = None
         #: The evidence-coverage body the plane last ANSWERED a hello for: ``(digest, monotonic time)``; ``_evidence_inflight`` is the one on the hello being built.
         self._evidence_sent: tuple = (None, None)
         self._evidence_inflight: "tuple | None" = None
@@ -421,12 +427,18 @@ class RemoteState:
     def _boot_wait_remaining(self, effects: "frozenset | None") -> float:
         """Seconds a call carrying ``effects`` may still wait for this process's first policy confirmation, else 0.
 
-        Only when ALL of these hold: the service has enforced defaults, the tool fails closed, its confirmation is expired, no hello has been answered in THIS process yet, and the first
-        ``confirm_wait_s`` seconds after boot have not run out. Read-only: it never touches a confirmation."""
+        Two cases, both only while NO hello has been answered in THIS process and the first ``confirm_wait_s`` seconds after boot have not run out:
+        (1) a FIRST boot: nothing held (no answered hello, no sealed cache): any governed call waits, whatever its class, because until the first answer no policy is known (W9: the
+        quick start's first call used to be refused ``policy_unavailable``); (2) a restart: the service has enforced defaults, the tool fails closed and its cached confirmation has expired.
+        Read-only: it never touches a confirmation, and what the call is then allowed to do is decided by the policy the worker holds AFTER the wait, as ever."""
         from .hooks import fails_closed
 
         budget = getattr(self._config, "confirm_wait_s", 0.0) or 0.0
-        if budget <= 0 or self._first_answer.is_set() or not self._defaults_enforced or not fails_closed(effects):
+        if budget <= 0 or self._first_answer.is_set():
+            return 0.0
+        if self.awaiting_first_policy():
+            return max(0.0, budget - (self._now() - self._boot_mono))
+        if not self._defaults_enforced or not fails_closed(effects):
             return 0.0
         bound = self._offline_bound()
         if bound is None or not self._confirmation_expired(bound):
@@ -742,6 +754,9 @@ class RemoteState:
     def start(self, engine: Any) -> None:
         """Start the exporter and the heartbeat. Called by :func:`runbound.init` outside its lock."""
         try:
+            if getattr(self._config, "goodbye_on_exit", True) and self._exit_hook is None:
+                self._exit_hook = self._goodbye_at_exit  # registered BEFORE the exporter's own exit hook: atexit is last-in first-out, so the queue drains first
+                atexit.register(self._exit_hook)
             if self._exporter is not None:
                 self._exporter.start()
             poller = Poller(
@@ -812,7 +827,7 @@ class RemoteState:
             lane = "stopped"
         else:
             lane = "open"
-        return {"otel_endpoint_set": bool(getattr(self._config, "otel_endpoint", None)), "tracer_provider_detected": spans._provider() is not None, "events_lane_state": lane}
+        return {"otel_endpoint_set": bool(getattr(self._config, "otel_endpoint", None)) or bool(spans.destination()["exporting"]), "tracer_provider_detected": spans._provider() is not None, "events_lane_state": lane}
 
     def _evidence_stats(self) -> dict:
         from . import delivery, spans
@@ -908,6 +923,37 @@ class RemoteState:
             _LOG.debug("runbound: could not read the exporter's pending count", exc_info=True)
             return None
 
+    def goodbye(self, reason: str = "shutdown") -> bool:
+        """Tell the plane this process is stopping, so the console shows the worker as stopped and not as disconnected. At most once per process; ``True`` when the plane recorded it.
+
+        The heartbeat is stopped first (no hello of this boot can follow the goodbye and bring the worker back). Nothing is sent by a process that never completed a hello, to a plane
+        that is not there, or by a client that cannot say it. One attempt, :data:`runbound.plane.GOODBYE_TIMEOUT_S`, never raises: a crash, SIGKILL or a SIGTERM that skips the exit hooks sends nothing
+        and the worker stays disconnected, as it should. NOT called from :meth:`stop` (a re-``init()`` must not say goodbye).
+        """
+        with self._lock:
+            if self._goodbye_sent:
+                return False
+            self._goodbye_sent = True
+            poller, self._poller = self._poller, None
+        try:
+            if poller is not None:
+                poller.stop()
+            say = getattr(self._client, "goodbye", None)
+            if say is None or self._last_success is None:
+                return False
+            status, body = say({"service": self._config.service, "worker_id": self._config.resolved_worker_id(), "boot_id": self._boot_id, "reason": reason, "sdk_version": _sdk_version()})
+            return status == 200 and isinstance(body, dict) and body.get("recorded") is True
+        except Exception:
+            _LOG.debug("runbound: could not say goodbye", exc_info=True)
+            return False
+
+    def _goodbye_at_exit(self) -> None:
+        """The ``atexit`` hook (``init(goodbye_on_exit=True)``): a process that exits normally, or by ``sys.exit`` or Ctrl-C, says goodbye."""
+        try:
+            self.goodbye("exit")
+        except Exception:
+            pass
+
     def flush(self, timeout: float = 3.0) -> None:
         """Post what the event exporter has queued now, waiting up to ``timeout`` seconds, and keep running. Never raises."""
         if self._exporter is not None:
@@ -918,6 +964,9 @@ class RemoteState:
 
     def stop(self, timeout: "float | None" = None) -> None:
         """Stop the heartbeat and drain the exporter (within ``timeout`` seconds when given). Idempotent, bounded."""
+        hook, self._exit_hook = self._exit_hook, None
+        if hook is not None:  # a stopped state (a re-init, a test) must not say goodbye at interpreter exit
+            atexit.unregister(hook)
         poller, self._poller = self._poller, None
         if poller is not None:
             try:
@@ -956,7 +1005,7 @@ def build(config: Any) -> Any:
             client,
             include_events=bool(config.export_events),
             send_session_keys=bool(config.send_session_keys),
-            include_calls=not getattr(config, "otel_endpoint", None),
+            include_calls=not spans.destination()["exporting"],
         )
         return RemoteState(client, exporter, config)
     except Exception:

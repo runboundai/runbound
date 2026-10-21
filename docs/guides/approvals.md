@@ -57,7 +57,7 @@ its own deadline.
 ```python
 @runbound.tool(effects={"write"}, approval="required", mode="deferred")
 def delete_customer(customer_id: str) -> str:
-    # runbound.current_request() is the idempotency key while this runs
+    # runbound.current_request() is the idempotency key while this runs (deferred mode only: it is None in sync mode)
     ...
 
 result = delete_customer("c-42")
@@ -76,7 +76,7 @@ decision record (it gives the quota unit back), and `on_deferred_result` receive
 
 - **Idempotency.** A request can be offered twice: a worker paused past its claim,
   or a replica that took over. `runbound.current_request()` is the request id
-  while the body runs; key your side effect on it.
+  while a *deferred* body runs; key your side effect on it. In sync mode the body runs once in your own call stack and `current_request()` is `None`: use a key of your own (the order id, say).
 - **Claims.** A worker that is executing a request names it on every hello, which
   extends its claim, so a slow body is not re-offered. If the plane reports the
   claim lost, the SDK stops renewing it and starts nothing new for it.

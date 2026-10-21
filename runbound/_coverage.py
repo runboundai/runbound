@@ -86,6 +86,36 @@ def tool_decorated(name: str | None = None) -> None:
         pass
 
 
+_MIDDLEWARES = 0  # LangChain surfaces (RunboundMiddleware, govern_tools) built in this process
+_MIDDLEWARE_TOOL_NAMES: set = set()
+
+
+def middleware_built() -> None:
+    """One more LangChain surface (``RunboundMiddleware`` or ``govern_tools``) that governs tool calls in this process."""
+    global _MIDDLEWARES
+    try:
+        with _LOCK:
+            _MIDDLEWARES += 1
+    except Exception:  # pragma: no cover
+        pass
+
+
+def middleware_tool(name: str) -> None:
+    """A tool that a LangChain surface governs (known from its first call)."""
+    try:
+        with _LOCK:
+            if isinstance(name, str) and name and len(_MIDDLEWARE_TOOL_NAMES) < DECORATED_TOOL_NAMES_MAX:
+                _MIDDLEWARE_TOOL_NAMES.add(name)
+    except Exception:  # pragma: no cover
+        pass
+
+
+def middleware_snapshot() -> dict:
+    """What the LangChain surfaces of this process govern: ``installed`` (one was built here) and the ``tools`` seen. Separate from :func:`snapshot`, whose shape is the heartbeat's."""
+    with _LOCK:
+        return {"installed": _MIDDLEWARES > 0, "tools": sorted(_MIDDLEWARE_TOOL_NAMES)}
+
+
 def tool_called() -> None:
     """One more decorated tool call attempted."""
     global _TOOL_CALLS
@@ -467,10 +497,12 @@ def zeros() -> dict:
 
 def reset_for_tests() -> None:
     """Put every counter back to zero. Test-only."""
-    global _DECORATED_TOOLS, _TOOL_CALLS, _KEYED_SESSIONS
+    global _DECORATED_TOOLS, _TOOL_CALLS, _KEYED_SESSIONS, _MIDDLEWARES
     global _TRUNCATION_LOGGED, _TOOL_RULES_VERSION
     with _LOCK:
         _DECORATED_TOOLS = 0
+        _MIDDLEWARES = 0
+        _MIDDLEWARE_TOOL_NAMES.clear()
         _TOOL_CALLS = 0
         _KEYED_SESSIONS = 0
         _DECORATED_TOOL_NAMES.clear()

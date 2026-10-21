@@ -44,6 +44,7 @@ _LOG = logging.getLogger("runbound")
 #: Per-call timeouts, in seconds.
 HELLO_TIMEOUT_S = 2.0
 EVENTS_TIMEOUT_S = 5.0
+GOODBYE_TIMEOUT_S = 1.5  # a stopping process says goodbye once and never waits long for the answer
 POLICY_TIMEOUT_S = 2.0
 
 #: At most one warning per this many seconds, per client, per kind of problem.
@@ -105,9 +106,36 @@ class _PeriodicWarning:
 
 
 def warn_periodically(gate: _PeriodicWarning, message: str, *args, **kwargs) -> None:
-    """Log ``message`` at warning level if ``gate`` allows it right now."""
-    if gate.due():
-        _LOG.warning(message, *args, **kwargs)
+    """Log ``message`` at warning level if ``gate`` allows it right now.
+
+    With ``exc_info`` the line carries a one-line cause (``ConnectionRefusedError: ...``, the innermost
+    exception of the chain) and a hint; the full chained traceback is logged only when DEBUG is enabled.
+    """
+    if not gate.due():
+        return
+    if kwargs.get("exc_info"):
+        cause = _short_cause()
+        if cause:
+            message += ": " + cause.replace("%", "%%") + " (check that the control plane is reachable at the configured URL; set the runbound logger to DEBUG for the traceback)"
+        if not _LOG.isEnabledFor(logging.DEBUG):
+            kwargs["exc_info"] = False
+    _LOG.warning(message, *args, **kwargs)
+
+
+def _short_cause() -> str:
+    """The innermost exception of the one being handled, as ``Type: text`` on one line."""
+    import sys
+
+    error = sys.exc_info()[1]
+    seen = 0
+    while error is not None and seen < 10:
+        inner = error.__cause__ or error.__context__
+        if inner is None:
+            break
+        error, seen = inner, seen + 1
+    if error is None:
+        return ""
+    return f"{type(error).__name__}: {error}".splitlines()[0][:200]
 
 
 class PlaneClient:
@@ -161,6 +189,27 @@ class PlaneClient:
         """Announce this worker and read back org state. ``None`` on failure."""
         data, _kind = self._call("POST", "/v1/hello", payload, HELLO_TIMEOUT_S)
         return self._parse(HelloReply, data)
+
+    def goodbye(self, payload: dict) -> tuple:
+        """Tell the plane this worker's process is stopping (``POST /v1/goodbye``): ``(HTTP status, decoded body)``, or ``(None, None)`` when nothing came back.
+
+        One attempt, never retried, never raises. It is not a link failure: it does not count against the plane's state (an older plane without the route answers 404,
+        which is returned as it is) and a rejected key is not re-reported. Modelled on :meth:`approvals`.
+        """
+        if self.key_state == "invalid":
+            return None, None
+        try:
+            request = self._request("POST", "/v1/goodbye", payload)
+            with urlopen(request, timeout=GOODBYE_TIMEOUT_S) as response:
+                raw = response.read()
+            return response.status, (json.loads(raw) if raw and raw.strip() else {})
+        except HTTPError as error:
+            try:
+                return error.code, json.loads(error.read() or b"{}")
+            except Exception:
+                return error.code, None
+        except Exception:
+            return None, None
 
     def events(self, batch: dict) -> bool:
         """Ship one batch of telemetry. ``False`` if it did not get through."""

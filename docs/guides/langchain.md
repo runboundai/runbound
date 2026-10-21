@@ -2,6 +2,8 @@
 
 [← Docs](../README.md)
 
+Runbound's opt-in reference integration for LangChain / LangGraph tools, supported at the tested combinations below, and the callback handler it replaces.
+
 ## The LangChain / LangGraph reference integration (opt-in)
 
 Runbound supports an opt-in LangChain / LangGraph reference integration for locally executed tools through `RunboundMiddleware` (`wrap_tool_call` / `awrap_tool_call`) and `govern_tools`. It provides tool-boundary policy enforcement, explicitly configured approval handling and correlated action records. Support is limited to the tested combinations, execution layouts and approval configurations documented below; installing the extra does not enable governance automatically. This is an alpha release, not a compatibility claim for every version in the dependency range.
@@ -21,7 +23,7 @@ Linux, Windows, versions between these rows and other checkpointers are **untest
 
 ```bash
 uv venv --python 3.13
-uv pip install "runbound[langchain]" "langchain==1.4.6" "langchain-core==1.6.12" "langgraph==1.2.16" \
+uv pip install --prerelease allow "runbound[langchain]" "langchain==1.4.6" "langchain-core==1.6.12" "langgraph==1.2.16" \
     "langgraph-prebuilt==1.1.1" "langgraph-checkpoint==4.3.0" "langgraph-checkpoint-sqlite==3.1.2" "pydantic==2.14.1"
 ```
 
@@ -73,11 +75,26 @@ For a bare `ToolNode`, use `govern_tools(tools, effects={...})` in its place. Cl
 So to get refusals as tool messages, put the middleware on the tool node and leave the callback handler off.
 
 - **Layouts.** `create_agent` with the middleware, and governed tools in the documented `ToolNode` layout. For resumable execution: one tool call per task with stable identities. Two interrupts, or parallel resumable calls, inside one task are excluded (independent calls are not the same thing as several interrupts inside one task).
-- **Approvals are a separate opt-in.** With neither approval mode enabled, a call that needs a person is refused `approval_unavailable`; nothing waits. `langchain_early.enable(approval_wait=True)` (or `RUNBOUND_LANGCHAIN_APPROVAL_WAIT=1`) lets a fresh call wait for the decision. In a chat agent that holds the conversation turn until the person answers (or the request times out); the `mode="deferred"` of the decorator instead hands the model a `pending_approval` result and delivers the outcome to `on_deferred_result`, outside the conversation.
+- **Approvals are a separate opt-in.** With neither approval mode enabled, a call that needs a person is refused `approval_unavailable`; nothing waits. `langchain_early.enable(approval_wait=True)` (or `RUNBOUND_LANGCHAIN_APPROVAL_WAIT=1`) lets a fresh call wait for the decision. For a chat agent, which mode to choose is explained in the next section.
 - **Suspended and resume: experimental in this release.** It needs `init(approval_bind=True)`, `langchain_resume.enable()` (or `RUNBOUND_LANGCHAIN_RESUME=1`) and a checkpointer, and it was tested with the SQLite checkpointer only. How long an approved request stays resumable is a setting of the control plane's deployment (`RUNBOUND_SUSPENDED_RESUME_S`), not something the SDK or the console selects, and the seven-day default it falls back to has not been ratified. Until that bound can be set explicitly where you configure the service, treat suspended mode as experimental. Fresh-call governance and approval waits are not affected.
 - **Outside this support:** provider-hosted tools, custom nodes that call tools themselves, unwrapped native tool paths, and the middleware-to-MCP combined path. The legacy admission API does not gain console-rule parity.
 - **Refusals** are error `ToolMessage`s with the reason code, not exceptions, and the graph carries on. (The callback handler below raises.)
 - **What it does not claim.** No exactly-once effects, and no independently verified external outcome: an execution bind is not a start marker and is not evidence the tool finished. Redaction is by key, not by scanning free text. Records from SDKs up to 1.0.0a4 can lack an action identity or start evidence, and those SDKs emit no span for a cancelled call.
+
+### Approval mode for a chat agent: wait, deferred, or neither
+
+A chat turn is a person waiting for an answer, so decide what an approval does to that turn before you turn one on.
+
+| You want | Use | What the model sees | What your application must do |
+|---|---|---|---|
+| to keep the chat turn open until a person decides | **wait mode**: `langchain_early.enable(approval_wait=True)` (or `RUNBOUND_LANGCHAIN_APPROVAL_WAIT=1`) for tools the middleware governs; `mode="sync"` on a decorated tool | nothing special: the tool call returns later, with its result, or with an error tool message (`refused approval_denied`, `refused approval_timeout`) | show the person that the answer depends on an approval, give the wait a timeout, and offer a way to cancel it |
+| to answer now and finish later | **deferred**: `@runbound.tool(approval="required", mode="deferred")` | `{"status": "pending_approval", "request_id": ...}` as the tool result, at once | treat it as pending, never as done; the later outcome reaches your `on_deferred_result` callback, **not that conversation**, so your application has to deliver the update itself (a message, a notification, a new turn) |
+| no approvals in the chat | neither (the default) | an error tool message, `refused approval_unavailable` | nothing waits |
+
+- **Waiting is the application waiting, not the model thinking.** While a call waits, the turn is held open by your code; nothing in the model is working on it. Keep the wait short enough for the person to stay, set the timeout deliberately, and show a cancel control.
+- **Never describe `pending_approval` as completed.** The model has been told the action is pending; make sure the words it says to the user say so, and that your application sends the real outcome when `on_deferred_result` fires.
+- **Without an opt-in, an ask is refused.** A call that needs a person is refused `approval_unavailable` until you enable wait mode (or use a deferred decorator); nothing is asked and nothing waits by itself.
+- **Suspended and resume execution is experimental in this release.** Do not use it as the default answer to "the person might be away"; it is not a third mode to adopt for a chat agent.
 
 ### Moving from the callback handler
 
@@ -91,7 +108,7 @@ When the framework makes the calls, there is no function to decorate. Pass a
 callback handler instead:
 
 ```bash
-pip install "runbound[langchain]"   # pulls in langchain-core
+pip install --pre "runbound[langchain]"   # pulls in langchain-core
 ```
 
 ```python

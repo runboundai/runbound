@@ -1,4 +1,4 @@
-"""OpenTelemetry export: ``pip install "runbound[otel]"``.
+"""OpenTelemetry export: ``pip install --pre "runbound[otel]"``.
 
 Sends what this process already records locally (:func:`runbound.events`) to
 your OpenTelemetry pipeline, as log records and two metrics::

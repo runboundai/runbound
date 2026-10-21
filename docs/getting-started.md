@@ -8,12 +8,12 @@ console, quotas, approvals and a fleet-wide view.
 **1. Install.**
 
 ```bash
-pip install runbound --pre      # 1.0.0a6 is an alpha; without --pre you get 0.11.2, which ignores console rules
+pip install runbound --pre      # 1.0.0a7 is an alpha; without --pre you get 0.11.2, which ignores console rules
 ```
 
 There are no runtime dependencies: stdlib only. There are two optional extras:
-`pip install "runbound[langchain]"` for LangChain and
-`pip install "runbound[otel]"` for OpenTelemetry.
+`pip install --pre "runbound[langchain]"` for LangChain and
+`pip install --pre "runbound[otel]"` for OpenTelemetry.
 
 **2. Guard your tools.** Add one initialization line and one decorator per tool.
 No agent rewrites or policy code required. Decorate the functions that act;
@@ -118,7 +118,7 @@ runbound.init(
 )
 ```
 
-`otel_endpoint` is what puts your calls in the console's **Traces**: the SDK posts one span per call there as OTLP/JSON. Without it the worker still connects and enforces policy, but Traces stay empty and the service's last call shows as `—`. For a self-hosted plane it is the plane's own address (the same URL as `control_plane_url`).
+With a plane connected and `otel_endpoint` left unset, the SDK posts one span per call to that plane as OTLP/JSON, and your calls appear in the console's **Traces**. Set `otel_endpoint` to a collector URL to send them there instead, or `otel_endpoint=False` to disable the built-in span exporter (the worker still connects and enforces policy, but Traces stay empty and the service's last call shows as `—`). `python -m runbound check` prints where the exporter was configured to send; configured is not delivered.
 
 Set `worker_id` to a stable name (a pod or host name) so a restart is recognised as
 the same worker; each process also has its own boot id, which tells the processes

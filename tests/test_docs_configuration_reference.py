@@ -98,7 +98,7 @@ def test_init_takes_exactly_the_fields_of_the_config_it_builds():
     for name, field in FIELDS.items():
         if field.default is not dataclasses.MISSING:
             RunboundConfig(**{name: field.default})  # accepted
-    assert len(FIELDS) == 29  # the 29 init() fields; _plane_mode is private
+    assert len(FIELDS) == 30  # the 30 init() fields; _plane_mode is private
 
 
 def test_only_the_tool_policy_is_tightened_by_the_plane():

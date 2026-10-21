@@ -15,7 +15,7 @@ each name removed in S1 raises `AttributeError`.
 - `check` — local self-check report; makes no plane call.
 - `assert_guarded` — raise `RuntimeError` when nothing is decorated with `@runbound.tool`.
 - `session` — run/key context for traces and per-session `max_calls`; `session(key, tags=None, requested_for=None)`: `requested_for` (an email or user id, at most 128 characters) rides the approval request of a tool that asks a person inside the block, and the plane answers 409 `self_approval` when that same person decides it.
-- `current_request` — the request id of the deferred approval being executed right now, else `None`.
+- `current_request` — the request id of the deferred approval being executed right now, else `None` (always `None` in sync mode).
 - `Injected` — marker for a tool parameter the app supplies (`Annotated[Session, runbound.Injected]`): never stored, sealed, digested or shown in a deferred approval, and supplied again from `init(provide={type or name: callable})` (else its default, else the request ends `failed`, `injected_unavailable:<param>`) when the request runs.
 - `current_session` — the active session, if any.
 - `events` — recorded anomalies, refusals and runtime changes.
@@ -245,7 +245,7 @@ Each is the same object as its replacement; the first use in a process emits one
 
 ## Metadata
 
-- `__version__` — `1.0.0a6`.
+- `__version__` — `1.0.0a7`.
 
 ## Removed in S1
 
